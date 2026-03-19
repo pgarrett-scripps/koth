@@ -1,0 +1,76 @@
+# koth_ff example configuration
+# All values shown are defaults. Uncomment and modify as needed.
+# Usage: koth_ff <input> --config example_config.toml
+
+[hills]
+# m/z tolerance for grouping peaks into hills
+mz_tolerance = 8.0
+# "ppm" or "da"
+mz_tolerance_type = "ppm"
+
+# Minimum number of scans a hill must span
+min_scans = 3
+# Maximum gap (in scans) allowed within a hill
+max_gap = 1
+
+# Whether to split hills at local minima
+split_hills = true
+# Minimum scan distance between peaks when splitting
+min_peak_distance = 10
+# Minimum peak height relative to the tallest peak (0.0–1.0)
+min_peak_height = 0.2
+# Maximum valley/peak ratio allowed before splitting (0.0–1.0)
+min_valley_ratio = 0.6
+
+# Ion mobility tolerance for grouping
+im_tolerance = 0.05
+# "relative" (fraction) or "absolute" (1/K0 units)
+im_tolerance_type = "relative"
+
+# Restrict processing to this m/z window (set max to a large number for no limit)
+global_min_mz = 0.0
+global_max_mz = 10000.0
+
+# Bruker .d centroiding parameters
+bruker_mz_ppm = 5.0
+bruker_im_pct = 3.0
+
+# Number of threads (omit or set to 0 to use all available CPUs)
+# n_threads = 8
+
+[features]
+# m/z tolerance for isotope matching
+mz_tolerance = 5.0
+mz_tolerance_type = "ppm"
+
+# Charge state range to consider
+min_charge = 1
+max_charge = 7
+
+# Minimum cosine similarity between observed and theoretical isotope patterns
+min_cosine_similarity = 0.5
+
+# Maximum allowed intensity decrease on the left/right flanks (0.0–1.0)
+left_max_decrease = 0.9
+right_max_decrease = 0.9
+
+# Ion mobility tolerance for feature grouping
+im_tolerance = 0.05
+im_tolerance_type = "absolute"
+
+# Maximum number of isotope peaks to consider
+max_isotopes = 6
+
+# C13 neutron mass in Da (rarely needs changing)
+neutron_mass = 1.003354835
+
+[scoring]
+# Range of neutron offsets to evaluate for monoisotopic peak reassignment
+isotope_offset_min = -1
+isotope_offset_max = 1
+
+# Score bonus applied when offset == 0 (no reassignment)
+offset_zero_bonus = 0.15
+
+# Features scoring below this threshold keep offset = 0
+min_score_threshold = 0.5
