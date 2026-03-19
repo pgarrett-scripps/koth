@@ -12,7 +12,7 @@ use pyo3::types::{PyDict, PyList};
 // ---------------------------------------------------------------------------
 
 fn hill_to_dict<'py>(py: Python<'py>, h: &Hill) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new_bound(py);
+    let d = PyDict::new(py);
     d.set_item("mz", h.mz)?;
     d.set_item("mz_std", h.mz_std)?;
     d.set_item("rt", h.rt)?;
@@ -37,7 +37,7 @@ fn scored_feature_to_dict<'py>(
     sf: &ScoredFeature,
 ) -> PyResult<Bound<'py, PyDict>> {
     let f = &sf.feature;
-    let d = PyDict::new_bound(py);
+    let d = PyDict::new(py);
     d.set_item("mz", f.monoisotopic_mz())?;
     d.set_item("mass", f.monoisotopic_neutral_mass())?;
     d.set_item("charge", f.charge)?;
@@ -154,7 +154,7 @@ fn scoring_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Sc
 // ---------------------------------------------------------------------------
 
 fn dict_to_hill(d: &Bound<'_, PyAny>) -> PyResult<Hill> {
-    let d: &Bound<'_, PyDict> = d.downcast()?;
+    let d: &Bound<'_, PyDict> = d.cast()?;
 
     macro_rules! req {
         ($key:literal, $T:ty) => {
@@ -207,13 +207,13 @@ fn detect_hills(
     let cfg = hills_config_from_kwargs(kwargs)?;
     let hills = ::koth_ff::run_hills_streaming(Path::new(path), &cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    let list = PyList::new_bound(
+    let list = PyList::new(
         py,
         hills
             .iter()
             .map(|h| hill_to_dict(py, h))
             .collect::<PyResult<Vec<_>>>()?,
-    );
+    )?;
     Ok(list.unbind())
 }
 
@@ -242,13 +242,13 @@ fn detect_features(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     let scored = ::koth_ff::run_scoring(&features, &scoring_cfg);
 
-    let list = PyList::new_bound(
+    let list = PyList::new(
         py,
         scored
             .iter()
             .map(|sf| scored_feature_to_dict(py, sf))
             .collect::<PyResult<Vec<_>>>()?,
-    );
+    )?;
     Ok(list.unbind())
 }
 
@@ -282,22 +282,22 @@ fn run_pipeline(
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     let scored = ::koth_ff::run_scoring(&features, &scoring_cfg);
 
-    let hills_py = PyList::new_bound(
+    let hills_py = PyList::new(
         py,
         hills
             .iter()
             .map(|h| hill_to_dict(py, h))
             .collect::<PyResult<Vec<_>>>()?,
-    );
-    let features_py = PyList::new_bound(
+    )?;
+    let features_py = PyList::new(
         py,
         scored
             .iter()
             .map(|sf| scored_feature_to_dict(py, sf))
             .collect::<PyResult<Vec<_>>>()?,
-    );
+    )?;
 
-    let result = PyDict::new_bound(py);
+    let result = PyDict::new(py);
     result.set_item("hills", hills_py)?;
     result.set_item("features", features_py)?;
     Ok(result.unbind())

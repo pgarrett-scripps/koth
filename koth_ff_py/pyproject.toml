@@ -9,6 +9,10 @@ description = "High-performance LC-MS feature finder for timsTOF and mzML data"
 readme = "../README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+dependencies = [
+    "maturin>=1.12.6",
+    "polars>=1.0",
+]
 keywords = ["mass-spectrometry", "proteomics", "lc-ms", "timsof"]
 classifiers = [
     "Programming Language :: Rust",
