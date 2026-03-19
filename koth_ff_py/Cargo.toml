@@ -1,0 +1,12 @@
+[package]
+name = "koth_ff_py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "koth_ff"
+crate-type = ["cdylib"]
+
+[dependencies]
+koth_ff = { path = "../koth_ff", features = ["tdf"] }
+pyo3    = { workspace = true }

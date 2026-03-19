@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "koth-ff"
+version = "0.1.0"
+description = "High-performance LC-MS feature finder for timsTOF and mzML data"
+readme = "../README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["mass-spectrometry", "proteomics", "lc-ms", "timsof"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[tool.maturin]
+# The native extension will be importable as koth_ff (the module declared in lib.rs)
+manifest-path = "Cargo.toml"
+python-source = "python"
