@@ -13,9 +13,11 @@ release:
 build-py:
     cargo build -p koth_ff_py
 
-# Build + install Python wheel into the current venv with maturin
+# Build + install Python wheel into the current venv with maturin.
+# Uses `uv run` so it works without a global maturin install — maturin is
+# pulled in via the `dev` dependency group in the root pyproject.toml.
 dev-py:
-    cd koth_ff_py && maturin develop --release
+    uv run --group dev maturin develop --release --manifest-path koth_ff_py/Cargo.toml
 
 # Check for compile errors without building
 check:
