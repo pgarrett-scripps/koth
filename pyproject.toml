@@ -1,9 +1,11 @@
 [project]
 name = "koth-rust"
 version = "0.1.0"
-description = "Add your description here"
+description = "Development shell for the koth_ff Rust workspace and its Python bindings"
 readme = "README.md"
-requires-python = ">=3.12"
+# Dev shell only — the published koth-ff package targets >=3.10, but
+# numpy>=2.4.3 used by the plotting scripts requires >=3.11.
+requires-python = ">=3.11"
 dependencies = [
     "koth-ff",
     "matplotlib>=3.10.8",

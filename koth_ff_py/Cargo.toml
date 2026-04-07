@@ -1,7 +1,11 @@
 [package]
-name = "koth_ff_py"
-version = "0.1.0"
-edition = "2021"
+name             = "koth_ff_py"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description      = "Python bindings for the koth_ff LC-MS feature finder"
 
 [lib]
 name = "koth_ff"

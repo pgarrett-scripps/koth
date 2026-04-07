@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 .venv
+# Stray uv.lock created when running `uv run` from inside koth_ff_py/
+# during local maturin builds; the root uv.lock is the canonical one.
+/koth_ff_py/uv.lock
 
 # Rust
 target/
