@@ -15,5 +15,10 @@ dependencies = [
     "scipy>=1.17.1",
 ]
 
+[dependency-groups]
+# `uv sync` installs these into the dev shell so `just dev-py` (and any other
+# in-place rebuild via `maturin develop`) works without a global install.
+dev = ["maturin>=1.4,<2"]
+
 [tool.uv.sources]
 koth-ff = { path = "koth_ff_py" }
