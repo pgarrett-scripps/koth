@@ -817,6 +817,7 @@ dependencies = [
  "clap",
  "csv",
  "env_logger",
+ "flate2",
  "log",
  "mzdata",
  "rayon",

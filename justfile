@@ -13,11 +13,12 @@ release:
 build-py:
     cargo build -p koth_ff_py
 
-# Build + install Python wheel into the current venv with maturin.
-# Uses `uv run` so it works without a global maturin install — maturin is
-# pulled in via the `dev` dependency group in the root pyproject.toml.
+# Compile the Rust extension and install into the venv as a live editable install.
+# maturin develop places the compiled .so into koth_ff_py/python/koth_ff/; we
+# then restore the .pth file so uv uses the source tree directly (no stale cache).
 dev-py:
     uv run --group dev maturin develop --release --manifest-path koth_ff_py/Cargo.toml
+    echo "$(pwd)/koth_ff_py/python" > .venv/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/koth_ff.pth
 
 # Check for compile errors without building
 check:

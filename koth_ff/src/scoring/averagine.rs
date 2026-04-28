@@ -104,38 +104,14 @@ fn element_dist(n: f64, isotopes: &[(usize, f64)]) -> Vec<f64> {
         return d;
     }
 
-    // Build single-atom distribution
-    let max_offset = isotopes.iter().map(|(o, _)| o).copied().max().unwrap_or(0);
-    let single_size = max_offset + 1;
-    let mut single = vec![0.0f64; single_size];
-    for &(offset, abundance) in isotopes {
-        if offset < single.len() {
-            single[offset] = abundance;
-        }
-    }
+    // Poisson approximation: for each heavy isotope with abundance p,
+    // the number of heavy atoms ~ Poisson(λ = n * p). Uses the full
+    // floating-point n, so fractional atom counts are handled correctly.
+    let heavy: Vec<(usize, f64)> = isotopes[1..].iter().copied().collect();
 
-    // Use Poisson-like approximation for large n:
-    // For element E with abundance p, the number of heavy atoms follows
-    // a Poisson distribution with λ = n * p_heavy.
-    // This is a fast approximation that gives good results.
-    let heavy: Vec<(usize, f64)> = isotopes[1..]
-        .iter()
-        .map(|&(o, a)| (o, a))
-        .collect();
-
-    // Build distribution via direct convolution of the single-atom distribution,
-    // but use the "fold" approach for fractional n:
-    // approximate n = floor(n) atoms with the remainder handled probabilistically.
-    let n_int = n as usize;
-    let n_frac = n - n_int as f64;
-
-    // Convolve single-atom distribution n_int times
     let mut result = vec![0.0f64; 10];
     result[0] = 1.0;
 
-    // Use Poisson approximation for efficiency:
-    // For each heavy isotope position p, P(k heavy atoms) ~ Poisson(n * p_heavy)
-    // We sum contributions from each heavy isotope independently.
     for &(offset, abundance) in &heavy {
         let lambda = n * abundance;
         // Poisson PMF: P(k) = e^(-λ) * λ^k / k!
@@ -147,7 +123,6 @@ fn element_dist(n: f64, isotopes: &[(usize, f64)]) -> Vec<f64> {
             term *= lambda / k as f64;
             poisson[k] = term;
         }
-        // Convolve result with this poisson at the given mass offset
         let shifted: Vec<f64> = std::iter::repeat(0.0)
             .take(offset)
             .chain(poisson.into_iter())
@@ -159,19 +134,6 @@ fn element_dist(n: f64, isotopes: &[(usize, f64)]) -> Vec<f64> {
             v
         };
         result = convolve_fixed(&result, &padded_shifted);
-        normalize_slice(&mut result);
-    }
-
-    // Handle fractional n via linear interpolation with uniform (no-heavy) distribution
-    if n_frac > 1e-9 {
-        let mono = {
-            let mut m = vec![0.0f64; 10];
-            m[0] = 1.0;
-            m
-        };
-        for i in 0..10 {
-            result[i] = result[i] * n_frac + mono[i] * (1.0 - n_frac);
-        }
         normalize_slice(&mut result);
     }
 
@@ -214,9 +176,13 @@ fn normalize_slice(v: &mut [f64]) {
 
 /// Compute Bhattacharyya coefficient between observed and theoretical distributions.
 ///
-/// BC = Σ sqrt(p_i * q_i)
+/// BC = Σ sqrt(p_i * q_i) over active positions only.
 ///
-/// Both distributions are normalized to sum=1 before computing BC.
+/// The template is scaled to absolute experimental units (template[i] * obs_sum /
+/// template_k_sum). Positions where the expected absolute intensity falls below
+/// `min_intensity` are excluded from the comparison — theoretical peaks below the
+/// noise floor should not be matched against observed peaks. Pass 0.0 to disable.
+///
 /// Returns BC in [0, 1].
 pub fn bhattacharyya_score(obs: &[f64], template: &[f64; 10], min_intensity: f64) -> f64 {
     let k = obs.len().min(10);
@@ -224,26 +190,39 @@ pub fn bhattacharyya_score(obs: &[f64], template: &[f64; 10], min_intensity: f64
         return 0.0;
     }
 
-    // Normalize observed
     let obs_sum: f64 = obs.iter().sum();
     if obs_sum <= 0.0 {
         return 0.0;
     }
 
-    // Compute BC
-    let bc: f64 = (0..k)
-        .map(|i| {
-            let p = obs[i] / obs_sum;
-            let q = template[i];
+    // Missed penalty: template signal beyond the observed k peaks.
+    let template_k_sum: f64 = template[..k].iter().sum();
+    let missed_penalty = 1.0 - template_k_sum;
+
+    // Scale template to absolute experimental units and build active-position mask.
+    let scale = if template_k_sum > 0.0 { obs_sum / template_k_sum } else { 0.0 };
+    let active: Vec<usize> = (0..k)
+        .filter(|&i| min_intensity <= 0.0 || template[i] * scale >= min_intensity)
+        .collect();
+
+    if active.is_empty() {
+        return 0.0;
+    }
+
+    let obs_active_sum: f64 = active.iter().map(|&i| obs[i]).sum();
+    let theo_active_sum: f64 = active.iter().map(|&i| template[i]).sum();
+    if obs_active_sum <= 0.0 || theo_active_sum <= 0.0 {
+        return 0.0;
+    }
+
+    let bc: f64 = active
+        .iter()
+        .map(|&i| {
+            let p = obs[i] / obs_active_sum;
+            let q = template[i] / theo_active_sum;
             (p * q).sqrt()
         })
         .sum();
 
-    // Missed penalty: fraction of total template intensity not covered by k peaks
-    let template_covered: f64 = template[..k].iter().sum();
-    let missed_penalty = 1.0 - template_covered;
-
-    // Scale by missed penalty and apply min_intensity guard
-    let _ = min_intensity; // used in Python for noise floor; we include it for API compatibility
     (bc * (1.0 - missed_penalty)).clamp(0.0, 1.0)
 }

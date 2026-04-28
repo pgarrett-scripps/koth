@@ -157,12 +157,14 @@ impl Feature {
         profile.iter().cloned().fold(0.0f64, f64::max)
     }
 
-    /// Apex scan index (scan with highest summed intensity)
+    /// Apex scan index: scan where the sum of all isotope hill intensities is highest.
     pub fn apex_scan(&self) -> usize {
-        self.hills
+        let (min_scan, _, profile) = self.elution_profile();
+        profile
             .iter()
-            .max_by(|a, b| a.intensity_max.partial_cmp(&b.intensity_max).unwrap())
-            .map(|h| h.scan_apex)
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| min_scan + i)
             .unwrap_or(0)
     }
 

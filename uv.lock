@@ -259,7 +259,7 @@ wheels = [
 [[package]]
 name = "koth-ff"
 version = "0.1.0"
-source = { directory = "koth_ff_py" }
+source = { editable = "koth_ff_py" }
 dependencies = [
     { name = "polars" },
 ]
@@ -287,7 +287,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "koth-ff", directory = "koth_ff_py" },
+    { name = "koth-ff", editable = "koth_ff_py" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy", specifier = ">=2.4.3" },
     { name = "pandas", specifier = ">=3.0.1" },

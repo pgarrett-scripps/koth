@@ -12,6 +12,10 @@ detect_features(hills, ...) -> polars.DataFrame
 
 run_pipeline(path, ...) -> dict[str, polars.DataFrame]
     Run all three stages. Returns {"hills": DataFrame, "features": DataFrame}.
+
+align_runs(runs, ...) -> tuple[polars.DataFrame, polars.DataFrame]
+    Align features from multiple runs (potentially different gradients) and
+    return (consensus_features, intensity_matrix).
 """
 
 from __future__ import annotations
@@ -284,4 +288,6 @@ def run_pipeline(
     }
 
 
-__all__ = ["detect_hills", "detect_features", "run_pipeline"]
+from .align import align_runs
+
+__all__ = ["detect_hills", "detect_features", "run_pipeline", "align_runs"]

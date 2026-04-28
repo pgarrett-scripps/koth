@@ -21,4 +21,4 @@ dependencies = [
 dev = ["maturin>=1.4,<2"]
 
 [tool.uv.sources]
-koth-ff = { path = "koth_ff_py" }
+koth-ff = { path = "koth_ff_py", editable = true }

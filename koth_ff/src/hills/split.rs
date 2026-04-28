@@ -139,10 +139,12 @@ fn find_local_maxima(profile: &[f32], min_height: f32, min_distance: usize) -> V
         return Vec::new();
     }
 
-    // Find all candidate local maxima
+    // Find all candidate local maxima (including endpoints for boundary-clipped hills)
     let mut candidates: Vec<(usize, f32)> = Vec::new();
-    for i in 1..n - 1 {
-        if profile[i] >= min_height && profile[i] >= profile[i - 1] && profile[i] >= profile[i + 1] {
+    for i in 0..n {
+        let left_ok  = i == 0     || profile[i] >= profile[i - 1];
+        let right_ok = i == n - 1 || profile[i] >= profile[i + 1];
+        if profile[i] >= min_height && left_ok && right_ok {
             candidates.push((i, profile[i]));
         }
     }

@@ -27,10 +27,14 @@ pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<Score
         all_intensities[p5_idx] * 0.8
     };
 
-    features
+    let scored: Vec<ScoredFeature> = features
         .iter()
         .map(|feature| score_one(feature, config, min_intensity))
-        .collect()
+        .filter(|sf| sf.feature.charge > 0 && sf.score >= config.min_score_threshold)
+        .collect();
+
+    log::info!("Retained {} features after score threshold", scored.len());
+    scored
 }
 
 fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> ScoredFeature {

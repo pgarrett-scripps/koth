@@ -1,6 +1,6 @@
 import koth_ff
 
-MZML = "/home/patrick-garrett/Data/Natalie/Histones2/raw/argc/20250806_ArgC_DDA_HCD-FT_01.mzML"
+MZML = "tests/data/example_dda.d"
 
 result = koth_ff.run_pipeline(
     MZML,
