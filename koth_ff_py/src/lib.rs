@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Instant;
 
 use ::koth_ff::config::{
     FeaturesConfig, HillsConfig, ImToleranceType, ScoringConfig, ToleranceType,
@@ -125,6 +126,8 @@ fn features_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<F
     get!("min_charge", cfg.min_charge, u8);
     get!("max_charge", cfg.max_charge, u8);
     get!("min_cosine_similarity", cfg.min_cosine_similarity, f64);
+    get!("left_max_decrease", cfg.left_max_decrease, f64);
+    get!("right_max_decrease", cfg.right_max_decrease, f64);
     get!("im_tolerance", cfg.im_tolerance, f64);
     get!("max_isotopes", cfg.max_isotopes, usize);
     Ok(cfg)
@@ -276,11 +279,24 @@ fn run_pipeline(
     let features_cfg = features_config_from_kwargs(kwargs)?;
     let scoring_cfg = scoring_config_from_kwargs(kwargs)?;
 
+    let t0 = Instant::now();
     let hills = ::koth_ff::run_hills_streaming(Path::new(path), &hills_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let hills_s = t0.elapsed().as_secs_f64();
+    eprintln!("[koth_ff] hills: {:.2}s ({} hills)", hills_s, hills.len());
+
+    let t1 = Instant::now();
     let features = ::koth_ff::run_features(&hills, &features_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    let features_s = t1.elapsed().as_secs_f64();
+    eprintln!("[koth_ff] feature detection: {:.2}s ({} features, {} charge=0)",
+        features_s, features.len(),
+        features.iter().filter(|f| f.charge == 0).count());
+
+    let t2 = Instant::now();
     let scored = ::koth_ff::run_scoring(&features, &scoring_cfg);
+    let scoring_s = t2.elapsed().as_secs_f64();
+    eprintln!("[koth_ff] scoring: {:.2}s ({} retained)", scoring_s, scored.len());
 
     let hills_py = PyList::new(
         py,
@@ -309,6 +325,9 @@ fn run_pipeline(
 
 #[pymodule]
 fn koth_ff(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Initialize env_logger so Rust log::info! output is visible when
+    // RUST_LOG=koth_ff=info (or similar) is set in the environment.
+    let _ = env_logger::try_init();
     m.add_function(wrap_pyfunction!(detect_hills, m)?)?;
     m.add_function(wrap_pyfunction!(detect_features, m)?)?;
     m.add_function(wrap_pyfunction!(run_pipeline, m)?)?;

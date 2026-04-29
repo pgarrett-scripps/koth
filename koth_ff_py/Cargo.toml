@@ -12,5 +12,6 @@ name = "koth_ff"
 crate-type = ["cdylib"]
 
 [dependencies]
-koth_ff = { path = "../koth_ff", features = ["tdf"] }
-pyo3    = { workspace = true }
+koth_ff    = { path = "../koth_ff", features = ["tdf"] }
+pyo3       = { workspace = true }
+env_logger = { workspace = true }

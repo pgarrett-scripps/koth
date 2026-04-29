@@ -18,7 +18,7 @@ build-py:
 # then restore the .pth file so uv uses the source tree directly (no stale cache).
 dev-py:
     uv run --group dev maturin develop --release --manifest-path koth_ff_py/Cargo.toml
-    echo "$(pwd)/koth_ff_py/python" > .venv/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/koth_ff.pth
+    echo "$(pwd)/koth_ff_py/python" > .venv/lib/python$(.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/koth_ff.pth
 
 # Check for compile errors without building
 check:

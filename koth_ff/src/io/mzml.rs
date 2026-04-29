@@ -3,7 +3,7 @@ use std::{fs, io};
 
 use flate2::read::GzDecoder;
 use mzdata::prelude::*;
-use mzdata::spectrum::MultiLayerSpectrum;
+use mzdata::spectrum::{MultiLayerSpectrum, SignalContinuity};
 use mzdata::MZReader;
 
 use crate::error::KothError;
@@ -73,11 +73,11 @@ fn open_reader(path: &Path) -> Result<BoxedRawIter, KothError> {
 
 fn collect_ms1(reader: BoxedRawIter) -> Vec<Spectrum> {
     let mut out = Vec::new();
-    for (scan_index, spectrum) in reader.enumerate() {
+    for (scan_index, mut spectrum) in reader.enumerate() {
         if spectrum.ms_level() != 1 {
             continue;
         }
-        let peaks = extract_peaks(&spectrum);
+        let peaks = extract_peaks(&mut spectrum);
         if peaks.is_empty() {
             continue;
         }
@@ -94,7 +94,7 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
     let mut scan_index = 0usize;
     let mut ms1_count = 0usize;
 
-    reader.filter_map(move |spectrum| {
+    reader.filter_map(move |mut spectrum| {
         let idx = scan_index;
         scan_index += 1;
 
@@ -105,29 +105,21 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
         if ms1_count == 0 {
             let continuity = spectrum.signal_continuity();
             log::info!("First MS1 scan signal continuity: {:?}", continuity);
-            if format!("{:?}", continuity).to_lowercase().contains("profile") {
-                log::error!(
-                    "PROFILE-MODE DATA DETECTED. This algorithm requires centroided spectra. \
-                     Convert with: msconvert input.raw --filter \"peakPicking true 1-\" --mzML"
+            if matches!(continuity, SignalContinuity::Profile) {
+                log::info!(
+                    "Profile-mode data detected — centroiding on the fly with mzdata peak picker."
                 );
             }
         }
 
         let retention_time = spectrum.start_time();
-        let peaks = extract_peaks(&spectrum);
+        let peaks = extract_peaks(&mut spectrum);
 
         if ms1_count == 0 {
             log::info!(
                 "First MS1 scan: scan_index={} rt={:.2} min  peaks={}",
                 idx, retention_time, peaks.len()
             );
-            if peaks.len() > 50_000 {
-                log::error!(
-                    "First MS1 scan has {} peaks — this is characteristic of profile-mode data \
-                     and will cause a memory explosion. Centroid first.",
-                    peaks.len()
-                );
-            }
         }
 
         ms1_count += 1;
@@ -138,7 +130,31 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
     })
 }
 
-fn extract_peaks(spectrum: &impl SpectrumLike) -> Vec<Peak> {
+/// Extract peaks from a spectrum, centroiding on the fly if profile-mode.
+fn extract_peaks(spectrum: &mut MultiLayerSpectrum) -> Vec<Peak> {
+    if matches!(spectrum.signal_continuity(), SignalContinuity::Profile) {
+        // Pick peaks using mzdata's built-in quadratic peak fitter (SNR >= 1.0).
+        if let Err(e) = spectrum.pick_peaks(1.0) {
+            log::warn!("Peak picking failed: {e}");
+            return Vec::new();
+        }
+        if let Some(peaks) = spectrum.peaks.as_ref() {
+            let mut result: Vec<Peak> = peaks
+                .iter()
+                .filter(|p| p.intensity() > 0.0)
+                .map(|p| Peak {
+                    mz: p.mz() as f32,
+                    intensity: p.intensity() as f32,
+                    ion_mobility: 0.0,
+                })
+                .collect();
+            result.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap());
+            return result;
+        }
+        return Vec::new();
+    }
+
+    // Already centroided — read directly from the raw arrays.
     if let Some(arrays) = spectrum.raw_arrays() {
         if let (Ok(mzs), Ok(intensities)) = (arrays.mzs(), arrays.intensities()) {
             if !mzs.is_empty() {

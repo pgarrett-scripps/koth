@@ -13,9 +13,7 @@ import json
 import sys
 import time
 from pathlib import Path
-
 import polars as pl
-
 import koth_ff
 
 
@@ -60,9 +58,9 @@ def run_batch(input_dir: Path, output_dir: Path) -> None:
 
         result = koth_ff.run_pipeline(
             str(path),
-            mz_tolerance=5.0,
+            mz_tolerance=20.0,
             mz_tolerance_type="ppm",
-            min_scans=4,
+            min_scans=3,
             max_gap=0,
             split_hills=False,
             min_charge=1,
@@ -70,6 +68,7 @@ def run_batch(input_dir: Path, output_dir: Path) -> None:
             min_cosine_similarity=0.3,
             max_isotopes=6,
             min_score_threshold=0.3,
+            features_mz_tolerance=20.0,
         )
 
         hills: pl.DataFrame    = result["hills"]

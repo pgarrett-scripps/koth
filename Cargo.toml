@@ -10,7 +10,7 @@ license      = "MIT"
 repository   = "https://github.com/tacular-omics/koth_rust"
 
 [workspace.dependencies]
-mzdata    = { version = "0.63", default-features = false, features = ["mzml", "mgf", "miniz_oxide"] }
+mzdata    = { version = "0.63", default-features = false, features = ["mzml", "mgf", "miniz_oxide", "nalgebra"] }
 timsrust  = { version = "0.4" }
 rayon     = "1.10"
 csv       = "1.3"

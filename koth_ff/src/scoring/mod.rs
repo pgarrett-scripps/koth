@@ -26,10 +26,36 @@ pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<Score
         let p5_idx = (all_intensities.len() as f64 * 0.05) as usize;
         all_intensities[p5_idx] * 0.8
     };
+    eprintln!("[koth_ff] score min_intensity: {:.3e} (from {} hill intensities, p5_idx={})",
+        min_intensity, all_intensities.len(),
+        if all_intensities.is_empty() { 0 } else { (all_intensities.len() as f64 * 0.05) as usize });
 
-    let scored: Vec<ScoredFeature> = features
+    let all_scored: Vec<ScoredFeature> = features
         .iter()
         .map(|feature| score_one(feature, config, min_intensity))
+        .collect();
+
+    let charged: Vec<&ScoredFeature> = all_scored.iter().filter(|sf| sf.feature.charge > 0).collect();
+    if !charged.is_empty() {
+        let max_score = charged.iter().map(|sf| sf.score).fold(f64::NEG_INFINITY, f64::max);
+        let mean_score = charged.iter().map(|sf| sf.score).sum::<f64>() / charged.len() as f64;
+        let above = charged.iter().filter(|sf| sf.score >= config.min_score_threshold).count();
+        eprintln!(
+            "[koth_ff] score diag: {} charged features, max={:.3}, mean={:.3}, above_thresh({}): {}",
+            charged.len(), max_score, mean_score, config.min_score_threshold, above
+        );
+        // Print first 5 charged features for inspection
+        for sf in charged.iter().take(5) {
+            let obs = sf.feature.isotope_profile_apex();
+            eprintln!("  charge={} n_isotopes={} obs={:?} score={:.4}",
+                sf.feature.charge, sf.feature.hills.len(),
+                obs.iter().map(|x| format!("{:.0}", x)).collect::<Vec<_>>(),
+                sf.score);
+        }
+    }
+
+    let scored: Vec<ScoredFeature> = all_scored
+        .into_iter()
         .filter(|sf| sf.feature.charge > 0 && sf.score >= config.min_score_threshold)
         .collect();
 
