@@ -76,6 +76,14 @@ impl ActiveHill {
         self.scan_start + self.intensity_profile.len() - 1
     }
 
+    pub fn last_real_intensity(&self) -> Option<f64> {
+        self.intensity_profile
+            .iter()
+            .rev()
+            .find(|&&x| x > 0.0)
+            .map(|&x| x as f64)
+    }
+
     /// Trim leading and trailing zeros from intensity profile (and other profiles).
     pub fn trim(&mut self) {
         let start = self

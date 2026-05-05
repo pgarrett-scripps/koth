@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
     // Stage 1: Streaming hill detection (no Vec<Spectrum> held in memory)
     log::info!("Detecting hills (streaming)...");
     let t = Instant::now();
-    let hills = run_hills_streaming(&args.input, &config.hills)
+    let hills = run_hills_streaming(&args.input, &config.hills, &config.file)
         .with_context(|| format!("Failed to detect hills from {}", args.input.display()))?;
     log::info!("[timing] hill detection: {:.2?} ({} hills)", t.elapsed(), hills.len());
     log_mem(&format!("after hill detection ({} hills)", hills.len()));
@@ -86,7 +86,7 @@ fn main() -> anyhow::Result<()> {
     // (intensity_profile is Arc so no data duplication)
     log::info!("Detecting features...");
     let t = Instant::now();
-    let features = run_features(&hills, &config.features)
+    let features = run_features(&hills, &config.features, &config.file)
         .context("Feature detection failed")?;
     log::info!("[timing] feature detection: {:.2?} ({} features)", t.elapsed(), features.len());
 

@@ -105,7 +105,8 @@ def _plot_rt_warps(diagnostics: dict) -> str:
         ax_warp  = axes[row][0]
         ax_delta = axes[row][1]
 
-        pairs     = info.get("anchor_pairs", [])
+        all_pairs     = info.get("anchor_pairs", [])
+        inlier_pairs  = info.get("inlier_pairs", all_pairs)
         bandwidth = info.get("bandwidth", 0.15)
         run_rt_min = info["run_rt_min"]
         run_rt_max = info["run_rt_max"]
@@ -116,15 +117,15 @@ def _plot_rt_warps(diagnostics: dict) -> str:
 
         x_norm = np.linspace(0, 1, 400)
 
-        if pairs:
-            run_norms = np.array([p[1] for p in pairs])
-            ref_norms = np.array([p[0] for p in pairs])
+        if inlier_pairs:
+            run_norms = np.array([p[1] for p in inlier_pairs])
+            ref_norms = np.array([p[0] for p in inlier_pairs])
 
             # Left: run RT → ref RT in absolute minutes (the raw mapping)
             anch_run_abs = run_norms * run_span + run_rt_min
             anch_ref_abs = ref_norms * ref_span + ref_rt_min
             ax_warp.scatter(anch_run_abs, anch_ref_abs, s=8, alpha=0.4,
-                            color="#4c72b0", label=f"anchors (n={len(pairs)})", zorder=3)
+                            color="#4c72b0", label=f"anchors (n={len(inlier_pairs)})", zorder=3)
 
             # Fitted warp curve in absolute minutes
             warp_fn_left = info.get("warp_fn")
@@ -140,7 +141,7 @@ def _plot_rt_warps(diagnostics: dict) -> str:
             ax_warp.plot([id_min, id_max], [id_min, id_max], "k--",
                          linewidth=0.8, alpha=0.35, label="identity", zorder=2)
 
-            delta_norm, sd_norm = _kernel_warp_with_sd(pairs, bandwidth, x_norm)
+            delta_norm, sd_norm = _kernel_warp_with_sd(inlier_pairs, bandwidth, x_norm)
 
             # Delta panel: warp(run_rt) - run_rt gives the true absolute correction
             warp_fn = info.get("warp_fn")
@@ -266,6 +267,132 @@ def _plot_missing_rates(matrix_df: pl.DataFrame, sample_names: list[str]) -> str
 
 
 # ---------------------------------------------------------------------------
+# Target / decoy FDR plots
+# ---------------------------------------------------------------------------
+
+def _plot_fdr_summary(diagnostics: dict) -> str:
+    """Grouped bar chart: target vs decoy match counts per run, annotated with FDR %."""
+    run_diags = {
+        name: info for name, info in diagnostics["runs"].items()
+        if "fdr" in info
+    }
+    if not run_diags:
+        return ""
+
+    names = list(run_diags.keys())
+    n_targets = [run_diags[n]["fdr"]["n_target"] for n in names]
+    n_decoys  = [run_diags[n]["fdr"]["n_decoy"]  for n in names]
+    fdrs      = [run_diags[n]["fdr"]["fdr"] for n in names]
+
+    x = np.arange(len(names))
+    width = 0.38
+
+    fig, ax = plt.subplots(figsize=(max(8, len(names) * 1.4 + 2), 5))
+    bars_t = ax.bar(x - width / 2, n_targets, width, label="Target matches", color="#4c72b0", edgecolor="white")
+    bars_d = ax.bar(x + width / 2, n_decoys,  width, label="Decoy matches",  color="#dd8047", edgecolor="white")
+
+    max_y = max(n_targets + [1])
+    for xi, (nt, nd, fdr) in enumerate(zip(n_targets, n_decoys, fdrs)):
+        color = "#c0392b" if fdr > 0.01 else "#27ae60"
+        ax.text(xi, nt + max_y * 0.01, f"FDR\n{fdr*100:.1f}%", ha="center", va="bottom",
+                fontsize=7, color=color, fontweight="bold")
+
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels([n[:30] for n in names], rotation=35, ha="right", fontsize=8)
+    ax.set_ylabel("Feature matches", fontsize=10)
+    ax.set_title("Target vs decoy matches per run  (competition FDR; red = > 1%)", fontsize=11)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    return _fig_to_b64(fig)
+
+
+def _plot_parameter_sweep(diagnostics: dict) -> str:
+    """Heatmap of competition FDR over (mass_ppm, rt_window) per run and im_tolerance."""
+    run_diags = {
+        name: info for name, info in diagnostics["runs"].items()
+        if "sweep" in info
+    }
+    if not run_diags:
+        return ""
+
+    figs = []
+    for name, info in run_diags.items():
+        sweep: pl.DataFrame = info["sweep"]
+        im_vals = sorted(sweep["im_tolerance"].unique().to_list())
+        ppm_vals = sorted(sweep["mass_ppm"].unique().to_list())
+        rt_vals  = sorted(sweep["rt_window"].unique().to_list())
+
+        n_im = len(im_vals)
+        fig, axes = plt.subplots(1, n_im, figsize=(5 * n_im + 1, 4.5), squeeze=False)
+
+        for col_idx, im_val in enumerate(im_vals):
+            ax = axes[0][col_idx]
+            sub = sweep.filter(pl.col("im_tolerance") == im_val)
+
+            grid = np.full((len(ppm_vals), len(rt_vals)), np.nan)
+            grid_n = np.full((len(ppm_vals), len(rt_vals)), 0)
+            for row in sub.iter_rows(named=True):
+                pi = ppm_vals.index(row["mass_ppm"])
+                ri = rt_vals.index(row["rt_window"])
+                grid[pi, ri] = row["fdr"]
+                grid_n[pi, ri] = row["n_target"]
+
+            im_img = ax.imshow(grid, vmin=0, vmax=0.05, cmap="RdYlGn_r", aspect="auto",
+                               origin="lower")
+            ax.set_xticks(range(len(rt_vals)))
+            ax.set_yticks(range(len(ppm_vals)))
+            ax.set_xticklabels([f"{v}" for v in rt_vals], fontsize=8)
+            ax.set_yticklabels([f"{int(v)}" for v in ppm_vals], fontsize=8)
+            ax.set_xlabel("RT window (min)", fontsize=8)
+            ax.set_ylabel("Mass PPM", fontsize=8)
+            ax.set_title(f"IM tol = {im_val}", fontsize=9)
+
+            for pi in range(len(ppm_vals)):
+                for ri in range(len(rt_vals)):
+                    fdr_v = grid[pi, ri]
+                    nt_v  = grid_n[pi, ri]
+                    if not np.isnan(fdr_v):
+                        ax.text(ri, pi, f"{fdr_v*100:.1f}%\n{nt_v:,}",
+                                ha="center", va="center", fontsize=6)
+
+            plt.colorbar(im_img, ax=ax, fraction=0.046, pad=0.04, label="FDR")
+
+        fig.suptitle(f"Parameter sweep — {name[:50]}", fontsize=10)
+        fig.tight_layout()
+        figs.append(_fig_to_b64(fig))
+
+    return "".join(_img(b, "Parameter sweep heatmap") for b in figs)
+
+
+def _plot_runnerup_gap(diagnostics: dict) -> str:
+    """Histogram of runner-up PPM gap across all matches (confidence proxy)."""
+    all_gaps: list[np.ndarray] = []
+    for info in diagnostics["runs"].values():
+        gaps = info.get("match_stats", {}).get("runnerup_gaps")
+        if gaps is not None:
+            finite = gaps[np.isfinite(gaps)]
+            if len(finite):
+                all_gaps.append(finite)
+
+    if not all_gaps:
+        return ""
+
+    combined = np.concatenate(all_gaps)
+    capped = np.clip(combined, 0, np.percentile(combined, 95))
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.hist(capped, bins=60, color="#4c72b0", edgecolor="white", linewidth=0.4)
+    ax.set_xlabel("Runner-up gap (PPM between best and 2nd-best candidate)", fontsize=10)
+    ax.set_ylabel("Match count", fontsize=10)
+    ax.set_title("Match ambiguity — runner-up PPM gap  (larger = more confident)", fontsize=11)
+    ax.text(0.97, 0.96, f"n = {len(combined):,}\n(capped at 95th pct)",
+            transform=ax.transAxes, ha="right", va="top", fontsize=8, color="#555")
+    fig.tight_layout()
+    return _fig_to_b64(fig)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -280,11 +407,14 @@ def generate_report(
     n_runs = len(sample_names)
     ref_name = diagnostics["reference"]
 
-    img_detection = _plot_detection_histogram(consensus_df, n_runs)
-    img_warps     = _plot_rt_warps(diagnostics)
-    img_dist      = _plot_intensity_distributions(matrix_df, sample_names)
-    img_corr      = _plot_correlation_heatmap(matrix_df, sample_names)
-    img_missing   = _plot_missing_rates(matrix_df, sample_names)
+    img_detection   = _plot_detection_histogram(consensus_df, n_runs)
+    img_warps       = _plot_rt_warps(diagnostics)
+    img_dist        = _plot_intensity_distributions(matrix_df, sample_names)
+    img_corr        = _plot_correlation_heatmap(matrix_df, sample_names)
+    img_missing     = _plot_missing_rates(matrix_df, sample_names)
+    img_fdr         = _plot_fdr_summary(diagnostics)
+    img_sweep       = _plot_parameter_sweep(diagnostics)
+    img_runnerup    = _plot_runnerup_gap(diagnostics)
 
     # Per-sample summary table rows
     rows = []
@@ -296,15 +426,17 @@ def generate_report(
         n_anchors  = diagnostics["runs"].get(name, {}).get("n_anchors", "—")
         fallback   = diagnostics["runs"].get(name, {}).get("identity_fallback", False)
         warp_str   = "identity" if fallback else str(n_anchors)
+        fdr_info   = diagnostics["runs"].get(name, {}).get("fdr")
+        fdr_str    = f"{fdr_info['fdr']*100:.1f}%" if fdr_info else "—"
         rows.append((name, f"{n_input:,}", f"{n_detected:,}", pct,
-                     f"{float(med_int or 0):.3e}", warp_str))
+                     f"{float(med_int or 0):.3e}", warp_str, fdr_str))
 
     def section(title: str, content: str) -> str:
         return f'<div class="section"><h2>{title}</h2>{content}</div>'
 
     table_rows = "".join(
         f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td>"
-        f"<td>{r[3]}</td><td>{r[4]}</td><td>{r[5]}</td></tr>"
+        f"<td>{r[3]}</td><td>{r[4]}</td><td>{r[5]}</td><td>{r[6]}</td></tr>"
         for r in rows
     )
 
@@ -379,7 +511,7 @@ footer {{ margin-top: 60px; font-size: 11px; color: #aaa;
 <table>
 <tr>
   <th>Sample</th><th>Input features</th><th>Matched</th>
-  <th>% detected</th><th>Median intensity</th><th>RT anchors used</th>
+  <th>% detected</th><th>Median intensity</th><th>RT anchors used</th><th>FDR (competition)</th>
 </tr>
 {table_rows}
 </table>""")}
@@ -387,6 +519,12 @@ footer {{ margin-top: 60px; font-size: 11px; color: #aaa;
 {section("Feature detection across runs", _img(img_detection, "Detection histogram"))}
 
 {section("RT warp curves (kernel smooth ± 1 SEM)", _img(img_warps, "RT warp curves")) if img_warps else ""}
+
+{section("Target / decoy FDR", _img(img_fdr, "FDR summary")) if img_fdr else ""}
+
+{section("Match ambiguity — runner-up PPM gap", _img(img_runnerup, "Runner-up gap")) if img_runnerup else ""}
+
+{section("Parameter sweep — FDR vs tolerances", img_sweep) if img_sweep else ""}
 
 {section("Intensity distributions &amp; missing values", f"""
 <div class="two-col">

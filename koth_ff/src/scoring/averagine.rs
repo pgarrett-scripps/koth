@@ -123,17 +123,16 @@ fn element_dist(n: f64, isotopes: &[(usize, f64)]) -> Vec<f64> {
             term *= lambda / k as f64;
             poisson[k] = term;
         }
-        let shifted: Vec<f64> = std::iter::repeat(0.0)
-            .take(offset)
-            .chain(poisson.into_iter())
-            .take(10)
-            .collect();
-        let padded_shifted: Vec<f64> = {
-            let mut v = shifted;
-            v.resize(10, 0.0);
-            v
-        };
-        result = convolve_fixed(&result, &padded_shifted);
+        // Spread: k heavy atoms contribute k*offset mass units, so P(k) goes at index k*offset.
+        // (A plain shift was wrong — it placed P(0) at index `offset` instead of 0.)
+        let mut spread = vec![0.0f64; 10];
+        for (k, &p) in poisson.iter().enumerate() {
+            let pos = k * offset;
+            if pos < 10 {
+                spread[pos] += p;
+            }
+        }
+        result = convolve_fixed(&result, &spread);
         normalize_slice(&mut result);
     }
 
@@ -185,6 +184,35 @@ fn normalize_slice(v: &mut [f64]) {
 ///
 /// Returns BC in [0, 1].
 pub fn bhattacharyya_score(obs: &[f64], template: &[f64; 10], min_intensity: f64) -> f64 {
+    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    let debug = obs.iter().any(|&x| x > 1e8);
+    if debug {
+        ONCE.get_or_init(|| {
+            let k = obs.len().min(10);
+            let obs_sum: f64 = obs.iter().sum();
+            let template_k_sum: f64 = template[..k].iter().sum();
+            let scale = if template_k_sum > 0.0 { obs_sum / template_k_sum } else { 0.0 };
+            let active: Vec<usize> = (0..k)
+                .filter(|&i| min_intensity <= 0.0 || template[i] * scale >= min_intensity)
+                .collect();
+            eprintln!("[bc] k={k} obs_sum={obs_sum:.3e} template_k_sum={template_k_sum:.6} scale={scale:.3e} min_intensity={min_intensity:.3e}");
+            eprintln!("[bc] template={:?}", &template[..k]);
+            eprintln!("[bc] active={active:?}");
+            if !active.is_empty() {
+                let obs_active_sum: f64 = active.iter().map(|&i| obs[i]).sum();
+                let theo_active_sum: f64 = active.iter().map(|&i| template[i]).sum();
+                eprintln!("[bc] obs_active_sum={obs_active_sum:.3e} theo_active_sum={theo_active_sum:.6}");
+                let bc: f64 = active.iter().map(|&i| {
+                    let p = obs[i] / obs_active_sum;
+                    let q = template[i] / theo_active_sum;
+                    eprintln!("[bc]   i={i} obs={:.3e} p={p:.4} q={q:.4} sqrt(pq)={:.4}", obs[i], (p*q).sqrt());
+                    (p * q).sqrt()
+                }).sum();
+                eprintln!("[bc] bc={bc:.4} missed_penalty={:.4} final={:.4}", 1.0-template_k_sum, bc*(template_k_sum));
+            }
+        });
+    }
+
     let k = obs.len().min(10);
     if k == 0 {
         return 0.0;

@@ -16,7 +16,7 @@ pub mod inner {
 
     const MAX_PEAKS: usize = 10_000;
 
-    pub fn read_bruker(path: &Path, mz_ppm: f64, im_pct: f64) -> Result<Vec<Spectrum>, KothError> {
+    pub fn read_bruker(path: &Path, mz_ppm: f64, im_pct: f64, min_subpeaks: usize) -> Result<Vec<Spectrum>, KothError> {
         let path_str = path.to_str().ok_or_else(|| KothError::UnsupportedFormat("non-UTF8 path".into()))?;
 
         let frame_reader = FrameReader::new(path_str)
@@ -37,7 +37,7 @@ pub mod inner {
                     let mut buffer = PeakBuffer::with_capacity(2 * MAX_PEAKS);
                     buffer.with_frame(&frame, &ims_converter, &mz_converter);
                     let (mzs, (intensities, mobilities)) =
-                        buffer.fastcentroid_frame(mz_ppm_f32, im_pct_f32);
+                        buffer.fastcentroid_frame(mz_ppm_f32, im_pct_f32, min_subpeaks);
 
                     let retention_time = frame.rt_in_seconds as f64 / 60.0;
                     let scan_index = frame.index;
@@ -183,6 +183,7 @@ pub mod inner {
             &mut self,
             mz_tol_ppm: f32,
             im_tol_pct: f32,
+            min_subpeaks: usize,
         ) -> (Vec<f32>, (Vec<f32>, Vec<f32>)) {
             debug_assert!(
                 self.peaks.windows(2).all(|x| x[0].mz <= x[1].mz),
@@ -223,7 +224,7 @@ pub mod inner {
                     }
                 }
 
-                if count == 0 {
+                if count < min_subpeaks {
                     continue;
                 }
 

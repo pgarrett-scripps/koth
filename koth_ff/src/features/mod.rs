@@ -1,6 +1,6 @@
 pub mod cosine;
 
-use crate::config::{FeaturesConfig, ImToleranceType, ToleranceType};
+use crate::config::{FeaturesConfig, FileConfig, ImToleranceType, ToleranceType};
 use crate::models::{Feature, Hill};
 use cosine::cosine_similarity;
 
@@ -13,7 +13,7 @@ use cosine::cosine_similarity;
 /// 4. Search right (M+1, M+2...) and left (M-1, M-2...) for isotope partners
 /// 5. Keep the longest chain; assign all chain hills
 /// 6. Build Feature from chain
-pub fn detect_features(hills: &[Hill], config: &FeaturesConfig) -> Vec<Feature> {
+pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Vec<Feature> {
     if hills.is_empty() {
         return Vec::new();
     }
@@ -30,7 +30,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig) -> Vec<Feature> 
     let scan_ends: Vec<usize> = sorted_hills.iter().map(|h| h.scan_end).collect();
 
     let use_im = im_array.iter().any(|&x| x != 0.0);
-    let use_ppm = matches!(config.mz_tolerance_type, ToleranceType::Ppm);
+    let use_ppm = matches!(file.mz_tolerance_type, ToleranceType::Ppm);
 
     let mut assigned = vec![false; sorted_hills.len()];
 
@@ -53,9 +53,9 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig) -> Vec<Feature> 
         let seed_hill = sorted_hills[seed_idx];
         let seed_mz = seed_hill.mz;
         let mz_tol = if use_ppm {
-            seed_mz * config.mz_tolerance / 1e6
+            seed_mz * file.mz_tolerance / 1e6
         } else {
-            config.mz_tolerance
+            file.mz_tolerance
         };
 
         let mut best_chain: Vec<usize> = vec![seed_idx];
@@ -85,7 +85,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig) -> Vec<Feature> 
                     &scan_ends,
                     &sorted_hills,
                     &assigned,
-                    config,
+                    file,
                     use_im,
                 );
 
@@ -130,7 +130,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig) -> Vec<Feature> 
                     &scan_ends,
                     &sorted_hills,
                     &assigned,
-                    config,
+                    file,
                     use_im,
                 );
 
@@ -244,7 +244,7 @@ fn find_neighbors<'a>(
     scan_ends: &[usize],
     sorted_hills: &[&'a Hill],
     assigned: &[bool],
-    config: &FeaturesConfig,
+    file: &FileConfig,
     use_im: bool,
 ) -> Vec<usize> {
     let lo = mz_array.partition_point(|&x| x < target_mz - mz_tol);
@@ -267,10 +267,10 @@ fn find_neighbors<'a>(
             }
             // IM tolerance
             if use_im {
-                let im_tol = match config.im_tolerance_type {
-                    ImToleranceType::Absolute => config.im_tolerance,
+                let im_tol = match file.im_tolerance_type {
+                    ImToleranceType::Absolute => file.im_tolerance,
                     ImToleranceType::Relative => {
-                        ref_hill.im.max(im_array[i]) * config.im_tolerance
+                        ref_hill.im.max(im_array[i]) * file.im_tolerance
                     }
                 };
                 if (im_array[i] - ref_hill.im).abs() > im_tol {

@@ -15,9 +15,9 @@
 //! let config = KothConfig::default();
 //! let input = Path::new("data.mzML");
 //!
-//! let spectra = koth_ff::read_spectra(input, &config.hills).unwrap();
-//! let hills = run_hills(&spectra, &config.hills);
-//! let features = run_features(&hills, &config.features).unwrap();
+//! let spectra = koth_ff::read_spectra(input, &config.file).unwrap();
+//! let hills = run_hills(&spectra, &config.hills, &config.file);
+//! let features = run_features(&hills, &config.features, &config.file).unwrap();
 //! let scored = run_scoring(&features, &config.scoring);
 //! ```
 
@@ -33,47 +33,47 @@ pub mod scoring;
 
 use std::path::Path;
 
-use config::{FeaturesConfig, HillsConfig, ScoringConfig};
+use config::{FeaturesConfig, FileConfig, HillsConfig, ScoringConfig};
 use error::KothError;
 use models::{Feature, Hill, ScoredFeature, Spectrum};
 
 /// Read MS1 spectra from an mzML file or Bruker .d directory.
-pub fn read_spectra(path: &Path, config: &HillsConfig) -> Result<Vec<Spectrum>, KothError> {
-    io::read_spectra(path, config.bruker_mz_ppm, config.bruker_im_pct)
+pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
+    io::read_spectra(path, file)
 }
 
 /// Stage 1: Detect chromatographic hills from MS1 spectra.
-pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig) -> Vec<Hill> {
-    hills::detect_hills(spectra, config)
+pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) -> Vec<Hill> {
+    hills::detect_hills(spectra, config, file)
 }
 
 /// Stage 1 (streaming): Detect hills by reading the mzML/Bruker file directly,
 /// processing one spectrum at a time without building a Vec<Spectrum>.
 /// This is the preferred API for large files — peak memory is O(active_hills)
 /// rather than O(total_peaks).
-pub fn run_hills_streaming(path: &Path, config: &HillsConfig) -> Result<Vec<Hill>, KothError> {
-    hills_streaming_inner(path, config)
+pub fn run_hills_streaming(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
+    hills_streaming_inner(path, config, file)
 }
 
-fn hills_streaming_inner(path: &Path, config: &HillsConfig) -> Result<Vec<Hill>, KothError> {
+fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
     #[cfg(feature = "tdf")]
     {
         if path.extension().and_then(|e| e.to_str()) == Some("d") || path.is_dir() {
             // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
-            let spectra = io::read_spectra(path, config.bruker_mz_ppm, config.bruker_im_pct)?;
-            return Ok(hills::detect_hills(&spectra, config));
+            let spectra = io::read_spectra(path, file)?;
+            return Ok(hills::detect_hills(&spectra, config, file));
         }
     }
 
     // mzML streaming path
     let iter = io::mzml::stream_mzml(path)?;
     log::info!("Streaming hill detection from {}", path.display());
-    Ok(hills::detect_hills_from_iter(iter, config))
+    Ok(hills::detect_hills_from_iter(iter, config, file))
 }
 
 /// Stage 2: Detect isotope features from hills.
-pub fn run_features(hills: &[Hill], config: &FeaturesConfig) -> Result<Vec<Feature>, KothError> {
-    Ok(features::detect_features(hills, config))
+pub fn run_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Result<Vec<Feature>, KothError> {
+    Ok(features::detect_features(hills, config, file))
 }
 
 /// Stage 3: Score isotope features using the averagine model.

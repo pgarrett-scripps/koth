@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use ::koth_ff::config::{
-    FeaturesConfig, HillsConfig, ImToleranceType, ScoringConfig, ToleranceType,
+    FeaturesConfig, FileConfig, HillsConfig, ImToleranceType, ScoringConfig, ToleranceType,
 };
 use ::koth_ff::models::{Hill, ScoredFeature};
 use pyo3::prelude::*;
@@ -65,8 +65,8 @@ fn scored_feature_to_dict<'py>(
 // Config helpers: extract config fields from Python **kwargs dict
 // ---------------------------------------------------------------------------
 
-fn hills_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<HillsConfig> {
-    let mut cfg = HillsConfig::default();
+fn file_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<FileConfig> {
+    let mut cfg = FileConfig::default();
     let Some(kw) = kwargs else { return Ok(cfg) };
 
     macro_rules! get {
@@ -78,15 +78,16 @@ fn hills_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Hill
     }
 
     get!("mz_tolerance", cfg.mz_tolerance, f64);
-    get!("min_scans", cfg.min_scans, usize);
-    get!("max_gap", cfg.max_gap, usize);
-    get!("split_hills", cfg.split_hills, bool);
     get!("im_tolerance", cfg.im_tolerance, f64);
-    get!("intensity_coverage", cfg.intensity_coverage, f64);
     get!("global_min_mz", cfg.global_min_mz, f64);
     get!("global_max_mz", cfg.global_max_mz, f64);
+    get!("intensity_coverage", cfg.intensity_coverage, f64);
     get!("bruker_mz_ppm", cfg.bruker_mz_ppm, f64);
     get!("bruker_im_pct", cfg.bruker_im_pct, f64);
+    get!("bruker_min_subpeaks", cfg.bruker_min_subpeaks, usize);
+    if let Some(v) = kw.get_item("noise_filter_sigma")? {
+        cfg.noise_filter_sigma = Some(v.extract::<f64>()?);
+    }
     if let Some(v) = kw.get_item("mz_tolerance_type")? {
         let s: String = v.extract()?;
         cfg.mz_tolerance_type = match s.as_str() {
@@ -110,6 +111,27 @@ fn hills_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Hill
     Ok(cfg)
 }
 
+fn hills_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<HillsConfig> {
+    let mut cfg = HillsConfig::default();
+    let Some(kw) = kwargs else { return Ok(cfg) };
+
+    macro_rules! get {
+        ($key:literal, $field:expr, $T:ty) => {
+            if let Some(v) = kw.get_item($key)? {
+                $field = v.extract::<$T>()?;
+            }
+        };
+    }
+
+    get!("min_scans", cfg.min_scans, usize);
+    get!("max_gap", cfg.max_gap, usize);
+    get!("split_hills", cfg.split_hills, bool);
+    get!("min_peak_distance", cfg.min_peak_distance, usize);
+    get!("min_peak_height", cfg.min_peak_height, f64);
+    get!("min_valley_ratio", cfg.min_valley_ratio, f64);
+    Ok(cfg)
+}
+
 fn features_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<FeaturesConfig> {
     let mut cfg = FeaturesConfig::default();
     let Some(kw) = kwargs else { return Ok(cfg) };
@@ -122,13 +144,11 @@ fn features_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<F
         };
     }
 
-    get!("mz_tolerance", cfg.mz_tolerance, f64);
     get!("min_charge", cfg.min_charge, u8);
     get!("max_charge", cfg.max_charge, u8);
     get!("min_cosine_similarity", cfg.min_cosine_similarity, f64);
     get!("left_max_decrease", cfg.left_max_decrease, f64);
     get!("right_max_decrease", cfg.right_max_decrease, f64);
-    get!("im_tolerance", cfg.im_tolerance, f64);
     get!("max_isotopes", cfg.max_isotopes, usize);
     Ok(cfg)
 }
@@ -207,8 +227,9 @@ fn detect_hills(
     path: &str,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyList>> {
-    let cfg = hills_config_from_kwargs(kwargs)?;
-    let hills = ::koth_ff::run_hills_streaming(Path::new(path), &cfg)
+    let hills_cfg = hills_config_from_kwargs(kwargs)?;
+    let file_cfg = file_config_from_kwargs(kwargs)?;
+    let hills = ::koth_ff::run_hills_streaming(Path::new(path), &hills_cfg, &file_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     let list = PyList::new(
         py,
@@ -234,6 +255,7 @@ fn detect_features(
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyList>> {
     let features_cfg = features_config_from_kwargs(kwargs)?;
+    let file_cfg = file_config_from_kwargs(kwargs)?;
     let scoring_cfg = scoring_config_from_kwargs(kwargs)?;
 
     let rust_hills = hills
@@ -241,7 +263,7 @@ fn detect_features(
         .map(|item| dict_to_hill(&item))
         .collect::<PyResult<Vec<_>>>()?;
 
-    let features = ::koth_ff::run_features(&rust_hills, &features_cfg)
+    let features = ::koth_ff::run_features(&rust_hills, &features_cfg, &file_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     let scored = ::koth_ff::run_scoring(&features, &scoring_cfg);
 
@@ -276,17 +298,18 @@ fn run_pipeline(
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyDict>> {
     let hills_cfg = hills_config_from_kwargs(kwargs)?;
+    let file_cfg = file_config_from_kwargs(kwargs)?;
     let features_cfg = features_config_from_kwargs(kwargs)?;
     let scoring_cfg = scoring_config_from_kwargs(kwargs)?;
 
     let t0 = Instant::now();
-    let hills = ::koth_ff::run_hills_streaming(Path::new(path), &hills_cfg)
+    let hills = ::koth_ff::run_hills_streaming(Path::new(path), &hills_cfg, &file_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     let hills_s = t0.elapsed().as_secs_f64();
     eprintln!("[koth_ff] hills: {:.2}s ({} hills)", hills_s, hills.len());
 
     let t1 = Instant::now();
-    let features = ::koth_ff::run_features(&hills, &features_cfg)
+    let features = ::koth_ff::run_features(&hills, &features_cfg, &file_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     let features_s = t1.elapsed().as_secs_f64();
     eprintln!("[koth_ff] feature detection: {:.2}s ({} features, {} charge=0)",

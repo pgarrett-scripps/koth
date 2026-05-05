@@ -2,16 +2,44 @@
 # All values shown are defaults. Uncomment and modify as needed.
 # Usage: koth_ff <input> --config example_config.toml
 
-[hills]
-# m/z tolerance for grouping peaks into hills
+[file]
+# m/z tolerance — used by both hill detection and feature finding
 mz_tolerance = 8.0
 # "ppm" or "da"
 mz_tolerance_type = "ppm"
 
+# Ion mobility tolerance — used by both hill detection and feature finding
+im_tolerance = 0.05
+# "relative" (fraction of IM value) or "absolute" (1/K0 units)
+im_tolerance_type = "relative"
+
+# Restrict processing to this m/z window (default max is inf = no limit)
+global_min_mz = 0.0
+global_max_mz = inf
+
+# Fraction of total hill intensity to retain (1.0 = keep all scans)
+intensity_coverage = 1.0
+
+# Number of threads (omit or set to 0 to use all available CPUs)
+# n_threads = 8
+
+# Bruker .d centroiding parameters
+bruker_mz_ppm = 5.0
+bruker_im_pct = 3.0
+# Minimum raw subpeaks required to emit a centroided peak (1 = keep all, 2+ filters noise)
+bruker_min_subpeaks = 1
+
+# Per-scan iterative noise filter. Estimates the noise floor by iteratively
+# sigma-clipping signal peaks, then discards any peak below
+# median + sigma * (1.4826 * MAD) of the noise. Omit to disable.
+# Typical starting value: 3.0. Lower = more aggressive filtering.
+# noise_filter_sigma = 3.0
+
+[hills]
 # Minimum number of scans a hill must span
 min_scans = 3
 # Maximum gap (in scans) allowed within a hill
-max_gap = 1
+max_gap = 0
 
 # Whether to split hills at local minima
 split_hills = true
@@ -22,27 +50,14 @@ min_peak_height = 0.2
 # Maximum valley/peak ratio allowed before splitting (0.0–1.0)
 min_valley_ratio = 0.6
 
-# Ion mobility tolerance for grouping
-im_tolerance = 0.05
-# "relative" (fraction) or "absolute" (1/K0 units)
-im_tolerance_type = "relative"
-
-# Restrict processing to this m/z window (set max to a large number for no limit)
-global_min_mz = 0.0
-global_max_mz = 10000.0
-
-# Bruker .d centroiding parameters
-bruker_mz_ppm = 5.0
-bruker_im_pct = 3.0
-
-# Number of threads (omit or set to 0 to use all available CPUs)
-# n_threads = 8
+# Weight for the intensity log₂-fold-change term in the hill-candidate distance
+# score. When multiple peaks fall within the m/z tolerance window, this biases
+# selection toward the peak whose intensity is most consistent with the hill's
+# last observed intensity, reducing noise-peak capture. 0.0 disables it.
+# For data with a lot of noisy peaks, like timsTOF PASEF, a value around 0.5 can help. 
+lfc_weight = 0.5
 
 [features]
-# m/z tolerance for isotope matching
-mz_tolerance = 5.0
-mz_tolerance_type = "ppm"
-
 # Charge state range to consider
 min_charge = 1
 max_charge = 7
@@ -51,12 +66,8 @@ max_charge = 7
 min_cosine_similarity = 0.5
 
 # Maximum allowed intensity decrease on the left/right flanks (0.0–1.0)
-left_max_decrease = 0.9
-right_max_decrease = 0.9
-
-# Ion mobility tolerance for feature grouping
-im_tolerance = 0.05
-im_tolerance_type = "absolute"
+left_max_decrease = 0.05
+right_max_decrease = 0.05
 
 # Maximum number of isotope peaks to consider
 max_isotopes = 6
