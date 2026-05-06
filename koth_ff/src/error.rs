@@ -26,4 +26,7 @@ pub enum KothError {
 
     #[error("No spectra found in input file")]
     NoSpectra,
+
+    #[error("Parquet error: {0}")]
+    ParquetError(String),
 }

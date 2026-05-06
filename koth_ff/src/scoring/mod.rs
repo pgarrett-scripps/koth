@@ -81,7 +81,8 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
     let obs = feature.isotope_profile_apex();
     let k = obs.len().min(10);
 
-    let mut best_score = f64::NEG_INFINITY;
+    let mut best_combined = f64::NEG_INFINITY;
+    let mut best_bc = 0.0f64;
     let mut best_offset: i8 = 0;
 
     for o in config.isotope_offset_min..=config.isotope_offset_max {
@@ -95,17 +96,19 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
         }
 
         let sc = bhattacharyya_score(&obs_aligned, template, min_intensity);
+        // Bonus is used only to prefer offset=0 when scores are close; never stored.
         let combined = sc + if o == 0 { config.offset_zero_bonus } else { 0.0 };
-        if combined > best_score {
-            best_score = combined;
+        if combined > best_combined {
+            best_combined = combined;
+            best_bc = sc;
             best_offset = o;
         }
     }
 
     // If below threshold, reset to offset=0
-    if best_score < config.min_score_threshold {
+    if best_combined < config.min_score_threshold {
         best_offset = 0;
-        best_score = bhattacharyya_score(&obs, template, min_intensity);
+        best_bc = bhattacharyya_score(&obs, template, min_intensity);
     }
 
     // Build normalized theoretical pattern for output
@@ -120,7 +123,7 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
     ScoredFeature {
         feature: feature.clone(),
         neutron_offset: best_offset,
-        score: best_score.clamp(0.0, 1.0),
+        score: best_bc.clamp(0.0, 1.0),
         theoretical_pattern,
     }
 }

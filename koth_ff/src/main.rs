@@ -5,9 +5,12 @@ use anyhow::Context;
 use clap::Parser;
 
 use koth_ff::{
-    config::KothConfig,
+    config::{KothConfig, OutputFormat},
     mem::log_mem,
-    output::{write_features_tsv, write_hills_tsv},
+    output::{
+        build_features_report, build_hills_report, write_features_parquet, write_features_tsv,
+        write_hills_parquet, write_hills_tsv, write_report, RunReport,
+    },
     run_features, run_hills_streaming, run_scoring,
 };
 
@@ -76,11 +79,18 @@ fn main() -> anyhow::Result<()> {
     log::info!("[timing] hill detection: {:.2?} ({} hills)", t.elapsed(), hills.len());
     log_mem(&format!("after hill detection ({} hills)", hills.len()));
 
-    let hills_path = out_dir.join("hills.tsv");
+    let hills_ext = match config.output.format {
+        OutputFormat::Tsv     => "tsv",
+        OutputFormat::Parquet => "parquet",
+    };
+    let hills_path = out_dir.join(format!("hills.{hills_ext}"));
     let t = Instant::now();
-    write_hills_tsv(&hills, &hills_path)
-        .with_context(|| format!("Failed to write hills to {}", hills_path.display()))?;
-    log::info!("[timing] write hills.tsv: {:.2?}", t.elapsed());
+    match config.output.format {
+        OutputFormat::Tsv     => write_hills_tsv(&hills, &hills_path),
+        OutputFormat::Parquet => write_hills_parquet(&hills, &hills_path),
+    }
+    .with_context(|| format!("Failed to write hills to {}", hills_path.display()))?;
+    log::info!("[timing] write hills.{hills_ext}: {:.2?}", t.elapsed());
 
     // Stage 2: Feature detection — hills borrowed here, features clone Hill structs
     // (intensity_profile is Arc so no data duplication)
@@ -90,14 +100,16 @@ fn main() -> anyhow::Result<()> {
         .context("Feature detection failed")?;
     log::info!("[timing] feature detection: {:.2?} ({} features)", t.elapsed(), features.len());
 
-    // Drop hills now — profile data stays alive via Arc refs inside features
+    // Build hills summary before we release the hills vec
+    let hills_report = build_hills_report(&hills);
+
+    // Drop hills — profile data stays alive via Arc refs inside features
     drop(hills);
     log_mem(&format!("after feature detection ({} features)", features.len()));
 
     // Stage 3: Scoring (optional)
-    let features_path = out_dir.join("features.tsv");
-    if args.no_scoring {
-        let unscored: Vec<_> = features
+    let scored = if args.no_scoring {
+        features
             .iter()
             .map(|f| koth_ff::models::ScoredFeature {
                 feature: f.clone(),
@@ -105,21 +117,33 @@ fn main() -> anyhow::Result<()> {
                 score: 0.0,
                 theoretical_pattern: Vec::new(),
             })
-            .collect();
-        let t = Instant::now();
-        write_features_tsv(&unscored, &features_path)
-            .with_context(|| format!("Failed to write features to {}", features_path.display()))?;
-        log::info!("[timing] write features.tsv: {:.2?}", t.elapsed());
+            .collect::<Vec<_>>()
     } else {
         log::info!("Scoring features...");
         let t = Instant::now();
-        let scored = run_scoring(&features, &config.scoring);
+        let s = run_scoring(&features, &config.scoring);
         log::info!("[timing] scoring: {:.2?}", t.elapsed());
-        let t = Instant::now();
-        write_features_tsv(&scored, &features_path)
-            .with_context(|| format!("Failed to write features to {}", features_path.display()))?;
-        log::info!("[timing] write features.tsv: {:.2?}", t.elapsed());
+        s
+    };
+
+    let features_ext = match config.output.format {
+        OutputFormat::Tsv     => "tsv",
+        OutputFormat::Parquet => "parquet",
+    };
+    let features_path = out_dir.join(format!("features.{features_ext}"));
+    let t = Instant::now();
+    match config.output.format {
+        OutputFormat::Tsv     => write_features_tsv(&scored, &features_path),
+        OutputFormat::Parquet => write_features_parquet(&scored, &features_path),
     }
+    .with_context(|| format!("Failed to write features to {}", features_path.display()))?;
+    log::info!("[timing] write features.{features_ext}: {:.2?}", t.elapsed());
+
+    // Report
+    let features_report = build_features_report(&scored);
+    let report = RunReport { hills: hills_report, features: features_report };
+    let report_path = out_dir.join("report.json");
+    write_report(&report, &report_path).context("Failed to write report")?;
 
     log::info!("[timing] total: {:.2?}", total_start.elapsed());
 

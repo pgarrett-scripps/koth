@@ -16,6 +16,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.spatial.distance import squareform
 from scipy.stats import pearsonr
 
 
@@ -167,6 +169,20 @@ def _plot_rt_warps(diagnostics: dict) -> str:
                 ax_delta.plot(x_abs, correction_abs, color="#c0392b", linewidth=2.0,
                               label="RT correction", zorder=4)
 
+                # Sliding-window median control points (what the spline is fitted to).
+                # wc is normalised run RT; wm is (ref_norm - run_norm).
+                # Absolute correction = warp(run_rt_abs) - run_rt_abs
+                #                     = (wc+wm)*ref_span + ref_rt_min  -  (wc*run_span + run_rt_min)
+                # The naive wm*ref_span is only correct when gradients are identical.
+                wc = np.array(info.get("window_centers", []))
+                wm = np.array(info.get("window_medians", []))
+                if len(wc) and len(wm):
+                    wc_abs = wc * run_span + run_rt_min
+                    wm_abs = (wc + wm) * ref_span + ref_rt_min - wc_abs
+                    ax_delta.scatter(wc_abs, wm_abs, s=40, marker="D", color="#e67e22",
+                                     edgecolors="white", linewidths=0.6, zorder=5,
+                                     label=f"window medians (n={len(wc)})")
+
                 # Y-axis tight around correction ± SD, not driven by outlier anchors
                 pad = 1.0
                 y_lo = float((correction_abs - sd_abs).min()) - pad
@@ -204,21 +220,84 @@ def _plot_correlation_heatmap(matrix_df: pl.DataFrame, sample_names: list[str]) 
             if mask.sum() >= 5:
                 corr[i, j] = pearsonr(log_int[mask, i], log_int[mask, j])[0]
 
-    size = max(5, n * 0.75 + 1)
-    fig, ax = plt.subplots(figsize=(size + 1, size))
-    im = ax.imshow(corr, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
-    short = [s[:22] for s in sample_names]
-    ax.set_xticks(range(n))
-    ax.set_yticks(range(n))
-    ax.set_xticklabels(short, rotation=45, ha="right", fontsize=7)
-    ax.set_yticklabels(short, fontsize=7)
-    for i in range(n):
-        for j in range(n):
-            if not np.isnan(corr[i, j]):
-                ax.text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center",
-                        fontsize=6, color="black")
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    ax.set_title("Pairwise Pearson r  (log₁₀ intensity, features in ≥2 runs)", fontsize=9)
+    # Hierarchical clustering: reorder rows/columns by similarity so related
+    # samples cluster together. Distance = 1 - |r|; NaN pairs treated as r=0.
+    if n >= 3:
+        corr_fill = np.nan_to_num(corr, nan=0.0)
+        np.fill_diagonal(corr_fill, 1.0)
+        dist = 1.0 - np.clip(corr_fill, 0.0, 1.0)
+        np.fill_diagonal(dist, 0.0)
+        Z = linkage(squareform(dist, checks=False), method="average")
+        order = dendrogram(Z, no_plot=True)["leaves"]
+    else:
+        Z = None
+        order = list(range(n))
+
+    corr_ord = corr[np.ix_(order, order)]
+    short    = [sample_names[i][:22] for i in order]
+
+    size   = max(5, n * 0.75 + 1)
+    dend_s = max(1.2, size * 0.18)   # dendrogram panel size
+
+    if Z is not None:
+        fig = plt.figure(figsize=(size + dend_s + 1.5, size + dend_s + 0.5))
+        gs = fig.add_gridspec(
+            2, 3,
+            width_ratios=[dend_s, size, 0.35],
+            height_ratios=[dend_s, size],
+            hspace=0.01, wspace=0.01,
+        )
+        ax_corner    = fig.add_subplot(gs[0, 0])
+        ax_top_dend  = fig.add_subplot(gs[0, 1])
+        ax_left_dend = fig.add_subplot(gs[1, 0])
+        ax_heatmap   = fig.add_subplot(gs[1, 1])
+        ax_cbar      = fig.add_subplot(gs[1, 2])
+        ax_corner.set_visible(False)
+
+        _dend_kw = dict(no_labels=True, color_threshold=0, above_threshold_color="#666666")
+        dendrogram(Z, ax=ax_top_dend,  orientation="top",  **_dend_kw)
+        dendrogram(Z, ax=ax_left_dend, orientation="left", **_dend_kw)
+
+        # Align dendrogram leaf coordinates with heatmap cell indices.
+        # Scipy places leaf k at position 10*k+5, so n leaves span 0..10n.
+        ax_top_dend.set_xlim(-5, 10 * n - 5)
+        ax_top_dend.axis("off")
+        ax_left_dend.set_ylim(10 * n - 5, -5)   # inverted to match heatmap top→bottom
+        ax_left_dend.axis("off")
+
+        im = ax_heatmap.imshow(corr_ord, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
+        ax_heatmap.set_xlim(-0.5, n - 0.5)
+        ax_heatmap.set_ylim(n - 0.5, -0.5)
+        ax_heatmap.set_xticks(range(n))
+        ax_heatmap.set_yticks(range(n))
+        ax_heatmap.set_xticklabels(short, rotation=45, ha="right", fontsize=7)
+        ax_heatmap.set_yticklabels(short, fontsize=7)
+        for i in range(n):
+            for j in range(n):
+                if not np.isnan(corr_ord[i, j]):
+                    ax_heatmap.text(j, i, f"{corr_ord[i, j]:.2f}",
+                                    ha="center", va="center", fontsize=6, color="black")
+        fig.colorbar(im, cax=ax_cbar).set_label("Pearson r", fontsize=8)
+        ax_heatmap.set_title(
+            "Pairwise Pearson r  (log₁₀ intensity, features ≥2 runs)\n"
+            "ordered by hierarchical clustering  (average linkage, distance = 1−r)",
+            fontsize=8,
+        )
+    else:
+        fig, ax = plt.subplots(figsize=(size + 1, size))
+        im = ax.imshow(corr_ord, vmin=0, vmax=1, cmap="RdYlGn", aspect="auto")
+        ax.set_xticks(range(n))
+        ax.set_yticks(range(n))
+        ax.set_xticklabels(short, rotation=45, ha="right", fontsize=7)
+        ax.set_yticklabels(short, fontsize=7)
+        for i in range(n):
+            for j in range(n):
+                if not np.isnan(corr_ord[i, j]):
+                    ax.text(j, i, f"{corr_ord[i, j]:.2f}", ha="center", va="center",
+                            fontsize=6, color="black")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_title("Pairwise Pearson r  (log₁₀ intensity, features in ≥2 runs)", fontsize=9)
+
     fig.tight_layout()
     return _fig_to_b64(fig)
 
@@ -393,6 +472,114 @@ def _plot_runnerup_gap(diagnostics: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# m/z and IM drift plots
+# ---------------------------------------------------------------------------
+
+def _plot_mz_drift(diagnostics: dict) -> str:
+    """Scatter of per-anchor PPM error vs RT with fitted linear trend, one panel per run."""
+    run_diags = {
+        k: v for k, v in diagnostics["runs"].items()
+        if not v.get("identity_fallback", True) and v.get("anchor_ref_rt_abs")
+    }
+    if not run_diags:
+        return ""
+
+    n = len(run_diags)
+    fig, axes = plt.subplots(n, 1, figsize=(9, 4 * n), squeeze=False)
+
+    for row, (name, info) in enumerate(run_diags.items()):
+        ax = axes[row][0]
+        rt  = np.array(info["anchor_ref_rt_abs"])
+        ppm = np.array(info["anchor_ppm_errors"])
+        slope     = info.get("mass_drift_slope_ppm_per_min", 0.0)
+        intercept = info.get("mass_drift_intercept_ppm", 0.0)
+
+        ax.scatter(rt, ppm, s=8, alpha=0.45, color="#4c72b0",
+                   label=f"anchors (n={len(rt):,})", zorder=3)
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.35, zorder=2)
+
+        if len(rt) >= 2:
+            x_line = np.linspace(rt.min(), rt.max(), 300)
+            ax.plot(x_line, slope * x_line + intercept, color="#c0392b",
+                    linewidth=1.8, zorder=4,
+                    label=f"fit: {slope:+.4f} ppm/min  (offset {intercept:+.3f} ppm)")
+
+        # Sigma-clip y-axis so a few outliers don't crush the view
+        if len(ppm) >= 4:
+            p2, p98 = np.percentile(ppm, [2, 98])
+            pad = max(0.5, (p98 - p2) * 0.25)
+            ax.set_ylim(p2 - pad, p98 + pad)
+
+        ax.set_xlabel("RT (min)", fontsize=9)
+        ax.set_ylabel("Mass error (ppm)", fontsize=9)
+        ax.set_title(f"{name[:50]}  — m/z drift vs RT", fontsize=9)
+        ax.legend(fontsize=7)
+
+    fig.suptitle("m/z drift correction (anchor pairs, linear fit)", fontsize=11)
+    fig.tight_layout()
+    return _fig_to_b64(fig)
+
+
+def _plot_im_drift(diagnostics: dict) -> str:
+    """Scatter of per-anchor IM delta vs RT with fitted linear trend, one panel per run."""
+    run_diags = {
+        k: v for k, v in diagnostics["runs"].items()
+        if not v.get("identity_fallback", True) and v.get("anchor_ref_rt_abs")
+    }
+    # Only produce the plot if at least one run has IM anchor data
+    has_im = any(
+        np.any(np.array(v.get("anchor_im_deltas", [])) != 0.0)
+        for v in run_diags.values()
+    )
+    if not run_diags or not has_im:
+        return ""
+
+    n = len(run_diags)
+    fig, axes = plt.subplots(n, 1, figsize=(9, 4 * n), squeeze=False)
+
+    for row, (name, info) in enumerate(run_diags.items()):
+        ax = axes[row][0]
+        rt_all  = np.array(info["anchor_ref_rt_abs"])
+        im_all  = np.array(info["anchor_im_deltas"])
+        mask    = im_all != 0.0
+        slope     = info.get("im_drift_slope_per_min", 0.0)
+        intercept = info.get("im_drift_intercept", 0.0)
+
+        if mask.sum() == 0:
+            ax.text(0.5, 0.5, "No IM data in anchors", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=10, color="#888")
+            ax.set_title(f"{name[:50]}  — IM drift vs RT", fontsize=9)
+            continue
+
+        rt  = rt_all[mask]
+        imd = im_all[mask]
+
+        ax.scatter(rt, imd, s=8, alpha=0.45, color="#4c72b0",
+                   label=f"anchors with IM (n={mask.sum():,})", zorder=3)
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.35, zorder=2)
+
+        if len(rt) >= 4:
+            x_line = np.linspace(rt.min(), rt.max(), 300)
+            ax.plot(x_line, slope * x_line + intercept, color="#c0392b",
+                    linewidth=1.8, zorder=4,
+                    label=f"fit: {slope:+.5f} 1/K₀/min  (offset {intercept:+.4f})")
+
+        if len(imd) >= 4:
+            p2, p98 = np.percentile(imd, [2, 98])
+            pad = max(0.005, (p98 - p2) * 0.25)
+            ax.set_ylim(p2 - pad, p98 + pad)
+
+        ax.set_xlabel("RT (min)", fontsize=9)
+        ax.set_ylabel("IM delta (1/K₀)", fontsize=9)
+        ax.set_title(f"{name[:50]}  — IM drift vs RT", fontsize=9)
+        ax.legend(fontsize=7)
+
+    fig.suptitle("Ion-mobility drift correction (anchor pairs, linear fit)", fontsize=11)
+    fig.tight_layout()
+    return _fig_to_b64(fig)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -409,6 +596,8 @@ def generate_report(
 
     img_detection   = _plot_detection_histogram(consensus_df, n_runs)
     img_warps       = _plot_rt_warps(diagnostics)
+    img_mz_drift    = _plot_mz_drift(diagnostics)
+    img_im_drift    = _plot_im_drift(diagnostics)
     img_dist        = _plot_intensity_distributions(matrix_df, sample_names)
     img_corr        = _plot_correlation_heatmap(matrix_df, sample_names)
     img_missing     = _plot_missing_rates(matrix_df, sample_names)
@@ -520,6 +709,10 @@ footer {{ margin-top: 60px; font-size: 11px; color: #aaa;
 
 {section("RT warp curves (kernel smooth ± 1 SEM)", _img(img_warps, "RT warp curves")) if img_warps else ""}
 
+{section("m/z drift vs RT (linear correction)", _img(img_mz_drift, "m/z drift")) if img_mz_drift else ""}
+
+{section("Ion-mobility drift vs RT (linear correction)", _img(img_im_drift, "IM drift")) if img_im_drift else ""}
+
 {section("Target / decoy FDR", _img(img_fdr, "FDR summary")) if img_fdr else ""}
 
 {section("Match ambiguity — runner-up PPM gap", _img(img_runnerup, "Runner-up gap")) if img_runnerup else ""}
@@ -532,7 +725,7 @@ footer {{ margin-top: 60px; font-size: 11px; color: #aaa;
   <div>{_img(img_missing, "Missing value rates")}</div>
 </div>""")}
 
-{section("Pairwise intensity correlation", _img(img_corr, "Correlation heatmap"))}
+{section("Pairwise intensity correlation (hierarchically clustered)", _img(img_corr, "Correlation heatmap"))}
 
 <footer>
   koth_ff alignment report &nbsp;·&nbsp;

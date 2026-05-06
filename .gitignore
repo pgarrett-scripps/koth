@@ -21,3 +21,7 @@ out/
 tmp_*.toml
 # Sample run output dirs (data, not source)
 20250806_*/
+
+*.tsv
+*.html
+tmp/

@@ -144,11 +144,34 @@ impl Default for ScoringConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    #[default]
+    Tsv,
+    Parquet,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputConfig {
+    /// Output format for hills and features files: "tsv" or "parquet"
+    pub format: OutputFormat,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            format: OutputFormat::Tsv,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KothConfig {
     pub file: FileConfig,
     pub hills: HillsConfig,
     pub features: FeaturesConfig,
     pub scoring: ScoringConfig,
+    pub output: OutputConfig,
 }
 
 impl KothConfig {

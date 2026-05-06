@@ -30,6 +30,8 @@ env_logger = { workspace = true }
 thiserror  = { workspace = true }
 anyhow     = { workspace = true }
 clap       = { workspace = true }
+arrow      = { workspace = true }
+parquet    = { workspace = true }
 
 [features]
 default = ["tdf"]
