@@ -1,6 +1,7 @@
 pub mod active;
 pub mod detector;
 pub mod noise;
+pub mod smooth;
 pub mod split;
 
 use crate::config::{FileConfig, HillsConfig};
@@ -54,7 +55,7 @@ where
             config.min_peak_distance,
             config.min_peak_height,
             config.min_scans,
-            config.min_valley_ratio,
+            config.min_prominence,
         );
         log::info!("{} hills after co-elution splitting", hills.len());
     }

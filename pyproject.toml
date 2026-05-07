@@ -7,6 +7,8 @@ readme = "README.md"
 # numpy>=2.4.3 used by the plotting scripts requires >=3.11.
 requires-python = ">=3.11"
 dependencies = [
+    "dash>=4.1.0",
+    "fastparquet>=2026.3.0",
     "koth-ff",
     "matplotlib>=3.10.8",
     "numpy>=2.4.3",

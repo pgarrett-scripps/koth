@@ -46,6 +46,11 @@ pub struct FileConfig {
     /// noise floor are discarded before hill detection.
     /// `None` (default) disables the filter; a typical starting value is 3.0.
     pub noise_filter_sigma: Option<f64>,
+    /// Decoy mode: shuffle MS1 spectra into a random order before hill and
+    /// feature finding. Destroys the chromatographic structure while preserving
+    /// the per-scan peak distributions, producing a null (decoy) feature set.
+    #[serde(default)]
+    pub decoy_mode: bool,
 }
 
 impl Default for FileConfig {
@@ -63,6 +68,7 @@ impl Default for FileConfig {
             bruker_im_pct: 3.0,
             bruker_min_subpeaks: 1,
             noise_filter_sigma: None,
+            decoy_mode: false,
         }
     }
 }
@@ -74,11 +80,33 @@ pub struct HillsConfig {
     pub split_hills: bool,
     pub min_peak_distance: usize,
     pub min_peak_height: f64,
-    pub min_valley_ratio: f64,
+    /// Minimum prominence for a peak to trigger a split, as a fraction of the
+    /// hill's maximum intensity (0.0–1.0).  Prominence = peak height minus the
+    /// highest valley between the peak and any taller neighbour.  A noise wiggle
+    /// sitting on the flank of a larger peak has near-zero prominence even if it
+    /// passes the local-maxima check; a genuine co-eluting compound has high
+    /// prominence because the valley between the two peaks is deep.
+    #[serde(default = "default_min_prominence")]
+    pub min_prominence: f64,
     /// Weight for the intensity LFC term in the hill-candidate distance score.
     /// 0.0 disables it. ~0.5 gives intensity consistency roughly half the
     /// influence of m/z proximity when selecting which peak extends a hill.
     pub lfc_weight: f64,
+    /// Apply intensity profile smoothing after hill finalization.
+    #[serde(default)]
+    pub smoothing_enabled: bool,
+    /// Half-width of the running-average window. Total window = 2*smoothing_window+1 scans.
+    /// 0 = no averaging (gap-fill only). Ignored when smoothing_enabled is false.
+    #[serde(default = "default_smoothing_window")]
+    pub smoothing_window: usize,
+}
+
+fn default_smoothing_window() -> usize {
+    1
+}
+
+fn default_min_prominence() -> f64 {
+    0.2
 }
 
 impl Default for HillsConfig {
@@ -89,8 +117,10 @@ impl Default for HillsConfig {
             split_hills: true,
             min_peak_distance: 10,
             min_peak_height: 0.2,
-            min_valley_ratio: 0.6,
+            min_prominence: 0.2,
             lfc_weight: 0.5,
+            smoothing_enabled: false,
+            smoothing_window: 1,
         }
     }
 }

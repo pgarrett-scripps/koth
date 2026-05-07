@@ -25,3 +25,4 @@ clap      = { version = "4", features = ["derive"] }
 pyo3      = { version = "0.28", features = ["extension-module", "abi3-py310"] }
 arrow     = { version = "53", features = ["ipc"] }
 parquet   = { version = "53", features = ["arrow"] }
+rand      = "0.8"

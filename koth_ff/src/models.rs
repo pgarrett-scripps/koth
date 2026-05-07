@@ -46,6 +46,8 @@ pub struct Hill {
     pub skipped_scans: usize,
     pub intensity_sum: f64,
     pub intensity_max: f64,
+    /// Monotonicity-fraction shape score (0–1). 1.0 = perfectly hill-shaped.
+    pub hill_score: f64,
     /// Per-scan intensity profile (length == n_scans, zeros where gaps)
     pub intensity_profile: Arc<[f32]>,
 }

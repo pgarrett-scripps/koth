@@ -41,6 +41,7 @@ pub fn write_hills_tsv(hills: &[Hill], path: &Path) -> Result<(), KothError> {
         "skipped_scans",
         "intensity_sum",
         "intensity_max",
+        "hill_score",
         "intensity_profile",
     ])?;
 
@@ -63,6 +64,7 @@ pub fn write_hills_tsv(hills: &[Hill], path: &Path) -> Result<(), KothError> {
             h.skipped_scans.to_string(),
             format!("{:.5e}", h.intensity_sum),
             format!("{:.5e}", h.intensity_max),
+            format!("{:.6}", h.hill_score),
             profile_json,
         ])?;
     }
@@ -209,6 +211,7 @@ pub fn write_hills_parquet(hills: &[Hill], path: &Path) -> Result<(), KothError>
         Field::new("skipped_scans",   DataType::Int64,   false),
         Field::new("intensity_sum",   DataType::Float64, false),
         Field::new("intensity_max",   DataType::Float64, false),
+        Field::new("hill_score",      DataType::Float64, false),
         Field::new("intensity_profile", DataType::Utf8,  false),
     ]));
 
@@ -233,6 +236,7 @@ pub fn write_hills_parquet(hills: &[Hill], path: &Path) -> Result<(), KothError>
         Arc::new(indices.iter().map(|&i| hills[i].skipped_scans as i64).collect::<Int64Array>()),
         Arc::new(indices.iter().map(|&i| hills[i].intensity_sum).collect::<Float64Array>()),
         Arc::new(indices.iter().map(|&i| hills[i].intensity_max).collect::<Float64Array>()),
+        Arc::new(indices.iter().map(|&i| hills[i].hill_score).collect::<Float64Array>()),
         Arc::new(profiles.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
     ];
 

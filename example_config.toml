@@ -47,8 +47,11 @@ split_hills = true
 min_peak_distance = 10
 # Minimum peak height relative to the tallest peak (0.0–1.0)
 min_peak_height = 0.2
-# Maximum valley/peak ratio allowed before splitting (0.0–1.0)
-min_valley_ratio = 0.6
+# Minimum peak prominence required to trigger a split (fraction of the hill's
+# maximum intensity, 0.0–1.0). Prominence measures how much a peak stands above
+# the highest valley between it and any taller neighbour. Noise wiggles on a
+# peak's flank have near-zero prominence and will not cause spurious splits.
+min_prominence = 0.2
 
 # Weight for the intensity log₂-fold-change term in the hill-candidate distance
 # score. When multiple peaks fall within the m/z tolerance window, this biases
@@ -56,6 +59,14 @@ min_valley_ratio = 0.6
 # last observed intensity, reducing noise-peak capture. 0.0 disables it.
 # For data with a lot of noisy peaks, like timsTOF PASEF, a value around 0.5 can help. 
 lfc_weight = 0.5
+
+# Smooth hill intensity profiles after finalization using a running average.
+# Reduces scan-to-scan noise before cosine similarity and scoring.
+# Disabled by default; enable for noisy data.
+smoothing_enabled = false
+# Half-width of the smoothing window. Total window = 2 * smoothing_window + 1 scans.
+# 0 = gap-fill only (no averaging). Ignored when smoothing_enabled is false.
+smoothing_window = 1
 
 [features]
 # Charge state range to consider

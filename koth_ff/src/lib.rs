@@ -36,6 +36,7 @@ use std::path::Path;
 use config::{FeaturesConfig, FileConfig, HillsConfig, ScoringConfig};
 use error::KothError;
 use models::{Feature, Hill, ScoredFeature, Spectrum};
+use rand::seq::SliceRandom;
 
 /// Read MS1 spectra from an mzML file or Bruker .d directory.
 pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
@@ -44,7 +45,14 @@ pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, Kot
 
 /// Stage 1: Detect chromatographic hills from MS1 spectra.
 pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) -> Vec<Hill> {
-    hills::detect_hills(spectra, config, file)
+    if file.decoy_mode {
+        log::info!("Decoy mode: shuffling {} spectra before hill detection", spectra.len());
+        let mut shuffled = spectra.to_vec();
+        shuffled.shuffle(&mut rand::thread_rng());
+        hills::detect_hills(&shuffled, config, file)
+    } else {
+        hills::detect_hills(spectra, config, file)
+    }
 }
 
 /// Stage 1 (streaming): Detect hills by reading the mzML/Bruker file directly,
@@ -60,15 +68,33 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
     {
         if path.extension().and_then(|e| e.to_str()) == Some("d") || path.is_dir() {
             // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
-            let spectra = io::read_spectra(path, file)?;
+            let mut spectra = io::read_spectra(path, file)?;
+            if file.decoy_mode {
+                log::info!(
+                    "Decoy mode: shuffling {} Bruker spectra before hill detection",
+                    spectra.len()
+                );
+                spectra.shuffle(&mut rand::thread_rng());
+            }
             return Ok(hills::detect_hills(&spectra, config, file));
         }
     }
 
-    // mzML streaming path
+    // mzML path — collect first if decoy mode so we can shuffle
     let iter = io::mzml::stream_mzml(path)?;
-    log::info!("Streaming hill detection from {}", path.display());
-    Ok(hills::detect_hills_from_iter(iter, config, file))
+    if file.decoy_mode {
+        let mut spectra: Vec<_> = iter.collect();
+        log::info!(
+            "Decoy mode: shuffling {} spectra before hill detection",
+            spectra.len()
+        );
+        spectra.shuffle(&mut rand::thread_rng());
+        log::info!("Streaming hill detection from {} (decoy)", path.display());
+        Ok(hills::detect_hills_from_iter(spectra.into_iter(), config, file))
+    } else {
+        log::info!("Streaming hill detection from {}", path.display());
+        Ok(hills::detect_hills_from_iter(iter, config, file))
+    }
 }
 
 /// Stage 2: Detect isotope features from hills.

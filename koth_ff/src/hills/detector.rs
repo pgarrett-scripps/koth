@@ -5,6 +5,7 @@ use crate::config::{FileConfig, HillsConfig, ImToleranceType, ToleranceType};
 use crate::models::{Hill, Spectrum};
 
 use super::active::ActiveHill;
+use super::smooth;
 
 pub struct HillDetector {
     min_mz: f64,
@@ -18,6 +19,8 @@ pub struct HillDetector {
     im_tolerance: f64,
     im_tolerance_type: ImToleranceType,
     lfc_weight: f64,
+    smoothing_enabled: bool,
+    smoothing_window: usize,
     active_hills: HashMap<usize, ActiveHill>,
     next_id: usize,
     finalized: Vec<Hill>,
@@ -54,6 +57,8 @@ impl HillDetector {
             im_tolerance: file.im_tolerance,
             im_tolerance_type: file.im_tolerance_type.clone(),
             lfc_weight: config.lfc_weight,
+            smoothing_enabled: config.smoothing_enabled,
+            smoothing_window: config.smoothing_window,
             active_hills: HashMap::new(),
             next_id: 0,
             finalized: Vec::new(),
@@ -68,6 +73,28 @@ impl HillDetector {
         let use_im = spectrum.has_ion_mobility();
         let scan_idx = self.scan_idx;
         let n_peaks = spectrum.peaks.len();
+
+        // Stale-hill cleanup runs before matching so that a hill that has
+        // already exceeded max_gap cannot pick up a new peak and accumulate
+        // extra gap zeros in its profile (the bug: matching-first let a hill
+        // last seen at scan N survive the check at N+1 and then insert 2
+        // zeros at N+3 before the next check fired).
+        if scan_idx % self.check_freq == 0 {
+            let cutoff = scan_idx.saturating_sub(self.max_gap);
+            let stale_ids: Vec<usize> = self
+                .active_hills
+                .iter()
+                .filter(|(_, h)| h.last_scan_seen < cutoff)
+                .map(|(&id, _)| id)
+                .collect();
+
+            for id in stale_ids {
+                let hill = self.active_hills.remove(&id).unwrap();
+                if let Some(h) = Self::finalize_hill(hill, self.min_scans, self.intensity_coverage, self.smoothing_enabled, self.smoothing_window) {
+                    self.finalized.push(h);
+                }
+            }
+        }
 
         // Build intensity-sorted (descending) index of active hills.
         // Higher-intensity hills get first pick of candidate peaks, preventing
@@ -179,30 +206,12 @@ impl HillDetector {
             );
         }
 
-        // Periodic stale-hill cleanup.
-        if scan_idx % self.check_freq == 0 {
-            let cutoff = scan_idx.saturating_sub(self.max_gap);
-            let stale_ids: Vec<usize> = self
-                .active_hills
-                .iter()
-                .filter(|(_, h)| h.last_scan_seen < cutoff)
-                .map(|(&id, _)| id)
-                .collect();
-
-            for id in stale_ids {
-                let hill = self.active_hills.remove(&id).unwrap();
-                if let Some(h) = Self::finalize_hill(hill, self.min_scans, self.intensity_coverage) {
-                    self.finalized.push(h);
-                }
-            }
-        }
-
         self.scan_idx += 1;
     }
 
     pub fn finish(mut self) -> Vec<Hill> {
         for (_, hill) in self.active_hills {
-            if let Some(h) = Self::finalize_hill(hill, self.min_scans, self.intensity_coverage) {
+            if let Some(h) = Self::finalize_hill(hill, self.min_scans, self.intensity_coverage, self.smoothing_enabled, self.smoothing_window) {
                 self.finalized.push(h);
             }
         }
@@ -226,11 +235,25 @@ impl HillDetector {
         }
     }
 
-    fn finalize_hill(mut hill: ActiveHill, min_scans: usize, intensity_coverage: f64) -> Option<Hill> {
+    fn finalize_hill(
+        mut hill: ActiveHill,
+        min_scans: usize,
+        intensity_coverage: f64,
+        smoothing_enabled: bool,
+        smoothing_window: usize,
+    ) -> Option<Hill> {
         hill.trim();
         hill.trim_to_coverage(intensity_coverage);
-        if hill.len() < min_scans {
+
+        // Count raw gaps before any smoothing so skipped_scans reflects true missing scans.
+        let valid_scans = hill.intensity_profile.iter().filter(|&&x| x > 0.0).count();
+        if valid_scans < min_scans {
             return None;
+        }
+        let skipped = hill.intensity_profile.iter().filter(|&&x| x == 0.0).count();
+
+        if smoothing_enabled {
+            smooth::smooth_profile(&mut hill.intensity_profile, smoothing_window);
         }
 
         let apex_idx = hill.apex_index();
@@ -248,7 +271,7 @@ impl HillDetector {
             .iter()
             .map(|&x| x as f64)
             .fold(0.0f64, f64::max);
-        let skipped = hill.intensity_profile.iter().filter(|&&x| x == 0.0).count();
+        let hill_score = smooth::compute_hill_score(&hill.intensity_profile);
         let n_scans = hill.intensity_profile.len();
 
         Some(Hill {
@@ -267,6 +290,7 @@ impl HillDetector {
             skipped_scans: skipped,
             intensity_sum,
             intensity_max,
+            hill_score,
             intensity_profile: Arc::from(hill.intensity_profile.as_slice()),
         })
     }
