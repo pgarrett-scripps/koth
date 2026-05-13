@@ -121,7 +121,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         log::info!("Scoring features...");
         let t = Instant::now();
-        let s = run_scoring(&features, &config.scoring);
+        let s = run_scoring(&features, &config.scoring, config.features.min_score);
         log::info!("[timing] scoring: {:.2?}", t.elapsed());
         s
     };

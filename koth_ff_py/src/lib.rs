@@ -128,7 +128,6 @@ fn hills_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Hill
     get!("split_hills", cfg.split_hills, bool);
     get!("min_peak_distance", cfg.min_peak_distance, usize);
     get!("min_peak_height", cfg.min_peak_height, f64);
-    get!("min_valley_ratio", cfg.min_valley_ratio, f64);
     Ok(cfg)
 }
 
@@ -150,6 +149,7 @@ fn features_config_from_kwargs(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<F
     get!("left_max_decrease", cfg.left_max_decrease, f64);
     get!("right_max_decrease", cfg.right_max_decrease, f64);
     get!("max_isotopes", cfg.max_isotopes, usize);
+    get!("min_score", cfg.min_score, f64);
     Ok(cfg)
 }
 
@@ -207,6 +207,7 @@ fn dict_to_hill(d: &Bound<'_, PyAny>) -> PyResult<Hill> {
         skipped_scans:    req!("skipped_scans", usize),
         intensity_sum:    req!("intensity_sum", f64),
         intensity_max:    req!("intensity_max", f64),
+        hill_score:       d.get_item("hill_score")?.and_then(|v| v.extract::<f64>().ok()).unwrap_or(1.0),
         intensity_profile: std::sync::Arc::from(profile_vec.as_slice()),
     })
 }
@@ -265,7 +266,7 @@ fn detect_features(
 
     let features = ::koth_ff::run_features(&rust_hills, &features_cfg, &file_cfg)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    let scored = ::koth_ff::run_scoring(&features, &scoring_cfg);
+    let scored = ::koth_ff::run_scoring(&features, &scoring_cfg, features_cfg.min_score);
 
     let list = PyList::new(
         py,
@@ -317,7 +318,7 @@ fn run_pipeline(
         features.iter().filter(|f| f.charge == 0).count());
 
     let t2 = Instant::now();
-    let scored = ::koth_ff::run_scoring(&features, &scoring_cfg);
+    let scored = ::koth_ff::run_scoring(&features, &scoring_cfg, features_cfg.min_score);
     let scoring_s = t2.elapsed().as_secs_f64();
     eprintln!("[koth_ff] scoring: {:.2}s ({} retained)", scoring_s, scored.len());
 

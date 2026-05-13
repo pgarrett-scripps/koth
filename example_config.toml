@@ -86,6 +86,11 @@ max_isotopes = 6
 # C13 neutron mass in Da (rarely needs changing)
 neutron_mass = 1.003354835
 
+# Minimum Bhattacharyya isotope pattern score to retain a feature in output.
+# Features below this are dropped after scoring.
+# 0.0 = keep all features; 0.5 = keep only well-matching isotope envelopes.
+min_score = 0.0
+
 [scoring]
 # Range of neutron offsets to evaluate for monoisotopic peak reassignment
 isotope_offset_min = -1
@@ -94,5 +99,7 @@ isotope_offset_max = 1
 # Score bonus applied when offset == 0 (no reassignment)
 offset_zero_bonus = 0.15
 
-# Features scoring below this threshold keep offset = 0
+# Features scoring below this threshold keep neutron_offset = 0 (no
+# monoisotopic reassignment).  Does not affect whether the feature is kept;
+# use [features] min_score for that.
 min_score_threshold = 0.5

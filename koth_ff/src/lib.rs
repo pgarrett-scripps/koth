@@ -21,11 +21,14 @@
 //! let scored = run_scoring(&features, &config.scoring);
 //! ```
 
+pub mod alignment;
 pub mod config;
+pub mod input;
 pub mod error;
 pub mod features;
 pub mod hills;
 pub mod io;
+pub mod lfq;
 pub mod mem;
 pub mod models;
 pub mod output;
@@ -103,6 +106,23 @@ pub fn run_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) 
 }
 
 /// Stage 3: Score isotope features using the averagine model.
-pub fn run_scoring(features: &[Feature], config: &ScoringConfig) -> Vec<ScoredFeature> {
-    scoring::score_features(features, config)
+///
+/// `min_output_score` is the minimum Bhattacharyya score a feature must reach
+/// to be retained in the returned vec (from `FeaturesConfig::min_score`).
+/// Pass `0.0` to keep all scored features.
+pub fn run_scoring(
+    features: &[Feature],
+    config: &ScoringConfig,
+    min_output_score: f64,
+) -> Vec<ScoredFeature> {
+    let mut scored = scoring::score_features(features, config);
+    if min_output_score > 0.0 {
+        let before = scored.len();
+        scored.retain(|sf| sf.score >= min_output_score);
+        log::info!(
+            "Retained {}/{} features after min_score filter ({:.2})",
+            scored.len(), before, min_output_score
+        );
+    }
+    scored
 }

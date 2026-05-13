@@ -1,0 +1,97 @@
+# koth_align configuration
+# Usage: koth_align <batch_dir> --config example_config_align.toml
+#
+# <batch_dir> must contain one subdirectory per run, each with:
+#   hills.{tsv,parquet} and features.{tsv,parquet}
+
+# ── Alignment ──────────────────────────────────────────────────────────────────
+[alignment]
+
+# PPM tolerance for finding anchor feature pairs between runs
+anchor_mass_ppm = 10.0
+
+# Normalised RT window [0, 1] for anchor matching (0.05 = ±5% of gradient)
+rt_anchor_window = 0.05
+
+# Ion mobility tolerance for anchor matching (1/K0 units)
+im_tolerance = 0.05
+
+# Minimum feature score for a feature to be used as an alignment anchor
+min_anchor_score = 0.5
+
+# Minimum number of anchor pairs required to fit a warp.
+# Runs with fewer anchors fall back to an identity (no-warp) correction.
+min_anchor_count = 10
+
+# Bandwidth of the sliding-window median for RT warp fitting,
+# as a fraction of the normalised RT range [0, 1].
+# Larger = smoother warp curve; smaller = more local correction.
+rt_warp_bandwidth = 0.1
+
+# Sigma threshold for iterative anchor outlier clipping
+rt_warp_sigma_clip = 3.0
+
+# Number of sigma-clip iterations
+rt_warp_clip_iters = 5
+
+# ── LFQ ───────────────────────────────────────────────────────────────────────
+[lfq]
+
+# m/z tolerance for finding matching hills in each run (ppm)
+mz_ppm = 10.0
+
+# Half-window for XIC grid extraction as a fraction of the run's RT span.
+# 0.02 = ±2% of gradient → 4% total window, 100 bins → ~2.4 s/bin per 120 min run.
+rt_window_pct = 0.02
+
+# Ion mobility tolerance for hill matching in LFQ (1/K0 units)
+im_tolerance = 0.05
+
+# Number of isotopologue rows in the XIC grid: 1 = M only, 2 = M+M1, 3 = M+M1+M2
+n_isotopes = 3
+
+# Number of RT bins per grid (default 100)
+grid_cols = 100
+
+# Minimum spectral angle used as a peak-expansion stopping criterion.
+# Peak expansion stops when the spectral angle at the edge drops below this.
+spectral_angle_min = 0.1
+
+# Peak scoring mode: "hybrid" (default), "rt", "intensity", or "spectral"
+score_mode = "hybrid"
+
+# Run target-decoy competition to compute per-entry q-values
+run_tdc = true
+
+# Minimum feature score for a reference feature to appear as a consensus row.
+# 0.0 includes all detected features.  Increase (e.g. 0.5) to restrict to
+# high-confidence identifications if the reference run has many noise features.
+min_feature_score = 0.0
+
+# ── Consensus grouping ────────────────────────────────────────────────────────
+# Grouping uses mz_ppm, rt_window_pct, and im_tolerance from [lfq] above.
+[lfq.consensus]
+
+# Minimum feature score for a feature to be eligible as a group member or seed.
+# Features below this score are ignored during grouping entirely.
+min_member_score = 0.0
+
+# Minimum number of runs that must have detected a feature in a group for it
+# to be quantified. 1 = include single-run detections (default).
+# Set to 2 or higher to require reproducibility before attempting LFQ.
+min_group_size = 1
+
+# Minimum isotope-pattern score of the group's best feature (the LFQ seed).
+# Groups whose seed falls below this threshold are dropped before LFQ.
+# 0.0 = keep all groups (default). Suggested: 0.3–0.5 to reduce noise rows.
+min_seed_score = 0.0
+
+# ── Output ────────────────────────────────────────────────────────────────────
+[output]
+
+# Output format for consensus_features and intensity_matrix: "tsv" or "parquet"
+format = "tsv"
+
+# Maximum q-value to report in the intensity matrix (1.0 = report all entries).
+# Set to 0.01 to keep only entries passing 1% FDR.
+max_qvalue = 1.0

@@ -54,12 +54,14 @@ pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<Score
         }
     }
 
+    // Return all charged features; output filtering by score is applied by
+    // the caller via FeaturesConfig::min_score.
     let scored: Vec<ScoredFeature> = all_scored
         .into_iter()
-        .filter(|sf| sf.feature.charge > 0 && sf.score >= config.min_score_threshold)
+        .filter(|sf| sf.feature.charge > 0)
         .collect();
 
-    log::info!("Retained {} features after score threshold", scored.len());
+    log::info!("Scored {} features", scored.len());
     scored
 }
 

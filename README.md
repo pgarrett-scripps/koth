@@ -1,25 +1,34 @@
 # koth_ff
 
-High-performance LC-MS feature finder for mzML and Bruker timsTOF (.d) data, written in Rust.
+High-performance LC-MS feature finder and label-free quantifier for mzML and Bruker timsTOF (.d)
+data, written in Rust.
 
 Takes centroided MS1 data and produces two outputs: `hills.tsv` (chromatographic traces) and
 `features.tsv` (isotope envelopes with charge states and averagine scores). The pipeline is
 designed for large files — peak RSS is around 150 MB on a 1 GB mzML file.
 
+The project also includes `koth_align`, a multi-run alignment and label-free quantification
+pipeline. `koth_align` reads batch output from `koth_ff`, corrects systematic RT, mass, and
+ion-mobility offsets between runs, and writes a feature × sample intensity matrix ready for
+downstream statistical analysis.
+
 ## Install
 
 ```bash
 cargo build --release
-# binary is at target/release/koth_ff
+# binaries are at target/release/koth_ff and target/release/koth_align
 ```
 
-Bruker timsTOF support is compiled in by default (requires `timsrust`). To build without it:
+Both binaries are built together with the command above. Bruker timsTOF support is compiled in by
+default (requires `timsrust`). To build without it:
 
 ```bash
 cargo build --release --no-default-features
 ```
 
 ## Quick start
+
+### Single-run feature finding (koth_ff)
 
 ```bash
 # mzML input, results written to ./out/<stem>/
@@ -33,9 +42,6 @@ koth_ff data.mzML --config my_config.toml --output ./out
 
 # Skip the scoring stage (faster)
 koth_ff data.mzML --output ./out --no-scoring
-
-# Diagnostic: count scans and peaks without running the pipeline
-koth_ff data.mzML --count-scans
 ```
 
 The output directory is `<output>/<input_stem>/` and always contains:
@@ -43,8 +49,31 @@ The output directory is `<output>/<input_stem>/` and always contains:
 ```
 hills.tsv
 features.tsv
+report.json     # summary statistics (hill and feature counts, score distribution)
 config.toml     # the config that was used, for reproducibility
 ```
+
+### Multi-run alignment and LFQ (koth_align)
+
+```bash
+# Step 1 — process each sample with koth_ff
+koth_ff sample1.mzML --output batch/
+koth_ff sample2.mzML --output batch/
+koth_ff sample3.mzML --output batch/
+# produces batch/sample1/, batch/sample2/, batch/sample3/
+
+# Step 2 — align and quantify
+koth_align batch/                                          # output to batch/align_output/
+koth_align batch/ --output results/                        # explicit output directory
+koth_align batch/ --config example_config_align.toml --output results/
+```
+
+Output in `<output>/` (default: `<batch_dir>/align_output/`):
+
+- `consensus_features.tsv` — one row per reference feature with mass, mz, charge, rtApex, im, score, seed_run, n_contributing_runs, n_runs_detected
+- `intensity_matrix.tsv` — features × samples with integrated intensities (0 = not detected)
+- `qvalue_matrix.tsv` — TDC q-values for each (feature, sample) cell; only written when `run_tdc = true`; use to filter intensity_matrix by FDR
+- `align_config.toml` — copy of config used
 
 ## justfile recipes
 
@@ -63,7 +92,8 @@ just lint                        # clippy -D warnings
 
 ## Algorithm
 
-The pipeline runs in three sequential stages.
+The single-run pipeline runs in three sequential stages. Multi-run alignment and LFQ add two
+further stages that operate on the collected output from Stage 1–3.
 
 ### Stage 1: Hill detection
 
@@ -80,7 +110,8 @@ approach there is no hash overhead and no bin-size tuning.
 
 Matching rules:
 
-- Closest unmatched hill within `mz_tolerance` (ppm or Da) is selected.
+- Closest unmatched hill within `mz_tolerance` (ppm or Da) is selected, with a combined m/z +
+  intensity log-fold-change distance score weighted by `lfc_weight`.
 - If ion mobility data is present, an IM tolerance check is applied and the combined
   m/z + IM distance is used to break ties.
 - A matched peak extends the hill's running m/z mean (Welford online update) and appends
@@ -104,8 +135,9 @@ Split criteria (all must hold):
 
 1. Two local maxima are at least `min_peak_distance` scans apart.
 2. Each maximum reaches at least `min_peak_height` fraction of the hill's global maximum.
-3. The valley between them is no deeper than `min_valley_ratio` times the shorter of the two
-   flanking peaks. Shallower valleys are noise and are not split.
+3. Each maximum has a prominence (peak height minus the highest valley between it and any taller
+   neighbour) of at least `min_prominence` fraction of the global maximum. This prevents
+   noise wiggles on a flank from triggering false splits.
 4. Both resulting segments are at least `min_scans` scans long.
 
 Splitting is controlled by `split_hills = true` in the config.
@@ -154,7 +186,75 @@ Scoring steps:
 4. If the best score is below `min_score_threshold`, fall back to offset 0.
 
 The final score is clamped to `[0, 1]`. A score near 1.0 means the observed isotope pattern
-closely matches the averagine expectation for that mass.
+closely matches the averagine expectation for that mass. Features whose score falls below
+`[features].min_score` are dropped before writing output.
+
+### Stage 4: Multi-run alignment
+
+The alignment module (`koth_ff/src/alignment/`) corrects systematic RT, mass, and ion-mobility
+offsets between runs before quantification.
+
+**Reference selection**: The run with the most high-confidence features (score ≥
+`min_anchor_score`) is chosen automatically as the reference. All other runs are aligned to it.
+
+**Anchor matching**: For each non-reference run, high-confidence features are matched to
+reference features by (charge, monoisotopic m/z, RT). Matching uses binary search on (charge,
+mz) sorted features and filters by:
+
+- m/z within `anchor_mass_ppm` ppm
+- Normalised RT within `rt_anchor_window` ([0, 1] space)
+- Ion mobility within `im_tolerance` (when available)
+
+Matching is 1:1 greedy (each reference feature claims at most one run feature, picked by lowest
+PPM error).
+
+**RT warp**: A sliding-window median of RT deltas is computed across the normalised RT axis
+using a window of `rt_warp_bandwidth` width. Anchor pairs whose residuals exceed
+`rt_warp_sigma_clip` × σ are clipped and the medians are refit (up to `rt_warp_clip_iters`
+times). The resulting knots are interpolated piecewise-linearly to produce a continuous warp
+function mapping run RT → reference RT. If fewer than `min_anchor_count` anchors are found the
+run falls back to an identity warp.
+
+**Mass and IM drift**: PPM errors and IM deltas across anchors are fit as linear functions of
+RT (ordinary least squares with sigma-clipping). The fitted lines are used to correct m/z and
+ion mobility values before LFQ extraction.
+
+### Stage 5: Label-free quantification
+
+The LFQ module (`koth_ff/src/lfq/`) re-extracts integrated intensities from the pre-computed
+hill data for every (consensus feature, run) pair. This is done instead of matching scored
+features, because a feature may not pass the scoring threshold in every run even when real
+signal is present, and different runs may have different isotope coverage or noise.
+
+**Consensus feature list**: All features from all runs are projected into reference-run coordinate
+space and grouped by (charge, neutral mass ± ppm, aligned RT ± window, IM ± tolerance). The
+highest-scoring feature in each group seeds the LFQ extraction. Groups can be filtered by
+`[lfq.consensus]` settings.
+
+**XIC grid construction**: For each consensus feature in each run, alignment corrections are
+applied to obtain the expected RT, m/z, and IM in that run's coordinate space. A `grid_cols`-bin ×
+`n_isotopes`-row grid is allocated covering ±`rt_window_pct` of the run's total gradient. Hills
+from the run are matched to each isotopologue slot (M, M+1, M+2) within `mz_ppm` ppm and the
+RT/IM window. Each matched hill's per-scan intensity profile is binned into the grid columns.
+
+**Column scoring**: Each RT column is scored:
+
+- **RT score**: `1 − ∛(|col − centre| / half_cols)` — penalises columns far from the centre
+- **Intensity score**: `√(col_total / max_col_total)` — relative intensity across the window
+- **Spectral angle**: cosine similarity between the observed (M, M+1, M+2) intensities and the
+  theoretical averagine envelope. Set to 1.0 when only one isotopologue is present.
+- **Hybrid score**: `∛(RT × intensity × spectral)` (default mode)
+
+**Peak integration**: The apex column (maximum hybrid score) is found. The peak is expanded
+left and right until: 20 bins have been added, the spectral angle drops below
+`spectral_angle_min`, or the score falls below half the apex score. All intensities in the
+expanded window across all isotopologue rows are summed.
+
+**Target-decoy competition**: A decoy feature is generated for each consensus feature by
+shifting m/z by +11 Da (in run space) and RT back by 1% of the gradient. The decoy is
+extracted with identical logic. All target and decoy entries across all features and runs are
+ranked by hybrid score. Q-values are computed as a monotonised running FDR (n_decoy / n_target),
+giving a per-(feature, run) confidence estimate.
 
 ## Memory design
 
@@ -187,6 +287,7 @@ One row per chromatographic hill, sorted by `intensity_sum` descending.
 | `skipped_scans` | Number of gap positions (zero-intensity) |
 | `intensity_sum` | Sum of all intensities in the profile |
 | `intensity_max` | Peak intensity |
+| `hill_score` | Shape score: fraction of scans monotone toward apex (0–1) |
 | `intensity_profile` | JSON array of per-scan intensities (f32) |
 
 ### features.tsv
@@ -212,56 +313,134 @@ One row per isotope feature, sorted by `intensitySum` descending. Features with 
 | `theoretical_pattern` | JSON array: normalized averagine distribution |
 | `isotope_profile` | JSON array: per-isotope apex intensities |
 | `elution_profile` | JSON array: total intensity per scan across the feature |
-| `mono_hills_scan_lists` | JSON array of scan index arrays, one per isotope hill |
-| `mono_hills_intensity_list` | JSON array of intensity arrays, one per isotope hill |
+
+### koth_align outputs
+
+#### consensus_features.tsv
+
+One row per consensus (reference) feature.
+
+| Column | Description |
+|---|---|
+| `massCalib` | Monoisotopic neutral mass |
+| `mz` | Monoisotopic m/z |
+| `charge` | Charge state |
+| `rtApex` | Retention time at apex in the reference run (minutes) |
+| `im` | Ion mobility at apex (empty if not available) |
+| `score` | Averagine isotope pattern score from the seed feature [0, 1] |
+| `seed_run` | Name of the run that provided the seed feature for this row |
+| `n_contributing_runs` | Runs that contributed a detection to this consensus group |
+| `n_runs_detected` | Runs with intensity > 0 and q-value ≤ `max_qvalue` |
+
+#### intensity_matrix.tsv
+
+Feature metadata columns (massCalib, mz, charge, rtApex, im, score, seed_run,
+n_contributing_runs) followed by one intensity column per run. Values are integrated intensities
+from the XIC grid; 0 means no peak was found. No FDR filtering is applied — use
+`qvalue_matrix.tsv` to filter downstream.
+
+#### qvalue_matrix.tsv
+
+Same layout as `intensity_matrix.tsv` but cells contain TDC q-values (0–1). Written only when
+`run_tdc = true`. A value of 1.0 means no signal was found or TDC was not run. Filter
+intensity_matrix at q ≤ 0.01 for 1% FDR, for example.
 
 ## Configuration
+
+### koth_ff config
 
 Configuration is a TOML file passed with `--config`. All values have defaults; you only need to
 include the keys you want to change. Running the pipeline writes the resolved config to
 `config.toml` in the output directory.
 
 ```toml
-[hills]
-mz_tolerance = 8.0          # m/z window for linking peaks to hills
+[file]
+mz_tolerance = 8.0          # m/z window for linking peaks to hills and isotopes
 mz_tolerance_type = "ppm"   # "ppm" or "da"
-min_scans = 3               # discard hills shorter than this
-max_gap = 1                 # consecutive missed scans before a hill is closed
-split_hills = true          # split co-eluting hills at valleys
-min_peak_distance = 10      # minimum scan separation between peaks when splitting
-min_peak_height = 0.2       # minimum peak height relative to the hill maximum
-min_valley_ratio = 0.6      # valley/peak ratio below which a split is applied
 im_tolerance = 0.05         # ion mobility tolerance
 im_tolerance_type = "relative"  # "relative" (fraction of IM value) or "absolute"
 global_min_mz = 0.0         # ignore peaks below this m/z
-global_max_mz = 10000.0     # ignore peaks above this m/z
+global_max_mz = inf         # ignore peaks above this m/z (inf = no limit)
+intensity_coverage = 1.0    # fraction of hill intensity to retain (1.0 = keep all)
 bruker_mz_ppm = 5.0         # m/z tolerance for Bruker .d centroiding
 bruker_im_pct = 3.0         # IM tolerance (%) for Bruker .d centroiding
+bruker_min_subpeaks = 1     # min raw subpeaks required per centroided Bruker peak
+# noise_filter_sigma = 3.0  # per-scan sigma-clipping noise filter; omit to disable
+# decoy_mode = false        # shuffle spectra before detection (null distribution)
 # n_threads = 8             # parallelism; omit for all CPUs
 
+[hills]
+min_scans = 3               # discard hills shorter than this
+max_gap = 0                 # consecutive missed scans allowed within a hill
+split_hills = true          # split co-eluting hills at valleys
+min_peak_distance = 10      # minimum scan separation between peaks when splitting
+min_peak_height = 0.2       # minimum peak height relative to the hill maximum
+min_prominence = 0.2        # minimum prominence (relative to max) to trigger a split
+lfc_weight = 0.5            # weight of intensity log-fold-change in peak-to-hill matching
+# smoothing_enabled = false # smooth intensity profiles after hill finalization
+# smoothing_window = 1      # half-width of smoothing window (scans)
+
 [features]
-mz_tolerance = 5.0          # m/z tolerance for isotope partner search
-mz_tolerance_type = "ppm"
 min_charge = 1
 max_charge = 7
 min_cosine_similarity = 0.5 # minimum elution profile cosine to extend an envelope
-left_max_decrease = 0.9     # max allowed intensity drop on the low-m/z side
-right_max_decrease = 0.9    # max allowed intensity drop on the high-m/z side
-im_tolerance = 0.05
-im_tolerance_type = "absolute"
+left_max_decrease = 0.05    # max allowed intensity drop on the low-m/z side
+right_max_decrease = 0.05   # max allowed intensity drop on the high-m/z side
 max_isotopes = 6            # maximum isotope peaks per feature
 neutron_mass = 1.003354835  # C13 mass offset in Da
+min_score = 0.0             # drop features below this averagine score (0.0 = keep all)
 
 [scoring]
 isotope_offset_min = -1     # lower bound of neutron offset search
 isotope_offset_max = 1      # upper bound of neutron offset search
 offset_zero_bonus = 0.15    # score bonus for keeping offset = 0
 min_score_threshold = 0.5   # features below this score keep offset = 0
+
+[output]
+format = "tsv"              # "tsv" or "parquet"
 ```
 
 A full annotated template is available at `example_config.toml`.
 
+### koth_align config
+
+Config file for `koth_align` is passed with `--config`. A full annotated template is in
+`example_config_align.toml`.
+
+```toml
+[alignment]
+anchor_mass_ppm = 10.0      # PPM tolerance for anchor feature matching
+rt_anchor_window = 0.05     # normalised RT window [0,1] for anchor matching (±5%)
+im_tolerance = 0.05         # ion mobility tolerance (1/K0)
+min_anchor_score = 0.5      # minimum feature score to be used as an anchor
+min_anchor_count = 10       # fall back to identity warp if fewer anchors found
+rt_warp_bandwidth = 0.1     # sliding-window width for RT median computation
+rt_warp_sigma_clip = 3.0    # sigma threshold for anchor outlier rejection
+rt_warp_clip_iters = 5      # number of sigma-clip iterations
+
+[lfq]
+mz_ppm = 10.0               # PPM tolerance for hill lookup per isotopologue
+rt_window_pct = 0.02        # half-window as fraction of gradient (±2% = 4% total)
+im_tolerance = 0.05         # ion mobility tolerance for hill matching
+n_isotopes = 3              # isotopologue rows: 1=M only, 2=M+M1, 3=M+M1+M2
+grid_cols = 100             # RT bins per grid
+spectral_angle_min = 0.1    # minimum spectral angle for peak expansion
+score_mode = "hybrid"       # "hybrid", "rt", "intensity", or "spectral"
+run_tdc = true              # compute per-entry q-values via target-decoy competition
+
+[lfq.consensus]
+min_member_score = 0.0      # min score for a feature to enter the consensus pool
+min_group_size = 1          # min runs detecting a feature for it to be quantified
+min_seed_score = 0.0        # min score of the best member to keep a consensus row
+
+[output]
+format = "tsv"              # "tsv" (parquet matrix output not yet implemented)
+max_qvalue = 1.0            # threshold for n_runs_detected count in consensus_features.tsv
+```
+
 ## Library API
+
+### Single-run pipeline
 
 `koth_ff` is also a library crate. The top-level functions mirror the CLI stages:
 
@@ -273,20 +452,69 @@ let config = KothConfig::default();
 let input = Path::new("data.mzML");
 
 // Stage 1 — streaming; never holds Vec<Spectrum>
-let hills = run_hills_streaming(input, &config.hills)?;
+let hills = run_hills_streaming(input, &config.hills, &config.file)?;
 
 // Stage 2
-let features = run_features(&hills, &config.features)?;
+let features = run_features(&hills, &config.features, &config.file)?;
 
-// Stage 3
-let scored = run_scoring(&features, &config.scoring);
+// Stage 3 — pass config.features.min_score to filter by isotope quality
+let scored = run_scoring(&features, &config.scoring, config.features.min_score);
 ```
 
 For non-streaming use (e.g. when you already have spectra in memory):
 
 ```rust
-let spectra = koth_ff::read_spectra(input, &config.hills)?;
-let hills = koth_ff::run_hills(&spectra, &config.hills);
+let spectra = koth_ff::read_spectra(input, &config.file)?;
+let hills = koth_ff::run_hills(&spectra, &config.hills, &config.file);
+```
+
+### Alignment and LFQ
+
+```rust
+use koth_ff::{
+    alignment::{align_runs, AlignmentConfig, RunInput},
+    lfq::{quantify, LfqConfig},
+};
+
+// Build one RunInput per LC-MS run
+let runs: Vec<RunInput> = vec![
+    RunInput { name: "sample1".into(), features: scored1, hills: hills1, scan_times: vec![] },
+    RunInput { name: "sample2".into(), features: scored2, hills: hills2, scan_times: vec![] },
+];
+
+// Stage 4: alignment
+let alignment_config = AlignmentConfig::default();
+let alignment = align_runs(&runs, &alignment_config);
+
+// Stage 5: LFQ
+let lfq_config = LfqConfig::default();
+let matrix = quantify(&runs, &alignment, &lfq_config);
+
+// Access results
+println!("Reference run: {}", matrix.reference_run);
+for feat in 0..matrix.n_features {
+    for run in 0..matrix.n_runs {
+        let intensity = matrix.intensity(feat, run);
+        let qvalue   = matrix.q_value(feat, run);
+    }
+}
+```
+
+`scan_times` is a `Vec<f64>` mapping absolute scan index to retention time in minutes. Pass an
+empty Vec to fall back to linear interpolation between each hill's `rt_start`/`rt_end` —
+sufficient for most data.
+
+Loading runs from `koth_ff` output files:
+
+```rust
+use koth_ff::input::{discover_runs, read_hills, read_features};
+
+let run_paths = discover_runs(Path::new("batch/"))?;
+for rp in &run_paths {
+    let hills    = read_hills(&rp.hills_path)?;
+    let features = read_features(&rp.features_path)?;
+    // build RunInput ...
+}
 ```
 
 ## License

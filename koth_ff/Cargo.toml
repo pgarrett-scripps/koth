@@ -11,6 +11,10 @@ description      = "High-performance LC-MS feature finder for timsTOF and mzML d
 name = "koth_ff"
 path = "src/main.rs"
 
+[[bin]]
+name = "koth_align"
+path = "src/align_main.rs"
+
 [lib]
 name = "koth_ff"
 path = "src/lib.rs"

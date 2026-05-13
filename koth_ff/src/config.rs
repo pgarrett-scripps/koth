@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::alignment::AlignmentConfig;
+use crate::lfq::LfqConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToleranceType {
@@ -135,6 +138,10 @@ pub struct FeaturesConfig {
     pub max_isotopes: usize,
     /// Neutron (C13) mass in Da
     pub neutron_mass: f64,
+    /// Minimum Bhattacharyya isotope pattern score to retain a feature in the
+    /// output.  Features below this are dropped after scoring.  Set to 0.0 to
+    /// keep all detected features regardless of isotope pattern quality.
+    pub min_score: f64,
 }
 
 impl Default for FeaturesConfig {
@@ -147,6 +154,7 @@ impl Default for FeaturesConfig {
             right_max_decrease: 0.05,
             max_isotopes: 6,
             neutron_mass: 1.003_354_835,
+            min_score: 0.0,
         }
     }
 }
@@ -158,7 +166,9 @@ pub struct ScoringConfig {
     pub isotope_offset_max: i8,
     /// Bonus score for offset == 0 (no reassignment needed)
     pub offset_zero_bonus: f64,
-    /// Features scoring below this threshold keep offset=0
+    /// Features scoring below this threshold keep neutron_offset=0 (no
+    /// isotope reassignment).  Does not affect whether the feature is kept.
+    /// See [FeaturesConfig::min_score] to control feature retention.
     pub min_score_threshold: f64,
 }
 
@@ -202,6 +212,43 @@ pub struct KothConfig {
     pub features: FeaturesConfig,
     pub scoring: ScoringConfig,
     pub output: OutputConfig,
+}
+
+/// Output settings for the alignment + LFQ stage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignOutputConfig {
+    /// "tsv" or "parquet"
+    pub format: OutputFormat,
+    /// Only write matrix entries with q-value ≤ this threshold (1.0 = keep all)
+    pub max_qvalue: f64,
+}
+
+impl Default for AlignOutputConfig {
+    fn default() -> Self {
+        Self {
+            format: OutputFormat::Tsv,
+            max_qvalue: 1.0,
+        }
+    }
+}
+
+/// Top-level configuration for the `koth_align` binary.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlignConfig {
+    pub alignment: AlignmentConfig,
+    pub lfq: LfqConfig,
+    pub output: AlignOutputConfig,
+}
+
+impl AlignConfig {
+    pub fn from_toml(path: &std::path::Path) -> Result<Self, crate::error::KothError> {
+        let content = std::fs::read_to_string(path)?;
+        toml::from_str(&content).map_err(|e| crate::error::KothError::ConfigError(e.to_string()))
+    }
+
+    pub fn to_toml_string(&self) -> Result<String, crate::error::KothError> {
+        toml::to_string(self).map_err(|e| crate::error::KothError::ConfigError(e.to_string()))
+    }
 }
 
 impl KothConfig {
