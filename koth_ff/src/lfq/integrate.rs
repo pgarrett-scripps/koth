@@ -9,7 +9,7 @@ pub struct PeakResult {
     pub start_bin: usize,
     pub end_bin: usize,
     pub hybrid_score: f32,
-    pub spectral_angle_at_apex: f32,
+    pub spectral_cosine_at_apex: f32,
 }
 
 impl PeakResult {
@@ -20,7 +20,7 @@ impl PeakResult {
             start_bin: 0,
             end_bin: 0,
             hybrid_score: 0.0,
-            spectral_angle_at_apex: 0.0,
+            spectral_cosine_at_apex: 0.0,
         }
     }
 }
@@ -34,7 +34,7 @@ impl PeakResult {
 /// 1. Locate the apex column (highest raw intensity sum).
 /// 2. Expand left and right, stopping when any of:
 ///    - 20 bins have been added on that side,
-///    - the spectral angle drops below `spectral_angle_min`,
+///    - the spectral cosine drops below `spectral_cosine_min`,
 ///    - the hybrid score drops below half the apex score.
 /// 3. Sum all intensities in [start_bin, end_bin] across all isotopologue rows.
 pub fn integrate(
@@ -68,9 +68,9 @@ pub fn integrate(
 
     let max_score = scores.hybrid[apex];
     // half_max for expansion: if hybrid is zero (edge peak), fall back to
-    // a nominal threshold so expansion still uses spectral_angle_min as gate.
+    // a nominal threshold so expansion still uses spectral_cosine_min as gate.
     let half_max = if max_score > 0.0 { max_score * 0.5 } else { 0.0 };
-    let spec_min = config.spectral_angle_min as f32;
+    let spec_min = config.spectral_cosine_min as f32;
 
     // Expand left
     let mut start = apex;
@@ -116,6 +116,6 @@ pub fn integrate(
         start_bin: start,
         end_bin: end,
         hybrid_score: max_score,
-        spectral_angle_at_apex: scores.spectral[apex],
+        spectral_cosine_at_apex: scores.spectral[apex],
     }
 }

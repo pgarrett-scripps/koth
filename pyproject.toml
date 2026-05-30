@@ -1,27 +1,17 @@
 [project]
 name = "koth-rust"
 version = "0.1.0"
-description = "Development shell for the koth_ff Rust workspace and its Python bindings"
+description = "Development shell for the koth_ff Rust workspace's analysis scripts"
 readme = "README.md"
-# Dev shell only — the published koth-ff package targets >=3.10, but
-# numpy>=2.4.3 used by the plotting scripts requires >=3.11.
 requires-python = ">=3.11"
 dependencies = [
     "dash>=4.1.0",
     "fastparquet>=2026.3.0",
-    "koth-ff",
     "matplotlib>=3.10.8",
     "numpy>=2.4.3",
     "pandas>=3.0.1",
     "plotly>=6.7.0",
     "polars>=1.0",
+    "pyarrow>=24.0.0",
     "scipy>=1.17.1",
 ]
-
-[dependency-groups]
-# `uv sync` installs these into the dev shell so `just dev-py` (and any other
-# in-place rebuild via `maturin develop`) works without a global install.
-dev = ["maturin>=1.4,<2"]
-
-[tool.uv.sources]
-koth-ff = { path = "koth_ff_py", editable = true }

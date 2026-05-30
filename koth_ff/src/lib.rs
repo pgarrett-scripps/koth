@@ -18,7 +18,7 @@
 //! let spectra = koth_ff::read_spectra(input, &config.file).unwrap();
 //! let hills = run_hills(&spectra, &config.hills, &config.file);
 //! let features = run_features(&hills, &config.features, &config.file).unwrap();
-//! let scored = run_scoring(&features, &config.scoring);
+//! let scored = run_scoring(&features, &config.scoring, &config.features);
 //! ```
 
 pub mod alignment;
@@ -66,6 +66,31 @@ pub fn run_hills_streaming(path: &Path, config: &HillsConfig, file: &FileConfig)
     hills_streaming_inner(path, config, file)
 }
 
+/// Stage 1 (MS2): Detect MS2 hills from an mzML file, partitioned by the
+/// precursor isolation window of each MS2 spectrum (DIA channels).
+/// Only mzML is supported — Bruker .d MS2 frames are not yet handled.
+pub fn run_ms2_hills_streaming(
+    path: &Path,
+    config: &HillsConfig,
+    file: &FileConfig,
+) -> Result<Vec<Hill>, KothError> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !(name.ends_with(".mzml") || name.ends_with(".mzml.gz")) {
+        log::warn!(
+            "MS2 hill detection only supports mzML inputs; skipping '{}'",
+            path.display()
+        );
+        return Ok(Vec::new());
+    }
+    let iter = io::mzml::stream_mzml_ms2(path)?;
+    log::info!("Streaming MS2 hill detection from {}", path.display());
+    Ok(hills::detect_ms2_hills_from_iter(iter, config, file))
+}
+
 fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
     #[cfg(feature = "tdf")]
     {
@@ -107,21 +132,35 @@ pub fn run_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) 
 
 /// Stage 3: Score isotope features using the averagine model.
 ///
-/// `min_output_score` is the minimum Bhattacharyya score a feature must reach
-/// to be retained in the returned vec (from `FeaturesConfig::min_score`).
-/// Pass `0.0` to keep all scored features.
+/// Applies three AND-ed retention filters from `FeaturesConfig`:
+///   - `min_isotope_score` (Bhattacharyya vs averagine)
+///   - `min_cosine_score`  (mean chromatographic cosine of isotope hills)
+///   - `min_combined_score` (= isotope × cosine)
+///
+/// All thresholds at 0.0 keep every scored feature.
 pub fn run_scoring(
     features: &[Feature],
-    config: &ScoringConfig,
-    min_output_score: f64,
+    scoring_cfg: &ScoringConfig,
+    features_cfg: &FeaturesConfig,
 ) -> Vec<ScoredFeature> {
-    let mut scored = scoring::score_features(features, config);
-    if min_output_score > 0.0 {
+    let mut scored = scoring::score_features(features, scoring_cfg);
+    let any_filter = features_cfg.min_isotope_score > 0.0
+        || features_cfg.min_cosine_score > 0.0
+        || features_cfg.min_combined_score > 0.0;
+    if any_filter {
         let before = scored.len();
-        scored.retain(|sf| sf.score >= min_output_score);
+        scored.retain(|sf| {
+            sf.isotope_score >= features_cfg.min_isotope_score
+                && sf.cosine_score >= features_cfg.min_cosine_score
+                && sf.combined_score >= features_cfg.min_combined_score
+        });
         log::info!(
-            "Retained {}/{} features after min_score filter ({:.2})",
-            scored.len(), before, min_output_score
+            "Retained {}/{} features after score filters (iso\u{2265}{:.2}, cos\u{2265}{:.2}, comb\u{2265}{:.2})",
+            scored.len(),
+            before,
+            features_cfg.min_isotope_score,
+            features_cfg.min_cosine_score,
+            features_cfg.min_combined_score
         );
     }
     scored

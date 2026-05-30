@@ -10,7 +10,7 @@ use averagine::{bhattacharyya_score, lookup_template};
 /// 1. Look up theoretical isotope pattern by neutral mass
 /// 2. Try neutron offsets in [offset_min, offset_max]
 /// 3. Score each offset with Bhattacharyya coefficient + zero-offset bonus
-/// 4. Keep best offset; if below min_score_threshold, fall back to offset=0
+/// 4. Keep best offset; if below `min_isotope_score_for_offset`, fall back to offset=0
 pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<ScoredFeature> {
     log::info!("Scoring {} features", features.len());
 
@@ -37,20 +37,28 @@ pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<Score
 
     let charged: Vec<&ScoredFeature> = all_scored.iter().filter(|sf| sf.feature.charge > 0).collect();
     if !charged.is_empty() {
-        let max_score = charged.iter().map(|sf| sf.score).fold(f64::NEG_INFINITY, f64::max);
-        let mean_score = charged.iter().map(|sf| sf.score).sum::<f64>() / charged.len() as f64;
-        let above = charged.iter().filter(|sf| sf.score >= config.min_score_threshold).count();
+        let max_score = charged.iter().map(|sf| sf.combined_score).fold(f64::NEG_INFINITY, f64::max);
+        let mean_score = charged.iter().map(|sf| sf.combined_score).sum::<f64>() / charged.len() as f64;
+        let above = charged
+            .iter()
+            .filter(|sf| sf.isotope_score >= config.min_isotope_score_for_offset)
+            .count();
         eprintln!(
-            "[koth_ff] score diag: {} charged features, max={:.3}, mean={:.3}, above_thresh({}): {}",
-            charged.len(), max_score, mean_score, config.min_score_threshold, above
+            "[koth_ff] score diag: {} charged features, max_combined={:.3}, mean_combined={:.3}, isotope>={}: {}",
+            charged.len(), max_score, mean_score, config.min_isotope_score_for_offset, above
         );
         // Print first 5 charged features for inspection
         for sf in charged.iter().take(5) {
             let obs = sf.feature.isotope_profile_apex();
-            eprintln!("  charge={} n_isotopes={} obs={:?} score={:.4}",
-                sf.feature.charge, sf.feature.hills.len(),
+            eprintln!(
+                "  charge={} n_isotopes={} obs={:?} iso={:.4} cos={:.4} comb={:.4}",
+                sf.feature.charge,
+                sf.feature.hills.len(),
                 obs.iter().map(|x| format!("{:.0}", x)).collect::<Vec<_>>(),
-                sf.score);
+                sf.isotope_score,
+                sf.cosine_score,
+                sf.combined_score,
+            );
         }
     }
 
@@ -73,7 +81,9 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
             return ScoredFeature {
                 feature: feature.clone(),
                 neutron_offset: 0,
-                score: 0.0,
+                isotope_score: 0.0,
+                cosine_score: 0.0,
+                combined_score: 0.0,
                 theoretical_pattern: Vec::new(),
             };
         }
@@ -107,8 +117,8 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
         }
     }
 
-    // If below threshold, reset to offset=0
-    if best_combined < config.min_score_threshold {
+    // If below the isotope-score floor, reset to offset=0 (no neutron reassignment).
+    if best_combined < config.min_isotope_score_for_offset {
         best_offset = 0;
         best_bc = bhattacharyya_score(&obs, template, min_intensity);
     }
@@ -122,10 +132,21 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
         vec![0.0; k]
     };
 
+    // Three quality scores carried independently so downstream filters can
+    // gate on any one of them:
+    //   isotope_score  — Bhattacharyya isotope-pattern match (this stage)
+    //   cosine_score   — chromatographic co-elution of isotope hills (feature stage)
+    //   combined_score — product, the default "quality" knob
+    let isotope_score = best_bc.clamp(0.0, 1.0);
+    let cosine_score = feature.cosine_score.clamp(0.0, 1.0);
+    let combined_score = (isotope_score * cosine_score).clamp(0.0, 1.0);
+
     ScoredFeature {
         feature: feature.clone(),
         neutron_offset: best_offset,
-        score: best_bc.clamp(0.0, 1.0),
+        isotope_score,
+        cosine_score,
+        combined_score,
         theoretical_pattern,
     }
 }

@@ -1,4 +1,4 @@
-use std::io::Write as IoWrite;
+use std::io::{BufWriter, Write as IoWrite};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -11,6 +11,7 @@ use koth_ff::{
     input::{discover_runs, read_features, read_hills},
     lfq::{quantify, IntensityMatrix},
     mem::log_mem,
+    output::{build_align_report, write_align_report, AlignTiming},
 };
 
 #[derive(Parser, Debug)]
@@ -122,9 +123,10 @@ fn main() -> anyhow::Result<()> {
     log::info!("Running alignment...");
     let t = Instant::now();
     let alignment = align_runs(&runs, &config.alignment);
+    let alignment_elapsed = t.elapsed();
     log::info!(
         "[timing] alignment: {:.2?} (reference: '{}')",
-        t.elapsed(),
+        alignment_elapsed,
         alignment.reference_name
     );
 
@@ -142,33 +144,44 @@ fn main() -> anyhow::Result<()> {
     log::info!("Running LFQ quantification...");
     let t = Instant::now();
     let matrix = quantify(&runs, &alignment, &config.lfq);
+    let lfq_elapsed = t.elapsed();
     log::info!(
         "[timing] LFQ: {:.2?} ({} features × {} runs)",
-        t.elapsed(),
+        lfq_elapsed,
         matrix.n_features,
         matrix.n_runs
     );
 
     // ── Write outputs ─────────────────────────────────────────────────────────
-    match config.output.format {
-        OutputFormat::Tsv => {
-            write_consensus_tsv(&matrix, &out_dir, config.output.max_qvalue)?;
-            write_matrix_tsv(&matrix, &out_dir)?;
-            if config.lfq.run_tdc {
-                write_qvalue_matrix_tsv(&matrix, &out_dir)?;
-            }
+    if matches!(config.output.format, OutputFormat::Parquet) {
+        log::warn!(
+            "Parquet output for the intensity matrix is not yet implemented; \
+             wrote TSV instead."
+        );
+    }
+
+    let t = Instant::now();
+    write_consensus_tsv(&matrix, &out_dir, config.output.max_qvalue)?;
+    log::info!("[timing] write consensus_features.tsv: {:.2?}", t.elapsed());
+
+    let t = Instant::now();
+    write_matrix_tsv(&matrix, &out_dir)?;
+    log::info!("[timing] write intensity_matrix.tsv: {:.2?}", t.elapsed());
+
+    if config.lfq.run_tdc {
+        let t = Instant::now();
+        write_qvalue_matrix_tsv(&matrix, &out_dir)?;
+        log::info!("[timing] write qvalue_matrix.tsv: {:.2?}", t.elapsed());
+        if config.output.export_decoys {
+            let t = Instant::now();
+            write_decoy_matrix_tsv(&matrix, &out_dir)?;
+            log::info!("[timing] write decoy_intensity_matrix.tsv: {:.2?}", t.elapsed());
         }
-        OutputFormat::Parquet => {
-            write_consensus_tsv(&matrix, &out_dir, config.output.max_qvalue)?;
-            write_matrix_tsv(&matrix, &out_dir)?;
-            if config.lfq.run_tdc {
-                write_qvalue_matrix_tsv(&matrix, &out_dir)?;
-            }
-            log::warn!(
-                "Parquet output for the intensity matrix is not yet implemented; \
-                 wrote TSV instead."
-            );
-        }
+    }
+    if config.output.export_details {
+        let t = Instant::now();
+        write_lfq_details_tsv(&matrix, &out_dir)?;
+        log::info!("[timing] write lfq_details.tsv: {:.2?}", t.elapsed());
     }
 
     // Save the config used
@@ -179,7 +192,22 @@ fn main() -> anyhow::Result<()> {
     std::fs::write(&cfg_path, cfg_str)
         .with_context(|| format!("Failed to write config to {}", cfg_path.display()))?;
 
-    log::info!("[timing] total: {:.2?}", total_start.elapsed());
+    // ── Diagnostics report ────────────────────────────────────────────────────
+    let total_elapsed = total_start.elapsed();
+    let timing = AlignTiming {
+        alignment_sec: alignment_elapsed.as_secs_f64(),
+        lfq_sec: lfq_elapsed.as_secs_f64(),
+        total_sec: total_elapsed.as_secs_f64(),
+    };
+    let t = Instant::now();
+    let report = build_align_report(&runs, &alignment, &matrix, &config, timing);
+    log::info!("[timing] build_align_report: {:.2?}", t.elapsed());
+    let report_path = out_dir.join("align_report.json");
+    let t = Instant::now();
+    write_align_report(&report, &report_path).context("Failed to write align report")?;
+    log::info!("[timing] write_align_report: {:.2?}", t.elapsed());
+
+    log::info!("[timing] total: {:.2?}", total_elapsed);
     log::info!("Done. Results in {}", out_dir.display());
     Ok(())
 }
@@ -193,11 +221,12 @@ fn write_consensus_tsv(
     max_qvalue: f64,
 ) -> anyhow::Result<()> {
     let path = out_dir.join("consensus_features.tsv");
-    let mut f = std::fs::File::create(&path)?;
+    let file = std::fs::File::create(&path)?;
+    let mut f = BufWriter::with_capacity(1 << 20, file);
 
     writeln!(
         f,
-        "massCalib\tmz\tcharge\trtApex\tim\tscore\tseed_run\tn_contributing_runs\tn_runs_detected"
+        "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs\tn_runs_detected"
     )?;
 
     for feat in 0..matrix.n_features {
@@ -220,13 +249,14 @@ fn write_consensus_tsv(
             } else {
                 String::new()
             },
-            matrix.feature_score[feat],
+            matrix.feature_combined_score[feat],
             matrix.feature_seed_run[feat],
             matrix.feature_n_contributing_runs[feat],
             n_detected,
         )?;
     }
 
+    f.flush()?;
     log::info!("Wrote consensus features to {}", path.display());
     Ok(())
 }
@@ -235,9 +265,10 @@ fn write_consensus_tsv(
 /// Use `qvalue_matrix.tsv` to apply an FDR threshold downstream.
 fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
     let path = out_dir.join("intensity_matrix.tsv");
-    let mut f = std::fs::File::create(&path)?;
+    let file = std::fs::File::create(&path)?;
+    let mut f = BufWriter::with_capacity(1 << 20, file);
 
-    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tscore\tseed_run\tn_contributing_runs")?;
+    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
     for name in &matrix.run_names {
         write!(f, "\t{}", name)?;
     }
@@ -256,7 +287,7 @@ fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Resu
             } else {
                 String::new()
             },
-            matrix.feature_score[feat],
+            matrix.feature_combined_score[feat],
             matrix.feature_seed_run[feat],
             matrix.feature_n_contributing_runs[feat],
         )?;
@@ -272,6 +303,7 @@ fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Resu
         writeln!(f)?;
     }
 
+    f.flush()?;
     log::info!("Wrote intensity matrix to {}", path.display());
     Ok(())
 }
@@ -281,9 +313,10 @@ fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Resu
 /// Use this file to apply an FDR threshold to intensity_matrix.tsv downstream.
 fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
     let path = out_dir.join("qvalue_matrix.tsv");
-    let mut f = std::fs::File::create(&path)?;
+    let file = std::fs::File::create(&path)?;
+    let mut f = BufWriter::with_capacity(1 << 20, file);
 
-    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tscore\tseed_run\tn_contributing_runs")?;
+    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
     for name in &matrix.run_names {
         write!(f, "\t{}", name)?;
     }
@@ -302,7 +335,7 @@ fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyho
             } else {
                 String::new()
             },
-            matrix.feature_score[feat],
+            matrix.feature_combined_score[feat],
             matrix.feature_seed_run[feat],
             matrix.feature_n_contributing_runs[feat],
         )?;
@@ -313,6 +346,175 @@ fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyho
         writeln!(f)?;
     }
 
+    f.flush()?;
     log::info!("Wrote q-value matrix to {}", path.display());
+    Ok(())
+}
+
+/// Write `decoy_intensity_matrix.tsv` — mirrors `intensity_matrix.tsv` but
+/// each cell holds the decoy-pass intensity for that (feature, run).
+fn write_decoy_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
+    let path = out_dir.join("decoy_intensity_matrix.tsv");
+    let file = std::fs::File::create(&path)?;
+    let mut f = BufWriter::with_capacity(1 << 20, file);
+
+    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
+    for name in &matrix.run_names {
+        write!(f, "\t{}", name)?;
+    }
+    writeln!(f)?;
+
+    for feat in 0..matrix.n_features {
+        write!(
+            f,
+            "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}",
+            matrix.feature_mass[feat],
+            matrix.feature_mz[feat],
+            matrix.feature_charge[feat],
+            matrix.feature_rt[feat],
+            if matrix.feature_im[feat] != 0.0 {
+                format!("{:.6}", matrix.feature_im[feat])
+            } else {
+                String::new()
+            },
+            matrix.feature_combined_score[feat],
+            matrix.feature_seed_run[feat],
+            matrix.feature_n_contributing_runs[feat],
+        )?;
+
+        for run in 0..matrix.n_runs {
+            let v = matrix.decoy_intensity(feat, run);
+            if v > 0.0 {
+                write!(f, "\t{:.5e}", v)?;
+            } else {
+                write!(f, "\t0")?;
+            }
+        }
+        writeln!(f)?;
+    }
+
+    f.flush()?;
+    log::info!("Wrote decoy intensity matrix to {}", path.display());
+    Ok(())
+}
+
+/// Write `lfq_details.tsv` — long-format file with one row per
+/// (consensus feature, run, target/decoy pass) containing the integration
+/// stats, RT diagnostics, and observed monoisotopic m/z + ion mobility.
+/// `q_value` is filled for target rows only (decoys get NaN since TDC ranks
+/// targets against decoys, not the other way round).
+fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
+    let path = out_dir.join("lfq_details.tsv");
+    let file = std::fs::File::create(&path)?;
+    let mut f = BufWriter::with_capacity(1 << 20, file);
+
+    // Column dictionary:
+    //   seed_combined_score = seed feature's combined_score (isotope × chromato cosine)
+    //   hybrid_score        = cbrt(rt × intensity × spectral_cosine) at apex column
+    //   spectral_cosine     = cosine(XIC column, theoretical pattern) at apex
+    //                         column (LFQ-stage cosine — NOT the chromatographic
+    //                         feature cosine_score)
+    writeln!(
+        f,
+        "feature_idx\tmassCalib\tmz\tcharge\trefRtApex\trefIm\tseed_combined_score\tseed_run\
+         \tn_contributing_runs\trun_name\tis_decoy\tintensity\thybrid_score\tspectral_cosine\
+         \tn_isotopes_found\texpected_rt\tapex_rt\trt_diff\tpeak_width_rt\
+         \tobserved_mz\tppm_error\tobserved_im\tim_delta\tq_value"
+    )?;
+
+    let fmt_f = |v: f64| {
+        if v.is_finite() {
+            format!("{:.6}", v)
+        } else {
+            String::from("NaN")
+        }
+    };
+
+    for entry in &matrix.entries {
+        let feat = entry.feature_idx;
+        let run = entry.run_idx;
+        let intensity_str = if entry.intensity > 0.0 {
+            format!("{:.5e}", entry.intensity)
+        } else {
+            String::from("0")
+        };
+
+        // Note: q-values are computed per (feature, run) in target-decoy
+        // competition. We surface the target's q-value on the decoy row too
+        // for convenience when filtering — same value for both rows in a pair.
+        let q_value = if matrix.q_values.is_empty() {
+            f64::NAN
+        } else {
+            matrix.q_value(feat, run)
+        };
+
+        // ppm error vs the centre m/z used to build this row's XIC grid.
+        // For targets that is the alignment-predicted m/z; for decoys it is
+        // the shifted decoy m/z — so target and decoy residuals are on the
+        // same "distance from prediction" scale and stay comparable for
+        // downstream rescorers.
+        let ppm_error = if entry.observed_mz.is_finite() && entry.expected_mz > 0.0 {
+            (entry.observed_mz - entry.expected_mz) / entry.expected_mz * 1e6
+        } else {
+            f64::NAN
+        };
+
+        // Per-row IM delta vs the centre IM used to build the grid (same
+        // target/decoy symmetry as ppm_error). NaN when either side missing.
+        let im_delta = if entry.observed_im.is_finite() && entry.expected_im != 0.0 {
+            entry.observed_im - entry.expected_im
+        } else {
+            f64::NAN
+        };
+
+        let rt_diff = if entry.apex_rt.is_finite() && entry.expected_rt.is_finite() {
+            entry.apex_rt - entry.expected_rt
+        } else {
+            f64::NAN
+        };
+
+        writeln!(
+            f,
+            "{feat}\t{mass:.6}\t{mz:.6}\t{charge}\t{rt:.6}\t{im}\t{seed_combined:.6}\t{seed_run}\
+             \t{ncont}\t{run_name}\t{decoy}\t{intensity}\t{hybrid:.6}\t{spectral:.6}\
+             \t{nslots}\t{exp_rt}\t{apex_rt}\t{rtdiff}\t{pw}\
+             \t{obs_mz}\t{ppm}\t{obs_im}\t{im_delta}\t{qv}",
+            feat = feat,
+            mass = matrix.feature_mass[feat],
+            mz = matrix.feature_mz[feat],
+            charge = matrix.feature_charge[feat],
+            rt = matrix.feature_rt[feat],
+            im = if matrix.feature_im[feat] != 0.0 {
+                format!("{:.6}", matrix.feature_im[feat])
+            } else {
+                String::new()
+            },
+            seed_combined = matrix.feature_combined_score[feat],
+            seed_run = matrix.feature_seed_run[feat],
+            ncont = matrix.feature_n_contributing_runs[feat],
+            run_name = matrix.run_names[run],
+            decoy = entry.is_decoy,
+            intensity = intensity_str,
+            hybrid = entry.hybrid_score,
+            spectral = entry.spectral_cosine,
+            nslots = entry.n_isotopes_found,
+            exp_rt = fmt_f(entry.expected_rt),
+            apex_rt = fmt_f(entry.apex_rt),
+            rtdiff = fmt_f(rt_diff),
+            pw = fmt_f(entry.peak_width_rt),
+            obs_mz = fmt_f(entry.observed_mz),
+            ppm = fmt_f(ppm_error),
+            obs_im = fmt_f(entry.observed_im),
+            im_delta = fmt_f(im_delta),
+            qv = fmt_f(q_value),
+        )?;
+    }
+
+    f.flush()?;
+    log::info!(
+        "Wrote LFQ details ({} rows) to {}",
+        matrix.entries.len(),
+        path.display()
+    );
     Ok(())
 }

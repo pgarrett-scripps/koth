@@ -171,66 +171,89 @@ impl ActiveHill {
 
     // ---- Statistics ----
 
+    /// Intensity-weighted mean m/z over real (non-gap) scans only.
+    ///
+    /// Both numerator and denominator restrict to positions with non-NaN m/z.
+    /// Including gap positions in the denominator (as a naïve `intensity_profile.iter().sum()`
+    /// would) breaks once smoothing fills gap intensities, because the numerator
+    /// still skips NaN m/z — the resulting mean is biased toward zero.
     pub fn mz_weighted_mean(&self) -> f64 {
-        let total: f64 = self.intensity_profile.iter().map(|&x| x as f64).sum();
-        if total == 0.0 {
-            return 0.0;
+        let mut sum_iw = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for (&mz, &i) in self.mz_profile.iter().zip(&self.intensity_profile) {
+            if !mz.is_nan() {
+                let w = i as f64;
+                sum_iw += mz as f64 * w;
+                sum_w += w;
+            }
         }
-        self.mz_profile
-            .iter()
-            .zip(&self.intensity_profile)
-            .filter(|(mz, _)| !mz.is_nan())
-            .map(|(&mz, &i)| mz as f64 * i as f64)
-            .sum::<f64>()
-            / total
+        if sum_w == 0.0 {
+            0.0
+        } else {
+            sum_iw / sum_w
+        }
     }
 
+    /// Intensity-weighted std of m/z over real (non-gap) scans only.
+    ///
+    /// Gap positions are excluded from both the variance sum and the weight
+    /// total, so the result is unaffected by gap count or by gap-fill smoothing.
     pub fn mz_weighted_std(&self) -> f64 {
         let mean = self.mz_weighted_mean();
-        let total: f64 = self.intensity_profile.iter().map(|&x| x as f64).sum();
-        if total == 0.0 {
-            return 0.0;
+        let mut sum_w = 0.0f64;
+        let mut sum_var = 0.0f64;
+        for (&mz, &i) in self.mz_profile.iter().zip(&self.intensity_profile) {
+            if !mz.is_nan() {
+                let w = i as f64;
+                let d = mz as f64 - mean;
+                sum_var += w * d * d;
+                sum_w += w;
+            }
         }
-        let var: f64 = self
-            .mz_profile
-            .iter()
-            .zip(&self.intensity_profile)
-            .filter(|(mz, _)| !mz.is_nan())
-            .map(|(&mz, &i)| i as f64 * (mz as f64 - mean).powi(2))
-            .sum::<f64>()
-            / total;
-        var.sqrt()
+        if sum_w == 0.0 {
+            0.0
+        } else {
+            (sum_var / sum_w).sqrt()
+        }
     }
 
+    /// Intensity-weighted mean ion mobility over real (non-gap) scans only.
+    /// See [`mz_weighted_mean`] for why the denominator must filter NaN.
     pub fn im_weighted_mean(&self) -> f64 {
-        let total: f64 = self.intensity_profile.iter().map(|&x| x as f64).sum();
-        if total == 0.0 {
-            return 0.0;
+        let mut sum_iw = 0.0f64;
+        let mut sum_w = 0.0f64;
+        for (&im, &i) in self.im_profile.iter().zip(&self.intensity_profile) {
+            if !im.is_nan() {
+                let w = i as f64;
+                sum_iw += im as f64 * w;
+                sum_w += w;
+            }
         }
-        self.im_profile
-            .iter()
-            .zip(&self.intensity_profile)
-            .filter(|(im, _)| !im.is_nan())
-            .map(|(&im, &i)| im as f64 * i as f64)
-            .sum::<f64>()
-            / total
+        if sum_w == 0.0 {
+            0.0
+        } else {
+            sum_iw / sum_w
+        }
     }
 
+    /// Intensity-weighted std of ion mobility over real (non-gap) scans only.
     pub fn im_weighted_std(&self) -> f64 {
         let mean = self.im_weighted_mean();
-        let total: f64 = self.intensity_profile.iter().map(|&x| x as f64).sum();
-        if total == 0.0 {
-            return 0.0;
+        let mut sum_w = 0.0f64;
+        let mut sum_var = 0.0f64;
+        for (&im, &i) in self.im_profile.iter().zip(&self.intensity_profile) {
+            if !im.is_nan() {
+                let w = i as f64;
+                let d = im as f64 - mean;
+                sum_var += w * d * d;
+                sum_w += w;
+            }
         }
-        let var: f64 = self
-            .im_profile
-            .iter()
-            .zip(&self.intensity_profile)
-            .filter(|(im, _)| !im.is_nan())
-            .map(|(&im, &i)| i as f64 * (im as f64 - mean).powi(2))
-            .sum::<f64>()
-            / total;
-        var.sqrt()
+        if sum_w == 0.0 {
+            0.0
+        } else {
+            (sum_var / sum_w).sqrt()
+        }
     }
 
     pub fn min_rt(&self) -> f64 {
@@ -261,6 +284,123 @@ impl ActiveHill {
     pub fn apex_rt(&self) -> f64 {
         let idx = self.apex_index();
         let v = self.rt_profile[idx];
-        if v.is_nan() { 0.0 } else { v as f64 }
+        if !v.is_nan() {
+            return v as f64;
+        }
+        // Apex landed on a gap scan (NaN RT). This happens when smoothing
+        // pushes the apex onto a previously-zero slot. Interpolate from the
+        // observed RT bounds using the apex's position within the profile.
+        let start = self.min_rt();
+        let end = self.max_rt();
+        let n = self.intensity_profile.len();
+        if !start.is_finite() {
+            return 0.0;
+        }
+        if !end.is_finite() || n <= 1 {
+            return start;
+        }
+        start + (end - start) * (idx as f64) / ((n - 1) as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hills::smooth;
+
+    fn make_hill_with_gaps() -> ActiveHill {
+        // 6 scans, gaps at indices 1, 2, 4. Real m/z values cluster within ~0.005 Da.
+        let mut h = ActiveHill::new(524.270, 100.0, 0.0, 0.9, 0);
+        h.add_gap();
+        h.add_gap();
+        h.mz_profile.push(524.275);
+        h.intensity_profile.push(150.0);
+        h.rt_profile.push(0.3);
+        h.im_profile.push(0.91);
+        h.n_real += 1;
+        h.last_scan_seen = 3;
+        h.add_gap();
+        h.mz_profile.push(524.272);
+        h.intensity_profile.push(120.0);
+        h.rt_profile.push(0.5);
+        h.im_profile.push(0.905);
+        h.n_real += 1;
+        h.last_scan_seen = 5;
+        h
+    }
+
+    /// Without smoothing the std is fine — guarantee the new implementation matches.
+    #[test]
+    fn mz_std_without_smoothing_is_small() {
+        let h = make_hill_with_gaps();
+        let mean = h.mz_weighted_mean();
+        let std = h.mz_weighted_std();
+
+        assert!((mean - 524.273).abs() < 1e-3, "mean was {mean}");
+        assert!(std < 0.01, "expected tight m/z std (<0.01 Da), got {std}");
+    }
+
+    /// Regression: with smoothing, `fill_gaps` makes gap-position intensities
+    /// non-zero, but `mz_profile[gap] = NaN` is untouched. The old code summed
+    /// ALL intensities in the denominator and filtered NaN m/z only in the
+    /// numerator — producing a wildly biased mean (toward 0) and an exploding
+    /// std. The fix filters NaN positions in both numerator and denominator.
+    #[test]
+    fn mz_std_unaffected_by_smoothing_gap_fill() {
+        let mut h = make_hill_with_gaps();
+        smooth::smooth_profile(&mut h.intensity_profile, 1);
+
+        let mean = h.mz_weighted_mean();
+        let std = h.mz_weighted_std();
+
+        // Mean must remain close to the real m/z cluster, NOT collapse to 0.
+        assert!(
+            (mean - 524.273).abs() < 0.01,
+            "smoothing should not shift mean far from m/z cluster, got {mean}",
+        );
+        // Std must stay below the Da-scale range across the real points.
+        assert!(
+            std < 0.01,
+            "smoothing should not inflate mz_std (gaps must not contribute); got {std}",
+        );
+    }
+
+    /// Regression: after smoothing fills gap-scan intensities, the apex can
+    /// land on a slot whose `rt_profile` entry is NaN. `apex_rt()` used to
+    /// return 0.0 in that case (so hills.tsv showed `rt = 0.0` for hills with
+    /// non-zero `rt_start`/`rt_end`). The fix interpolates from observed bounds.
+    #[test]
+    fn apex_rt_interpolates_when_apex_lands_on_gap() {
+        let mut h = make_hill_with_gaps();
+        // Boost the gap at index 1 so that after smoothing it becomes the apex.
+        // rt_profile[1] is NaN — pre-fix, apex_rt() returned 0.0.
+        h.intensity_profile[1] = 0.0; // gap, untouched
+        h.intensity_profile[3] = 10_000.0; // anchor neighbor so smoothing peaks near idx 2-3
+        smooth::smooth_profile(&mut h.intensity_profile, 2);
+
+        let rt = h.apex_rt();
+        assert!(
+            rt > 0.0 && rt.is_finite(),
+            "apex_rt should not collapse to 0 when apex lands on a NaN slot; got {rt}",
+        );
+        let lo = h.min_rt();
+        let hi = h.max_rt();
+        assert!(
+            rt >= lo && rt <= hi,
+            "interpolated apex_rt {rt} must lie within [{lo}, {hi}]",
+        );
+    }
+
+    /// Same regression for ion mobility.
+    #[test]
+    fn im_std_unaffected_by_smoothing_gap_fill() {
+        let mut h = make_hill_with_gaps();
+        smooth::smooth_profile(&mut h.intensity_profile, 1);
+
+        let mean = h.im_weighted_mean();
+        let std = h.im_weighted_std();
+
+        assert!((mean - 0.905).abs() < 0.01, "im mean drifted: {mean}");
+        assert!(std < 0.01, "im_std inflated by gap-fill: {std}");
     }
 }

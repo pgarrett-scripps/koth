@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 /// A single centroided MS1 peak.
 #[derive(Debug, Clone, Copy)]
 pub struct Peak {
@@ -9,7 +11,38 @@ pub struct Peak {
     pub ion_mobility: f32,
 }
 
-/// A single MS1 spectrum with all its peaks.
+/// Precursor isolation window for an MS2 spectrum (mzML coordinates).
+///
+/// All values in m/z. `lower` and `upper` are absolute boundaries (already
+/// expanded from any target offset in the source file).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IsolationWindow {
+    pub target: f64,
+    pub lower: f64,
+    pub upper: f64,
+}
+
+impl IsolationWindow {
+    /// Stable integer key for grouping MS2 scans that share an isolation window.
+    /// Encodes (target, lower, upper) to 4 decimal places.
+    pub fn key(&self) -> (i64, i64, i64) {
+        (
+            (self.target * 10_000.0).round() as i64,
+            (self.lower * 10_000.0).round() as i64,
+            (self.upper * 10_000.0).round() as i64,
+        )
+    }
+}
+
+impl PartialEq for IsolationWindow {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for IsolationWindow {}
+
+/// A single mass spectrum with all its peaks.
 #[derive(Debug, Clone)]
 pub struct Spectrum {
     /// 0-based sequential index (scan number in the run)
@@ -18,6 +51,10 @@ pub struct Spectrum {
     pub retention_time: f64,
     /// Peaks sorted by mz ascending
     pub peaks: Vec<Peak>,
+    /// 1 for MS1, 2 for MS2, etc.
+    pub ms_level: u8,
+    /// Precursor isolation window (only set for MS2 spectra)
+    pub isolation_window: Option<IsolationWindow>,
 }
 
 impl Spectrum {
@@ -31,6 +68,11 @@ impl Spectrum {
 /// Column names match the Python zenith_feature_finder hills.tsv output exactly.
 #[derive(Debug, Clone)]
 pub struct Hill {
+    /// Stable identifier assigned at the end of hill detection. Matches the
+    /// `hill_id` column in `hills.{tsv,parquet}` and the entries in the
+    /// `hill_ids` column of `features.{tsv,parquet}`. IDs are unique within a
+    /// single hills file (MS1 and MS2 each have their own ID space).
+    pub hill_id: u64,
     pub mz: f64,
     pub mz_std: f64,
     pub rt: f64,
@@ -50,6 +92,9 @@ pub struct Hill {
     pub hill_score: f64,
     /// Per-scan intensity profile (length == n_scans, zeros where gaps)
     pub intensity_profile: Arc<[f32]>,
+    /// Isolation window the hill was built from (None for MS1 hills,
+    /// Some for MS2/DIA hills).
+    pub isolation_window: Option<IsolationWindow>,
 }
 
 impl Hill {
@@ -80,7 +125,11 @@ impl Hill {
 pub struct Feature {
     pub hills: Vec<Hill>,
     pub charge: u8,
-    pub cosine_similarity: f64,
+    /// Mean **chromatographic** cosine similarity (in scan/RT space) between
+    /// adjacent isotope hills in the chain. Bounded [0, 1]. Measures whether
+    /// the isotope hills co-elute in time — *not* whether their intensities
+    /// match an averagine pattern.
+    pub cosine_score: f64,
     pub ppm_error: f64,
 }
 
@@ -189,14 +238,28 @@ impl Feature {
 }
 
 /// Feature with isotope pattern scoring applied.
+///
+/// Carries three distinct quality scores so downstream stages (alignment,
+/// consensus grouping, LFQ filters) can filter on whichever makes sense for
+/// their purpose. All three are bounded `[0, 1]`; higher = better.
 #[derive(Debug, Clone)]
 pub struct ScoredFeature {
     pub feature: Feature,
     /// Neutron offset applied: -1, 0, or 1.
     /// Non-zero means the observed monoisotopic peak is actually M+|offset|.
     pub neutron_offset: i8,
-    /// Bhattacharyya-based isotope pattern match score (0–1, higher is better)
-    pub score: f64,
+    /// **Isotope-pattern** score: Bhattacharyya coefficient between the
+    /// observed apex-scan isotope intensities and the theoretical averagine
+    /// template. Measures "does the isotope envelope look like a peptide?".
+    pub isotope_score: f64,
+    /// **Chromatographic cosine** score: mirror of `feature.cosine_score` —
+    /// the mean cosine similarity (in time domain) between adjacent isotope
+    /// hills. Measures "do the isotope hills co-elute?".
+    pub cosine_score: f64,
+    /// **Combined** score: `isotope_score × cosine_score`. The default
+    /// quality knob used by alignment, consensus grouping, and feature
+    /// retention. High requires both a good pattern match AND tight co-elution.
+    pub combined_score: f64,
     /// Theoretical averagine isotope pattern (normalized to sum=1)
     pub theoretical_pattern: Vec<f64>,
 }

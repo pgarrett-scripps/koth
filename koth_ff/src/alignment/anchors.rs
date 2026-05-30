@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 
+use serde::Serialize;
+
 use crate::models::ScoredFeature;
 
 use super::{AlignmentConfig, RunInput};
 
 /// A matched pair of features between a run and the reference.
+#[derive(Debug, Clone, Serialize)]
 pub struct AnchorPair {
     /// Reference feature RT in normalized [0, 1] space
     pub ref_rt_norm: f64,
@@ -41,8 +44,8 @@ pub fn normalize_rt(rt: f64, range: (f64, f64)) -> f64 {
 
 /// Find anchor pairs between a query run and the reference run.
 ///
-/// Only high-confidence features (score >= min_anchor_score) from both runs
-/// are considered. Matching is 1:1 (greedy by lowest PPM error).
+/// Only high-confidence features (combined_score >= min_anchor_combined_score)
+/// from both runs are considered. Matching is 1:1 (greedy by lowest PPM error).
 pub fn find_anchors(
     run: &RunInput,
     reference: &RunInput,
@@ -56,7 +59,7 @@ pub fn find_anchors(
         .features
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.score >= config.min_anchor_score && f.feature.charge > 0)
+        .filter(|(_, f)| f.combined_score >= config.min_anchor_combined_score && f.feature.charge > 0)
         .collect();
     ref_sorted.sort_by(|a, b| {
         a.1.feature
@@ -70,7 +73,7 @@ pub fn find_anchors(
         .features
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.score >= config.min_anchor_score && f.feature.charge > 0)
+        .filter(|(_, f)| f.combined_score >= config.min_anchor_combined_score && f.feature.charge > 0)
         .collect();
     run_sorted.sort_by(|a, b| {
         a.1.feature

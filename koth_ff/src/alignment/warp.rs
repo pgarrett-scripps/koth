@@ -1,13 +1,15 @@
+use serde::Serialize;
+
 use super::{anchors::AnchorPair, AlignmentConfig};
 
 /// Piecewise-linear RT warp in normalised [0, 1] space.
 ///
 /// Knots are (run_rt_norm, delta) pairs where delta = ref_rt_norm - run_rt_norm.
 /// apply() converts absolute run RT → absolute reference RT.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RtWarp {
-    knot_x: Vec<f64>,
-    knot_y: Vec<f64>,
+    pub knot_x: Vec<f64>,
+    pub knot_y: Vec<f64>,
 }
 
 impl RtWarp {
@@ -25,6 +27,13 @@ impl RtWarp {
     pub fn delta_at_ref_norm(&self, ref_norm: f64) -> f64 {
         piecewise_linear(&self.knot_x, &self.knot_y, ref_norm)
     }
+
+    /// Evaluate the warp delta at a position given in run-normalised space.
+    /// This is the value used directly by `apply()` — the knots are keyed on
+    /// run-normalised RT — so it is the correct quantity for residual analysis.
+    pub fn delta_at_run_norm(&self, run_norm: f64) -> f64 {
+        piecewise_linear(&self.knot_x, &self.knot_y, run_norm)
+    }
 }
 
 /// Identity warp — used when anchor count is too low.
@@ -36,7 +45,9 @@ pub fn identity_warp() -> RtWarp {
 }
 
 /// Fit a RT warp from anchor pairs using sliding-window medians + sigma-clipping.
-pub fn fit_rt_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> RtWarp {
+///
+/// Returns the warp plus a per-anchor active mask (true = used by the final fit).
+pub fn fit_rt_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> (RtWarp, Vec<bool>) {
     let mut active = vec![true; anchors.len()];
 
     for _ in 0..config.rt_warp_clip_iters {
@@ -83,7 +94,7 @@ pub fn fit_rt_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> RtWarp {
     }
 
     let (kx, ky) = build_knots(anchors, &active, config.rt_warp_bandwidth);
-    RtWarp { knot_x: kx, knot_y: ky }
+    (RtWarp { knot_x: kx, knot_y: ky }, active)
 }
 
 fn build_knots(anchors: &[AnchorPair], active: &[bool], bandwidth: f64) -> (Vec<f64>, Vec<f64>) {

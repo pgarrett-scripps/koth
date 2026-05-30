@@ -35,7 +35,7 @@ pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, Kot
 
 #[cfg(feature = "tdf")]
 fn read_bruker_inner(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
-    bruker::read_bruker(path, file.bruker_mz_ppm, file.bruker_im_pct, file.bruker_min_subpeaks)
+    bruker::read_bruker(path, file)
 }
 
 #[cfg(not(feature = "tdf"))]

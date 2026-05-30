@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{Hill, ScoredFeature};
 
-use anchors::find_anchors;
+use anchors::{find_anchors, AnchorPair};
 use drift::DriftFit;
 use warp::RtWarp;
 
@@ -21,8 +21,9 @@ pub struct AlignmentConfig {
     pub rt_anchor_window: f64,
     /// Ion mobility tolerance for anchor matching (1/K0 units)
     pub im_tolerance: f64,
-    /// Minimum feature score to be used as an anchor
-    pub min_anchor_score: f64,
+    /// Minimum `combined_score` (isotope × chromato cosine) for a feature to
+    /// be eligible as an alignment anchor.
+    pub min_anchor_combined_score: f64,
     /// Minimum anchor count required to fit a warp; falls back to identity if below
     pub min_anchor_count: usize,
     /// Bandwidth for the sliding-window median (fraction of normalised RT range)
@@ -39,7 +40,7 @@ impl Default for AlignmentConfig {
             anchor_mass_ppm: 10.0,
             rt_anchor_window: 0.05,
             im_tolerance: 0.05,
-            min_anchor_score: 0.5,
+            min_anchor_combined_score: 0.5,
             min_anchor_count: 10,
             rt_warp_bandwidth: 0.1,
             rt_warp_sigma_clip: 3.0,
@@ -95,6 +96,16 @@ pub struct RunAlignment {
     pub im_drift: DriftFit,
     pub run_rt_range: (f64, f64),
     pub ref_rt_range: (f64, f64),
+    /// All anchor pairs used for this run's alignment.
+    /// Retained for diagnostic reporting; aligned 1:1 with the masks below.
+    pub anchors: Vec<AnchorPair>,
+    /// Per-anchor "kept" mask from the RT-warp sigma-clip iterations.
+    pub rt_active: Vec<bool>,
+    /// Per-anchor "kept" mask from the mass-drift sigma-clip iterations.
+    pub mass_active: Vec<bool>,
+    /// Per-anchor "kept" mask from the IM-drift fit.
+    /// `false` for anchors that lacked IM on either side OR were sigma-clipped.
+    pub im_active: Vec<bool>,
 }
 
 impl RunAlignment {
@@ -151,7 +162,8 @@ pub struct AlignmentResult {
 
 /// Compute alignment parameters for all runs relative to an auto-selected reference.
 ///
-/// The reference is the run with the most features scoring >= `config.min_anchor_score`.
+/// The reference is the run with the most features whose `combined_score`
+/// >= `config.min_anchor_combined_score`.
 pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResult {
     let ref_idx = runs
         .iter()
@@ -160,7 +172,7 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
             let n = r
                 .features
                 .iter()
-                .filter(|f| f.score >= config.min_anchor_score)
+                .filter(|f| f.combined_score >= config.min_anchor_combined_score)
                 .count();
             (i, n)
         })
@@ -188,7 +200,7 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
             anchors.len()
         );
 
-        let rt_warp = if anchors.len() >= config.min_anchor_count {
+        let (rt_warp, rt_active) = if anchors.len() >= config.min_anchor_count {
             warp::fit_rt_warp(&anchors, config)
         } else {
             log::warn!(
@@ -197,21 +209,26 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
                 anchors.len(),
                 config.min_anchor_count
             );
-            warp::identity_warp()
+            (warp::identity_warp(), vec![false; anchors.len()])
         };
 
-        let mass_drift = drift::fit_mass_drift(&anchors, config);
-        let im_drift = drift::fit_im_drift(&anchors, config);
+        let (mass_drift, mass_active) = drift::fit_mass_drift(&anchors, config);
+        let (im_drift, im_active) = drift::fit_im_drift(&anchors, config);
 
+        let n_anchors = anchors.len();
         alignments.insert(
             run.name.clone(),
             RunAlignment {
-                n_anchors: anchors.len(),
+                n_anchors,
                 rt_warp,
                 mass_drift,
                 im_drift,
                 run_rt_range,
                 ref_rt_range,
+                anchors,
+                rt_active,
+                mass_active,
+                im_active,
             },
         );
     }

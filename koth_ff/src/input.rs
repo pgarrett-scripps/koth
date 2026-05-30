@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use crate::error::KothError;
-use crate::models::{Feature, Hill, ScoredFeature};
+use crate::models::{Feature, Hill, IsolationWindow, ScoredFeature};
 
 const C13_NEUTRON: f64 = 1.003_354_835;
 
@@ -38,6 +38,8 @@ pub fn read_features(path: &Path) -> Result<Vec<ScoredFeature>, KothError> {
 
 #[derive(Debug, Deserialize)]
 struct HillRow {
+    #[serde(default, deserialize_with = "de_opt_u64")]
+    hill_id: Option<u64>,
     mz: f64,
     mz_std: f64,
     rt: f64,
@@ -55,15 +57,46 @@ struct HillRow {
     intensity_max: f64,
     hill_score: f64,
     intensity_profile: String,
+    #[serde(default, deserialize_with = "de_opt_float")]
+    iso_target_mz: Option<f64>,
+    #[serde(default, deserialize_with = "de_opt_float")]
+    iso_lower_mz: Option<f64>,
+    #[serde(default, deserialize_with = "de_opt_float")]
+    iso_upper_mz: Option<f64>,
+}
+
+fn de_opt_float<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f64>, D::Error> {
+    let s: Option<String> = Option::deserialize(de)?;
+    match s {
+        Some(s) if !s.is_empty() => s.parse::<f64>().map(Some).map_err(serde::de::Error::custom),
+        _ => Ok(None),
+    }
+}
+
+fn de_opt_u64<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<u64>, D::Error> {
+    let s: Option<String> = Option::deserialize(de)?;
+    match s {
+        Some(s) if !s.is_empty() => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
+        _ => Ok(None),
+    }
 }
 
 pub fn read_hills_tsv(path: &Path) -> Result<Vec<Hill>, KothError> {
     let mut rdr = csv::ReaderBuilder::new().delimiter(b'\t').from_path(path)?;
     let mut hills = Vec::new();
-    for result in rdr.deserialize::<HillRow>() {
+    for (row_idx, result) in rdr.deserialize::<HillRow>().enumerate() {
         let row = result?;
         let profile: Vec<f32> = serde_json::from_str(&row.intensity_profile)?;
+        let isolation_window = match (row.iso_target_mz, row.iso_lower_mz, row.iso_upper_mz) {
+            (Some(t), Some(l), Some(u)) => Some(IsolationWindow {
+                target: t,
+                lower: l,
+                upper: u,
+            }),
+            _ => None,
+        };
         hills.push(Hill {
+            hill_id: row.hill_id.unwrap_or(row_idx as u64),
             mz: row.mz,
             mz_std: row.mz_std,
             rt: row.rt,
@@ -81,6 +114,7 @@ pub fn read_hills_tsv(path: &Path) -> Result<Vec<Hill>, KothError> {
             intensity_max: row.intensity_max,
             hill_score: row.hill_score,
             intensity_profile: Arc::from(profile.as_slice()),
+            isolation_window,
         });
     }
     Ok(hills)
@@ -109,10 +143,11 @@ struct FeatureRow {
     n_scans: usize,
     #[serde(deserialize_with = "de_optional_float")]
     im: f64,
-    cosine_similarity: f64,
+    cosine_score: f64,
     ppm_error: f64,
     neutron_offset: i8,
-    score: f64,
+    isotope_score: f64,
+    combined_score: f64,
     theoretical_pattern: String,
     // remaining columns are not needed for alignment/LFQ
     isotope_profile: String,
@@ -139,6 +174,7 @@ fn scored_feature_from_row(row: FeatureRow, theoretical_pattern: Vec<f64>) -> Sc
     let raw_mz = row.mz + row.neutron_offset as f64 * C13_NEUTRON / row.charge as f64;
 
     let hill = Hill {
+        hill_id: 0,
         mz: raw_mz,
         mz_std: 0.0,
         rt: row.rt_apex,
@@ -156,17 +192,20 @@ fn scored_feature_from_row(row: FeatureRow, theoretical_pattern: Vec<f64>) -> Sc
         intensity_max: row.intensity_apex,
         hill_score: 1.0,
         intensity_profile: Arc::from(&[] as &[f32]),
+        isolation_window: None,
     };
 
     ScoredFeature {
         feature: Feature {
             hills: vec![hill],
             charge: row.charge,
-            cosine_similarity: row.cosine_similarity,
+            cosine_score: row.cosine_score,
             ppm_error: row.ppm_error,
         },
         neutron_offset: row.neutron_offset,
-        score: row.score,
+        isotope_score: row.isotope_score,
+        cosine_score: row.cosine_score,
+        combined_score: row.combined_score,
         theoretical_pattern,
     }
 }
@@ -185,7 +224,7 @@ fn de_optional_float<'de, D: serde::Deserializer<'de>>(de: D) -> Result<f64, D::
 // ──────────────────────────────────────────────────────────────────────────────
 
 pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
-    use arrow::array::{Float64Array, Int64Array, StringArray};
+    use arrow::array::{Array, Float64Array, Int64Array, StringArray};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let file = std::fs::File::open(path)?;
@@ -248,9 +287,38 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
         let score_col = f64_col!("hill_score");
         let profile_col = str_col!("intensity_profile");
 
+        let iso_target_col = batch
+            .column_by_name("iso_target_mz")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        let iso_lower_col = batch
+            .column_by_name("iso_lower_mz")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        let iso_upper_col = batch
+            .column_by_name("iso_upper_mz")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        let hill_id_col = batch
+            .column_by_name("hill_id")
+            .and_then(|c| c.as_any().downcast_ref::<arrow::array::UInt64Array>());
+
+        let row_offset = hills.len() as u64;
         for i in 0..batch.num_rows() {
             let profile: Vec<f32> = serde_json::from_str(profile_col.value(i))?;
+            let isolation_window = match (iso_target_col, iso_lower_col, iso_upper_col) {
+                (Some(t), Some(l), Some(u)) if !t.is_null(i) && !l.is_null(i) && !u.is_null(i) => {
+                    Some(IsolationWindow {
+                        target: t.value(i),
+                        lower: l.value(i),
+                        upper: u.value(i),
+                    })
+                }
+                _ => None,
+            };
+            let hill_id = hill_id_col
+                .filter(|c| !c.is_null(i))
+                .map(|c| c.value(i))
+                .unwrap_or(row_offset + i as u64);
             hills.push(Hill {
+                hill_id,
                 mz: mz_col.value(i),
                 mz_std: mz_std_col.value(i),
                 rt: rt_col.value(i),
@@ -268,6 +336,7 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
                 intensity_max: int_max_col.value(i),
                 hill_score: score_col.value(i),
                 intensity_profile: Arc::from(profile.as_slice()),
+                isolation_window,
             });
         }
     }
@@ -308,9 +377,10 @@ pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothErro
         let int_apex_col = f64_col!("intensityApex");
         let int_sum_col = f64_col!("intensitySum");
         let im_col = f64_col!("im");
-        let cosine_col = f64_col!("cosine_similarity");
+        let cosine_col = f64_col!("cosine_score");
         let ppm_col = f64_col!("ppm_error");
-        let score_col = f64_col!("score");
+        let isotope_col = f64_col!("isotope_score");
+        let combined_col = f64_col!("combined_score");
 
         let charge_col = batch
             .column_by_name("charge")
@@ -351,6 +421,7 @@ pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothErro
             let theoretical_pattern: Vec<f64> = serde_json::from_str(theo_col.value(i))?;
 
             let hill = Hill {
+                hill_id: 0,
                 mz: raw_mz,
                 mz_std: 0.0,
                 rt: rt_apex_col.value(i),
@@ -368,17 +439,20 @@ pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothErro
                 intensity_max: int_apex_col.value(i),
                 hill_score: 1.0,
                 intensity_profile: Arc::from(&[] as &[f32]),
+                isolation_window: None,
             };
 
             features.push(ScoredFeature {
                 feature: Feature {
                     hills: vec![hill],
                     charge,
-                    cosine_similarity: cosine_col.value(i),
+                    cosine_score: cosine_col.value(i),
                     ppm_error: ppm_col.value(i),
                 },
                 neutron_offset,
-                score: score_col.value(i),
+                isotope_score: isotope_col.value(i),
+                cosine_score: cosine_col.value(i),
+                combined_score: combined_col.value(i),
                 theoretical_pattern,
             });
         }

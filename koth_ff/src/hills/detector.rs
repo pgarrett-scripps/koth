@@ -21,6 +21,9 @@ pub struct HillDetector {
     lfc_weight: f64,
     smoothing_enabled: bool,
     smoothing_window: usize,
+    /// Isolation window tag applied to every hill emitted by this detector.
+    /// `None` for MS1; `Some` when running MS2 hill detection for a DIA channel.
+    isolation_window: Option<crate::models::IsolationWindow>,
     active_hills: HashMap<usize, ActiveHill>,
     next_id: usize,
     finalized: Vec<Hill>,
@@ -40,11 +43,11 @@ impl HillDetector {
         } else {
             file.mz_tolerance
         };
-        let check_freq = if config.max_gap == 0 {
-            1
-        } else {
-            (config.max_gap + 1).max(1)
-        };
+        // Stale-hill cleanup runs every scan. Skipping scans (the old
+        // `check_freq = max_gap + 1` shortcut) lets a stale hill pick up a
+        // peak between cleanups and end up with a gap longer than `max_gap`
+        // in its profile.
+        let check_freq = 1;
         Self {
             min_mz: file.global_min_mz,
             max_mz: file.global_max_mz,
@@ -59,6 +62,7 @@ impl HillDetector {
             lfc_weight: config.lfc_weight,
             smoothing_enabled: config.smoothing_enabled,
             smoothing_window: config.smoothing_window,
+            isolation_window: None,
             active_hills: HashMap::new(),
             next_id: 0,
             finalized: Vec::new(),
@@ -68,19 +72,26 @@ impl HillDetector {
         }
     }
 
+    /// Tag every finalized hill with this isolation window (used for MS2/DIA).
+    pub fn with_isolation_window(mut self, iw: crate::models::IsolationWindow) -> Self {
+        self.isolation_window = Some(iw);
+        self
+    }
+
     pub fn process_scan(&mut self, spectrum: &Spectrum) {
         let rt = spectrum.retention_time;
         let use_im = spectrum.has_ion_mobility();
         let scan_idx = self.scan_idx;
         let n_peaks = spectrum.peaks.len();
 
-        // Stale-hill cleanup runs before matching so that a hill that has
-        // already exceeded max_gap cannot pick up a new peak and accumulate
-        // extra gap zeros in its profile (the bug: matching-first let a hill
-        // last seen at scan N survive the check at N+1 and then insert 2
-        // zeros at N+3 before the next check fired).
+        // Stale-hill cleanup runs before matching so a hill that has already
+        // exceeded max_gap cannot pick up a new peak and accumulate extra gap
+        // zeros in its profile. A hill last seen at scan L is allowed to match
+        // up to scan L + max_gap + 1 inclusive (i.e. tolerate `max_gap` missed
+        // scans), so we kill it once `scan_idx > L + max_gap + 1`, i.e. when
+        // `L < scan_idx - max_gap - 1`.
         if scan_idx % self.check_freq == 0 {
-            let cutoff = scan_idx.saturating_sub(self.max_gap);
+            let cutoff = scan_idx.saturating_sub(self.max_gap + 1);
             let stale_ids: Vec<usize> = self
                 .active_hills
                 .iter()
@@ -90,7 +101,14 @@ impl HillDetector {
 
             for id in stale_ids {
                 let hill = self.active_hills.remove(&id).unwrap();
-                if let Some(h) = Self::finalize_hill(hill, self.min_scans, self.intensity_coverage, self.smoothing_enabled, self.smoothing_window) {
+                if let Some(h) = Self::finalize_hill(
+                    hill,
+                    self.min_scans,
+                    self.intensity_coverage,
+                    self.smoothing_enabled,
+                    self.smoothing_window,
+                    self.isolation_window,
+                ) {
                     self.finalized.push(h);
                 }
             }
@@ -211,7 +229,14 @@ impl HillDetector {
 
     pub fn finish(mut self) -> Vec<Hill> {
         for (_, hill) in self.active_hills {
-            if let Some(h) = Self::finalize_hill(hill, self.min_scans, self.intensity_coverage, self.smoothing_enabled, self.smoothing_window) {
+            if let Some(h) = Self::finalize_hill(
+                hill,
+                self.min_scans,
+                self.intensity_coverage,
+                self.smoothing_enabled,
+                self.smoothing_window,
+                self.isolation_window,
+            ) {
                 self.finalized.push(h);
             }
         }
@@ -241,6 +266,7 @@ impl HillDetector {
         intensity_coverage: f64,
         smoothing_enabled: bool,
         smoothing_window: usize,
+        isolation_window: Option<crate::models::IsolationWindow>,
     ) -> Option<Hill> {
         hill.trim();
         hill.trim_to_coverage(intensity_coverage);
@@ -275,6 +301,7 @@ impl HillDetector {
         let n_scans = hill.intensity_profile.len();
 
         Some(Hill {
+            hill_id: 0, // filled in by `assign_hill_ids` after splitting
             mz: mz_mean,
             mz_std,
             rt: rt_apex,
@@ -292,6 +319,108 @@ impl HillDetector {
             intensity_max,
             hill_score,
             intensity_profile: Arc::from(hill.intensity_profile.as_slice()),
+            isolation_window,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{FileConfig, HillsConfig};
+    use crate::models::{Peak, Spectrum};
+
+    fn spec(scan_index: usize, rt: f64, mzs: &[f32]) -> Spectrum {
+        Spectrum {
+            scan_index,
+            retention_time: rt,
+            peaks: mzs
+                .iter()
+                .map(|&mz| Peak {
+                    mz,
+                    intensity: 1000.0,
+                    ion_mobility: 0.0,
+                })
+                .collect(),
+            ms_level: 1,
+            isolation_window: None,
+        }
+    }
+
+    fn default_cfgs(max_gap: usize) -> (HillsConfig, FileConfig) {
+        let mut h = HillsConfig::default();
+        h.max_gap = max_gap;
+        h.split_hills = false;
+        h.min_scans = 3;
+        (h, FileConfig::default())
+    }
+
+    /// Regression: with `max_gap = 0`, a hill that matches the same m/z in N
+    /// consecutive scans must be retained (previously a stale-cleanup off-by-one
+    /// killed every hill before it could extend past 1 scan).
+    #[test]
+    fn max_gap_zero_retains_consecutive_hill() {
+        let (h, f) = default_cfgs(0);
+        let mut det = HillDetector::new(&h, &f);
+        for i in 0..5 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        let hills = det.finish();
+        assert_eq!(hills.len(), 1, "expected 1 hill, got {}", hills.len());
+        assert_eq!(hills[0].n_scans, 5);
+        assert_eq!(hills[0].skipped_scans, 0);
+    }
+
+    /// With `max_gap = 0`, a one-scan gap must terminate the hill.
+    #[test]
+    fn max_gap_zero_disallows_gaps() {
+        let (h, f) = default_cfgs(0);
+        let mut det = HillDetector::new(&h, &f);
+        for i in 0..3 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        det.process_scan(&spec(3, 0.3, &[]));
+        for i in 4..7 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        let hills = det.finish();
+        assert_eq!(hills.len(), 2, "expected 2 hills split across the gap, got {}", hills.len());
+        for hl in &hills {
+            assert_eq!(hl.skipped_scans, 0);
+        }
+    }
+
+    /// With `max_gap = 1`, a single missed scan must be bridged.
+    #[test]
+    fn max_gap_one_bridges_single_miss() {
+        let (h, f) = default_cfgs(1);
+        let mut det = HillDetector::new(&h, &f);
+        for i in 0..2 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        det.process_scan(&spec(2, 0.2, &[])); // miss
+        for i in 3..5 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        let hills = det.finish();
+        assert_eq!(hills.len(), 1, "expected 1 bridged hill, got {}", hills.len());
+        assert_eq!(hills[0].skipped_scans, 1);
+    }
+
+    /// With `max_gap = 1`, two consecutive missed scans must split the hill.
+    #[test]
+    fn max_gap_one_splits_at_two_misses() {
+        let (h, f) = default_cfgs(1);
+        let mut det = HillDetector::new(&h, &f);
+        for i in 0..3 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        det.process_scan(&spec(3, 0.3, &[])); // miss
+        det.process_scan(&spec(4, 0.4, &[])); // miss
+        for i in 5..8 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        let hills = det.finish();
+        assert_eq!(hills.len(), 2, "expected 2 hills, got {}", hills.len());
     }
 }

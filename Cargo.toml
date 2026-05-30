@@ -1,5 +1,5 @@
 [workspace]
-members = ["koth_ff", "koth_ff_py"]
+members = ["koth_ff"]
 resolver = "2"
 
 [workspace.package]
@@ -22,7 +22,6 @@ env_logger = "0.11"
 thiserror = "1.0"
 anyhow    = "1.0"
 clap      = { version = "4", features = ["derive"] }
-pyo3      = { version = "0.28", features = ["extension-module", "abi3-py310"] }
 arrow     = { version = "53", features = ["ipc"] }
 parquet   = { version = "53", features = ["arrow"] }
 rand      = "0.8"

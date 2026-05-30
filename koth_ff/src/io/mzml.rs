@@ -7,7 +7,7 @@ use mzdata::spectrum::{MultiLayerSpectrum, SignalContinuity};
 use mzdata::MZReader;
 
 use crate::error::KothError;
-use crate::models::{Peak, Spectrum};
+use crate::models::{IsolationWindow, Peak, Spectrum};
 
 /// Read an mzML file (plain or gzip-compressed) and return all MS1 spectra
 /// sorted by retention time.
@@ -34,6 +34,16 @@ pub fn read_mzml(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum>>, KothError> {
     crate::mem::log_mem("before open_reader (stream_mzml)");
     Ok(Box::new(ms1_stream(open_reader(path)?)))
+}
+
+/// Stream MS2 spectra (with isolation window metadata) from an mzML file.
+///
+/// Only spectra with `ms_level == 2` and a parsable precursor isolation window
+/// are yielded. The `scan_index` on each yielded spectrum is its absolute
+/// position in the file, so callers can later re-index per-isolation-window.
+pub fn stream_mzml_ms2(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum>>, KothError> {
+    crate::mem::log_mem("before open_reader (stream_mzml_ms2)");
+    Ok(Box::new(ms2_stream(open_reader(path)?)))
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +95,8 @@ fn collect_ms1(reader: BoxedRawIter) -> Vec<Spectrum> {
             scan_index,
             retention_time: spectrum.start_time(),
             peaks,
+            ms_level: 1,
+            isolation_window: None,
         });
     }
     out
@@ -126,7 +138,76 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
         if peaks.is_empty() {
             return None;
         }
-        Some(Spectrum { scan_index: idx, retention_time, peaks })
+        Some(Spectrum {
+            scan_index: idx,
+            retention_time,
+            peaks,
+            ms_level: 1,
+            isolation_window: None,
+        })
+    })
+}
+
+fn ms2_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
+    let mut scan_index = 0usize;
+    let mut ms2_count = 0usize;
+    let mut warned_missing_precursor = false;
+
+    reader.filter_map(move |mut spectrum| {
+        let idx = scan_index;
+        scan_index += 1;
+
+        if spectrum.ms_level() != 2 {
+            return None;
+        }
+
+        let iw = match spectrum.precursor() {
+            Some(p) => {
+                let raw = p.isolation_window();
+                let target = raw.target as f64;
+                let lower = match raw.flags {
+                    mzdata::spectrum::IsolationWindowState::Offset => target - raw.lower_bound as f64,
+                    _ => raw.lower_bound as f64,
+                };
+                let upper = match raw.flags {
+                    mzdata::spectrum::IsolationWindowState::Offset => target + raw.upper_bound as f64,
+                    _ => raw.upper_bound as f64,
+                };
+                IsolationWindow { target, lower, upper }
+            }
+            None => {
+                if !warned_missing_precursor {
+                    log::warn!(
+                        "MS2 spectrum at scan_index {} has no precursor info; skipping",
+                        idx
+                    );
+                    warned_missing_precursor = true;
+                }
+                return None;
+            }
+        };
+
+        let retention_time = spectrum.start_time();
+        let peaks = extract_peaks(&mut spectrum);
+
+        if ms2_count == 0 {
+            log::info!(
+                "First MS2 scan: scan_index={} rt={:.2} min isolation={:.4}({:.4}-{:.4}) peaks={}",
+                idx, retention_time, iw.target, iw.lower, iw.upper, peaks.len()
+            );
+        }
+        ms2_count += 1;
+
+        if peaks.is_empty() {
+            return None;
+        }
+        Some(Spectrum {
+            scan_index: idx,
+            retention_time,
+            peaks,
+            ms_level: 2,
+            isolation_window: Some(iw),
+        })
     })
 }
 

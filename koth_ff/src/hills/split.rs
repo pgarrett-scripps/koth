@@ -102,6 +102,7 @@ pub fn split_hill(
         let hill_score = smooth::compute_hill_score(&segment_profile);
 
         result.push(Hill {
+            hill_id: 0, // re-assigned by `assign_hill_ids` after splitting
             mz: hill.mz,
             mz_std: hill.mz_std,
             rt: rt_apex,
@@ -119,6 +120,7 @@ pub fn split_hill(
             intensity_max,
             hill_score,
             intensity_profile: Arc::from(segment_profile.as_slice()),
+            isolation_window: hill.isolation_window,
         });
     }
 

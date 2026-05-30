@@ -19,9 +19,11 @@ struct Candidate {
 ///
 /// 1. Build mz-sorted index.
 /// 2. Every hill is tried as a seed; for each charge state the best isotope
-///    chain is built via cosine-similarity filtering.  Each (seed, charge) pair
-///    is scored (Bhattacharyya × mean_cosine) and the charge with the highest
-///    composite score is kept as that seed's candidate.
+///    chain is built via chromatographic-cosine filtering against the seed
+///    (gated by `FeaturesConfig.min_chain_cosine`). Each (seed, charge) pair
+///    is scored as `isotope_score × cosine_score` (Bhattacharyya isotope-pattern
+///    times mean chromatographic cosine) and the charge with the highest
+///    combined score is kept as that seed's candidate.
 /// 3. All candidates are sorted by composite_score (desc); greedy conflict
 ///    resolution accepts the highest-scoring candidate whose hills are
 ///    unclaimed.
@@ -137,7 +139,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
             Feature {
                 hills: chain_hills,
                 charge,
-                cosine_similarity: mean_cosine,
+                cosine_score: mean_cosine,
                 ppm_error: mean_ppm,
             }
         })
@@ -149,9 +151,10 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
 
 /// Build the best candidate for `seed_idx` across all charge states.
 ///
-/// For each charge, extends isotope chains left and right using cosine-similarity
-/// filtering (same logic as before).  Scores each complete chain with
-/// Bhattacharyya × mean_cosine and keeps the charge that maximises this.
+/// For each charge, extends isotope chains left and right using chromatographic
+/// cosine filtering against the seed (gated by `min_chain_cosine`). Scores each
+/// complete chain as `isotope_score × cosine_score` (Bhattacharyya isotope-pattern
+/// × mean chromatographic cosine) and keeps the charge that maximises this.
 fn generate_best_candidate(
     seed_idx: usize,
     sorted_hills: &[&Hill],
@@ -221,7 +224,7 @@ fn generate_best_candidate(
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                 .unwrap();
 
-            if best_cos < config.min_cosine_similarity {
+            if best_cos < config.min_chain_cosine {
                 break;
             }
             right_chain.push(best_c);
@@ -268,7 +271,7 @@ fn generate_best_candidate(
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                 .unwrap();
 
-            if best_cos < config.min_cosine_similarity {
+            if best_cos < config.min_chain_cosine {
                 break;
             }
             left_chain.push(best_c);
@@ -297,8 +300,8 @@ fn generate_best_candidate(
         let mean_cosine = all_cosines.iter().sum::<f64>() / all_cosines.len() as f64;
 
         let chain_hills: Vec<&Hill> = chain.iter().map(|&i| sorted_hills[i]).collect();
-        let bhat = score_chain(&chain_hills, charge, min_intensity);
-        let composite = bhat * mean_cosine.max(0.0);
+        let isotope_score = score_chain(&chain_hills, charge, min_intensity);
+        let composite = isotope_score * mean_cosine.max(0.0);
 
         if composite > best.composite_score {
             let step_da = config.neutron_mass / charge as f64;

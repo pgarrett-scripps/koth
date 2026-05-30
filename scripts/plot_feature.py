@@ -60,8 +60,8 @@ def plot_feature(row: pd.Series, index: int, save_path: str | None = None, smoot
 
     charge = int(row["charge"]) if row["charge"] else 0
     n_isotopes = int(row["nIsotopes"]) if not pd.isna(row["nIsotopes"]) else len(isotope_profile)
-    score = float(row["score"]) if not pd.isna(row["score"]) else 0.0
-    cosine = float(row["cosine_similarity"]) if not pd.isna(row["cosine_similarity"]) else 0.0
+    score = float(row["combined_score"]) if not pd.isna(row["combined_score"]) else 0.0
+    cosine = float(row["cosine_score"]) if not pd.isna(row["cosine_score"]) else 0.0
     mz = float(row["mz"])
     mass = float(row["massCalib"]) if not pd.isna(row["massCalib"]) else 0.0
     rt_apex = float(row["rtApex"]) if not pd.isna(row["rtApex"]) else 0.0
@@ -107,7 +107,7 @@ def plot_feature(row: pd.Series, index: int, save_path: str | None = None, smoot
         ax_elution.legend(fontsize=9)
 
         info = (
-            f"score: {score:.4f}  |  cosine: {cosine:.4f}  |  "
+            f"combined: {score:.4f}  |  chromato-cosine: {cosine:.4f}  |  "
             f"n_isotopes: {n_isotopes}  |  ppm error: {row['ppm_error']:.2f}  |  "
             f"neutron offset: {int(row['neutron_offset']) if not pd.isna(row['neutron_offset']) else 0}"
         )

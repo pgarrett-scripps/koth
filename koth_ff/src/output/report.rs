@@ -60,8 +60,12 @@ pub struct FeaturesReport {
     pub n: usize,
     /// Charge state → feature count, sorted by charge.
     pub charge_distribution: BTreeMap<u8, usize>,
-    pub cosine_similarity: StatSummary,
-    pub score: StatSummary,
+    /// Chromatographic cosine score (mean adjacent-isotope-hill cosine).
+    pub cosine_score: StatSummary,
+    /// Bhattacharyya isotope-pattern score.
+    pub isotope_score: StatSummary,
+    /// `isotope_score × cosine_score`.
+    pub combined_score: StatSummary,
     pub ppm_error: StatSummary,
     pub n_isotopes: StatSummary,
     pub rt_width: StatSummary,
@@ -100,20 +104,22 @@ pub fn build_features_report(features: &[ScoredFeature]) -> FeaturesReport {
         *charge_dist.entry(sf.feature.charge).or_insert(0) += 1;
     }
 
-    let mut cosine  = scored.iter().map(|sf| sf.feature.cosine_similarity).collect::<Vec<_>>();
-    let mut scores  = scored.iter().map(|sf| sf.score).collect::<Vec<_>>();
-    let mut ppm     = scored.iter().map(|sf| sf.feature.ppm_error).collect::<Vec<_>>();
-    let mut n_iso   = scored.iter().map(|sf| sf.feature.hills.len() as f64).collect::<Vec<_>>();
-    let mut rt_w    = scored.iter().map(|sf| sf.feature.rt_end() - sf.feature.rt_start()).collect::<Vec<_>>();
+    let mut cosine    = scored.iter().map(|sf| sf.cosine_score).collect::<Vec<_>>();
+    let mut isotope   = scored.iter().map(|sf| sf.isotope_score).collect::<Vec<_>>();
+    let mut combined  = scored.iter().map(|sf| sf.combined_score).collect::<Vec<_>>();
+    let mut ppm       = scored.iter().map(|sf| sf.feature.ppm_error).collect::<Vec<_>>();
+    let mut n_iso     = scored.iter().map(|sf| sf.feature.hills.len() as f64).collect::<Vec<_>>();
+    let mut rt_w      = scored.iter().map(|sf| sf.feature.rt_end() - sf.feature.rt_start()).collect::<Vec<_>>();
 
     FeaturesReport {
         n: scored.len(),
         charge_distribution: charge_dist,
-        cosine_similarity: stats(&mut cosine),
-        score:            stats(&mut scores),
-        ppm_error:        stats(&mut ppm),
-        n_isotopes:       stats(&mut n_iso),
-        rt_width:         stats(&mut rt_w),
+        cosine_score:   stats(&mut cosine),
+        isotope_score:  stats(&mut isotope),
+        combined_score: stats(&mut combined),
+        ppm_error:      stats(&mut ppm),
+        n_isotopes:     stats(&mut n_iso),
+        rt_width:       stats(&mut rt_w),
     }
 }
 

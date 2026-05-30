@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -10,18 +11,18 @@ use crate::lfq::LfqConfig;
 /// redundant settings — see `[lfq]` for those values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsensusConfig {
-    /// Minimum feature score for a feature to be eligible as a group member or seed.
-    pub min_member_score: f64,
-    /// Minimum number of runs that must have detected a feature in a group for it
-    /// to be used for LFQ. 1 = include single-run features (default). 2 = require
-    /// detection in at least two runs before attempting LFQ across all runs.
+    /// Pre-grouping filter: a feature's `combined_score` must clear this to
+    /// be eligible as a group member or seed. Features below are excluded
+    /// from the projection entirely (don't count toward `n_contributing_runs`).
+    pub min_member_combined_score: f64,
+    /// Minimum number of distinct runs that must have detected a feature in
+    /// a group for it to survive. 1 = MBR on (single-run detections kept).
     #[serde(default = "default_min_group_size")]
     pub min_group_size: usize,
-    /// Minimum isotope-pattern score of the group's seed feature. Groups whose
-    /// best-scoring member falls below this threshold are dropped entirely.
-    /// 0.0 = keep all groups (default).
+    /// Post-grouping filter: drop groups whose seed (best-`combined_score`
+    /// member) is below this. 0.0 = keep all groups.
     #[serde(default)]
-    pub min_seed_score: f64,
+    pub min_seed_combined_score: f64,
 }
 
 fn default_min_group_size() -> usize {
@@ -31,9 +32,9 @@ fn default_min_group_size() -> usize {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            min_member_score: 0.0,
+            min_member_combined_score: 0.0,
             min_group_size: 1,
-            min_seed_score: 0.0,
+            min_seed_combined_score: 0.0,
         }
     }
 }
@@ -52,8 +53,8 @@ pub struct ConsensusFeature {
     pub theoretical_pattern: Vec<f64>,
     /// Neutral monoisotopic mass in reference space.
     pub neutral_mass: f64,
-    /// Isotope-pattern score of the seed feature.
-    pub seed_score: f64,
+    /// `combined_score` (isotope × chromato cosine) of the seed feature.
+    pub seed_combined_score: f64,
     /// Index into the `runs` slice that supplied the seed.
     pub seed_run_idx: usize,
     /// How many runs contributed at least one feature to this group.
@@ -61,6 +62,7 @@ pub struct ConsensusFeature {
 }
 
 /// Internal: one feature projected into reference-run coordinate space.
+/// `combined_score` is the seed-selection / filter axis (isotope × chromato cosine).
 struct ProjectedFeature {
     run_idx: usize,
     ref_mz: f64,
@@ -68,17 +70,17 @@ struct ProjectedFeature {
     ref_im: f64,
     charge: u8,
     neutral_mass: f64,
-    score: f64,
+    combined_score: f64,
     theoretical_pattern: Vec<f64>,
 }
 
 fn emit_group(projected: &[ProjectedFeature], group: &[usize]) -> ConsensusFeature {
-    // Keep best-scoring feature per run to avoid double-counting split peaks.
+    // Keep best-combined-scoring feature per run to avoid double-counting split peaks.
     let mut best_per_run: HashMap<usize, usize> = HashMap::new();
     for &i in group {
         let run_idx = projected[i].run_idx;
         let entry = best_per_run.entry(run_idx).or_insert(i);
-        if projected[i].score > projected[*entry].score {
+        if projected[i].combined_score > projected[*entry].combined_score {
             *entry = i;
         }
     }
@@ -86,7 +88,12 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize]) -> ConsensusFeatu
     let deduped: Vec<usize> = best_per_run.values().copied().collect();
     let seed_idx = *deduped
         .iter()
-        .max_by(|&&a, &&b| projected[a].score.partial_cmp(&projected[b].score).unwrap())
+        .max_by(|&&a, &&b| {
+            projected[a]
+                .combined_score
+                .partial_cmp(&projected[b].combined_score)
+                .unwrap()
+        })
         .unwrap();
     let seed = &projected[seed_idx];
 
@@ -97,17 +104,17 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize]) -> ConsensusFeatu
         charge: seed.charge,
         theoretical_pattern: seed.theoretical_pattern.clone(),
         neutral_mass: seed.neutral_mass,
-        seed_score: seed.score,
+        seed_combined_score: seed.combined_score,
         seed_run_idx: seed.run_idx,
         n_contributing_runs: deduped.len(),
     }
 }
 
-/// Apply min_group_size and min_seed_score filters before adding a group to the output.
+/// Apply post-grouping filters before emitting a group.
 #[inline]
 fn push_if_passes(cf: ConsensusFeature, config: &LfqConfig, out: &mut Vec<ConsensusFeature>) {
     if cf.n_contributing_runs >= config.consensus.min_group_size
-        && cf.seed_score >= config.consensus.min_seed_score
+        && cf.seed_combined_score >= config.consensus.min_seed_combined_score
     {
         out.push(cf);
     }
@@ -126,13 +133,16 @@ pub fn build_consensus(
 ) -> Vec<ConsensusFeature> {
     const PROTON: f64 = 1.007_276_466_621;
 
+    let t_project = Instant::now();
     let mut projected: Vec<ProjectedFeature> = Vec::new();
 
     for (run_idx, run) in runs.iter().enumerate() {
         let is_reference = run_idx == alignment.reference_idx;
 
         for feat in &run.features {
-            if feat.feature.charge == 0 || feat.score < config.consensus.min_member_score {
+            if feat.feature.charge == 0
+                || feat.combined_score < config.consensus.min_member_combined_score
+            {
                 continue;
             }
 
@@ -161,17 +171,24 @@ pub fn build_consensus(
                 ref_im,
                 charge: feat.feature.charge,
                 neutral_mass,
-                score: feat.score,
+                combined_score: feat.combined_score,
                 theoretical_pattern: feat.theoretical_pattern.clone(),
             });
         }
     }
+
+    log::info!(
+        "[timing] consensus project ({} features): {:.2?}",
+        projected.len(),
+        t_project.elapsed()
+    );
 
     // Sort: charge ASC, neutral_mass ASC, ref_im ASC, ref_rt ASC.
     // Including IM before RT ensures features at the same mass but very different
     // ion mobilities (different conformers, or noise) are separated in the list
     // before the sweep runs, preventing an IM-mismatched feature from landing
     // between two same-IM features and breaking the group.
+    let t_sort = Instant::now();
     projected.sort_by(|a, b| {
         a.charge
             .cmp(&b.charge)
@@ -179,6 +196,7 @@ pub fn build_consensus(
             .then(a.ref_im.partial_cmp(&b.ref_im).unwrap())
             .then(a.ref_rt.partial_cmp(&b.ref_rt).unwrap())
     });
+    log::info!("[timing] consensus sort: {:.2?}", t_sort.elapsed());
 
     let mut consensus: Vec<ConsensusFeature> = Vec::new();
 
@@ -195,6 +213,7 @@ pub fn build_consensus(
     // Greedy single-linkage sweep: compare each feature against the first member
     // (anchor) of the current group.  Comparing against the anchor rather than the
     // last member prevents drift in group coordinates as members accumulate.
+    let t_sweep = Instant::now();
     let mut group: Vec<usize> = vec![0];
 
     for i in 1..projected.len() {
@@ -228,6 +247,11 @@ pub fn build_consensus(
         }
     }
     push_if_passes(emit_group(&projected, &group), config, &mut consensus);
+    log::info!(
+        "[timing] consensus sweep ({} pre-merge groups): {:.2?}",
+        consensus.len(),
+        t_sweep.elapsed()
+    );
 
     // Second pass: merge consensus groups whose seeds are within tolerance.
     //
@@ -238,7 +262,13 @@ pub fn build_consensus(
     // group separators, closing the current group prematurely.  The resulting
     // sub-groups have seeds that are trivially close to each other.  A second
     // sweep over the seeds merges them.
+    let t_merge = Instant::now();
     consensus = merge_consensus(consensus, config, rt_window_abs);
+    log::info!(
+        "[timing] consensus merge_consensus ({} post-merge groups): {:.2?}",
+        consensus.len(),
+        t_merge.elapsed()
+    );
 
     let n_multi_run = consensus.iter().filter(|c| c.n_contributing_runs > 1).count();
     log::info!(
@@ -254,11 +284,17 @@ pub fn build_consensus(
 
 /// Merge consensus groups whose seeds fall within the same mass/IM/RT window.
 ///
-/// Groups are re-sorted by (charge, neutral_mass, ref_im, ref_rt) and swept
-/// with the same 2× tolerances used in the projection sweep.  When two
-/// adjacent groups are within tolerance, the higher-scoring seed wins and
-/// n_contributing_runs is summed (may overcount runs that appeared in both
-/// groups, but this is acceptable).
+/// Groups are sorted by (charge, neutral_mass, ref_im, ref_rt) and a sliding
+/// mass window is walked over them. Within each window every pair of groups
+/// is tested with the 2× tolerances used in the projection sweep, and matching
+/// pairs are unioned in a disjoint-set structure. Each resulting cluster
+/// collapses to a single feature whose seed is the highest-scoring member;
+/// `n_contributing_runs` is summed across members (may overcount when a run
+/// appeared in multiple sub-groups, but this matches the previous behaviour).
+///
+/// The pairwise sweep (vs. the previous adjacent-only sweep) is what makes
+/// the merge transitive: it can rejoin sub-groups even when an unrelated
+/// group of similar mass interleaves between them in the sort.
 fn merge_consensus(
     mut groups: Vec<ConsensusFeature>,
     config: &LfqConfig,
@@ -276,42 +312,101 @@ fn merge_consensus(
             .then(a.ref_rt.partial_cmp(&b.ref_rt).unwrap())
     });
 
-    let mut merged: Vec<ConsensusFeature> = Vec::with_capacity(groups.len());
-    let mut cur = groups.remove(0);
+    let n = groups.len();
+    let ppm_tol = config.mz_ppm * 2.0;
+    let rt_tol = rt_window_abs * 2.0;
+    let im_tol = config.im_tolerance;
 
-    for next in groups {
-        let same_charge = next.charge == cur.charge;
+    let mut parent: Vec<usize> = (0..n).collect();
 
-        let mass_ok = if cur.neutral_mass > 0.0 {
-            (next.neutral_mass - cur.neutral_mass).abs() / cur.neutral_mass * 1e6
-                <= config.mz_ppm * 2.0
+    fn find(parent: &mut [usize], mut a: usize) -> usize {
+        while parent[a] != a {
+            parent[a] = parent[parent[a]];
+            a = parent[a];
+        }
+        a
+    }
+
+    // Sliding mass window: for each i, scan forward j>i while same charge and
+    // neutral_mass(j) - neutral_mass(i) within the ppm tolerance.
+    for i in 0..n {
+        let a_charge = groups[i].charge;
+        let a_mass = groups[i].neutral_mass;
+        let a_rt = groups[i].ref_rt;
+        let a_im = groups[i].ref_im;
+        let mass_high = if a_mass > 0.0 {
+            a_mass * (1.0 + ppm_tol / 1e6)
         } else {
-            (next.neutral_mass - cur.neutral_mass).abs() <= 0.02
+            a_mass + 0.02
         };
 
-        let rt_ok = (next.ref_rt - cur.ref_rt).abs() <= rt_window_abs * 2.0;
-
-        let im_ok = cur.ref_im == 0.0
-            || next.ref_im == 0.0
-            || (next.ref_im - cur.ref_im).abs() <= config.im_tolerance;
-
-        if same_charge && mass_ok && rt_ok && im_ok {
-            // Absorb next into cur, keeping the better seed.
-            cur.n_contributing_runs += next.n_contributing_runs;
-            if next.seed_score > cur.seed_score {
-                cur.ref_mz = next.ref_mz;
-                cur.ref_rt = next.ref_rt;
-                cur.ref_im = next.ref_im;
-                cur.neutral_mass = next.neutral_mass;
-                cur.theoretical_pattern = next.theoretical_pattern;
-                cur.seed_score = next.seed_score;
-                cur.seed_run_idx = next.seed_run_idx;
+        for j in (i + 1)..n {
+            let b = &groups[j];
+            // charges are sorted ascending; once b.charge > a.charge no
+            // further candidate can match.
+            if b.charge != a_charge {
+                break;
             }
-        } else {
-            merged.push(cur);
-            cur = next;
+            if b.neutral_mass > mass_high {
+                break;
+            }
+
+            let rt_ok = (b.ref_rt - a_rt).abs() <= rt_tol;
+            if !rt_ok {
+                continue;
+            }
+
+            let im_ok = a_im == 0.0 || b.ref_im == 0.0 || (b.ref_im - a_im).abs() <= im_tol;
+            if !im_ok {
+                continue;
+            }
+
+            let pi = find(&mut parent, i);
+            let pj = find(&mut parent, j);
+            if pi != pj {
+                parent[pi] = pj;
+            }
         }
     }
-    merged.push(cur);
+
+    // Bucket members by cluster root.
+    let mut cluster_members: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        cluster_members.entry(root).or_default().push(i);
+    }
+
+    // Collapse each cluster: best-scoring seed wins, contributing runs sum.
+    let mut merged: Vec<ConsensusFeature> = Vec::with_capacity(cluster_members.len());
+    for (_, members) in cluster_members {
+        if members.len() == 1 {
+            merged.push(groups[members[0]].clone());
+            continue;
+        }
+        let best = *members
+            .iter()
+            .max_by(|&&a, &&b| {
+                groups[a]
+                    .seed_combined_score
+                    .partial_cmp(&groups[b].seed_combined_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let mut out = groups[best].clone();
+        out.n_contributing_runs = members
+            .iter()
+            .map(|&k| groups[k].n_contributing_runs)
+            .sum();
+        merged.push(out);
+    }
+
+    // Deterministic ordering for downstream consumers.
+    merged.sort_by(|a, b| {
+        a.charge
+            .cmp(&b.charge)
+            .then(a.neutral_mass.partial_cmp(&b.neutral_mass).unwrap())
+            .then(a.ref_im.partial_cmp(&b.ref_im).unwrap())
+            .then(a.ref_rt.partial_cmp(&b.ref_rt).unwrap())
+    });
     merged
 }

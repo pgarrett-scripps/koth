@@ -1,7 +1,9 @@
+use serde::Serialize;
+
 use super::{anchors::AnchorPair, AlignmentConfig};
 
 /// A simple linear drift model: y = intercept + slope * x.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DriftFit {
     pub intercept: f64,
     pub slope: f64,
@@ -19,7 +21,10 @@ impl DriftFit {
 }
 
 /// Fit mass PPM drift as a linear function of normalised reference RT.
-pub fn fit_mass_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> DriftFit {
+///
+/// Returns the fit plus a per-anchor active mask (true = used by the final fit,
+/// false = sigma-clipped). The mask is aligned 1:1 with the input `anchors` slice.
+pub fn fit_mass_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> (DriftFit, Vec<bool>) {
     let pairs: Vec<(f64, f64)> = anchors
         .iter()
         .map(|a| (a.ref_rt_norm, a.ppm_error()))
@@ -29,21 +34,35 @@ pub fn fit_mass_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> Drift
 
 /// Fit ion-mobility drift as a linear function of normalised reference RT.
 /// Returns zero drift if fewer than 4 IM anchor pairs are available.
-pub fn fit_im_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> DriftFit {
-    let pairs: Vec<(f64, f64)> = anchors
-        .iter()
-        .filter(|a| a.ref_im != 0.0 && a.run_im != 0.0)
-        .map(|a| (a.ref_rt_norm, a.im_delta()))
-        .collect();
-    if pairs.len() < 4 {
-        return DriftFit::zero();
+///
+/// The returned mask is aligned 1:1 with the input `anchors` slice: an entry is
+/// `true` only if the anchor had IM on both sides AND survived sigma-clipping.
+pub fn fit_im_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> (DriftFit, Vec<bool>) {
+    let mut full_active = vec![false; anchors.len()];
+
+    let mut idx_map: Vec<usize> = Vec::with_capacity(anchors.len());
+    let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(anchors.len());
+    for (i, a) in anchors.iter().enumerate() {
+        if a.ref_im != 0.0 && a.run_im != 0.0 {
+            idx_map.push(i);
+            pairs.push((a.ref_rt_norm, a.im_delta()));
+        }
     }
-    fit_with_sigma_clip(&pairs, config)
+
+    if pairs.len() < 4 {
+        return (DriftFit::zero(), full_active);
+    }
+
+    let (fit, sub_active) = fit_with_sigma_clip(&pairs, config);
+    for (j, &full_idx) in idx_map.iter().enumerate() {
+        full_active[full_idx] = sub_active[j];
+    }
+    (fit, full_active)
 }
 
-fn fit_with_sigma_clip(pairs: &[(f64, f64)], config: &AlignmentConfig) -> DriftFit {
+fn fit_with_sigma_clip(pairs: &[(f64, f64)], config: &AlignmentConfig) -> (DriftFit, Vec<bool>) {
     if pairs.len() < 2 {
-        return DriftFit::zero();
+        return (DriftFit::zero(), vec![false; pairs.len()]);
     }
 
     let mut active = vec![true; pairs.len()];
@@ -90,7 +109,7 @@ fn fit_with_sigma_clip(pairs: &[(f64, f64)], config: &AlignmentConfig) -> DriftF
         fit = ols_active(pairs, &active);
     }
 
-    fit
+    (fit, active)
 }
 
 fn ols_active(pairs: &[(f64, f64)], active: &[bool]) -> DriftFit {

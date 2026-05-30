@@ -9,9 +9,10 @@ use koth_ff::{
     mem::log_mem,
     output::{
         build_features_report, build_hills_report, write_features_parquet, write_features_tsv,
-        write_hills_parquet, write_hills_tsv, write_report, RunReport,
+        write_hills_parquet, write_hills_tsv, write_ms2_hills_parquet, write_ms2_hills_tsv,
+        write_report, RunReport,
     },
-    run_features, run_hills_streaming, run_scoring,
+    run_features, run_hills_streaming, run_ms2_hills_streaming, run_scoring,
 };
 
 #[derive(Parser, Debug)]
@@ -36,6 +37,12 @@ struct Args {
     #[arg(long)]
     no_scoring: bool,
 
+    /// Also detect MS2 hills (per isolation window) and write them to
+    /// `hills_ms2.{tsv|parquet}`. Overrides the `file.ms2_hills_enabled`
+    /// config setting when set.
+    #[arg(long)]
+    ms2: bool,
+
     /// Log level: error, warn, info, debug, trace (default: info)
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -49,11 +56,14 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter))
         .init();
 
-    let config = match &args.config {
+    let mut config = match &args.config {
         Some(cfg_path) => KothConfig::from_toml(cfg_path)
             .with_context(|| format!("Failed to load config from {}", cfg_path.display()))?,
         None => KothConfig::default(),
     };
+    if args.ms2 {
+        config.file.ms2_hills_enabled = true;
+    }
 
     let file_stem = args
         .input
@@ -92,6 +102,39 @@ fn main() -> anyhow::Result<()> {
     .with_context(|| format!("Failed to write hills to {}", hills_path.display()))?;
     log::info!("[timing] write hills.{hills_ext}: {:.2?}", t.elapsed());
 
+    // Optional Stage 1b: MS2 hill detection per isolation window (DIA channels).
+    // Independent of MS1 feature finding — we just emit a separate hills_ms2 file.
+    if config.file.ms2_hills_enabled {
+        log::info!("Detecting MS2 hills (streaming, per isolation window)...");
+        let t = Instant::now();
+        let ms2_hills =
+            run_ms2_hills_streaming(&args.input, &config.hills, &config.file)
+                .with_context(|| {
+                    format!("Failed to detect MS2 hills from {}", args.input.display())
+                })?;
+        log::info!(
+            "[timing] MS2 hill detection: {:.2?} ({} hills)",
+            t.elapsed(),
+            ms2_hills.len()
+        );
+        log_mem(&format!("after MS2 hill detection ({} hills)", ms2_hills.len()));
+
+        if !ms2_hills.is_empty() {
+            let ms2_path = out_dir.join(format!("hills_ms2.{hills_ext}"));
+            let t = Instant::now();
+            match config.output.format {
+                OutputFormat::Tsv => write_ms2_hills_tsv(&ms2_hills, &ms2_path),
+                OutputFormat::Parquet => write_ms2_hills_parquet(&ms2_hills, &ms2_path),
+            }
+            .with_context(|| {
+                format!("Failed to write MS2 hills to {}", ms2_path.display())
+            })?;
+            log::info!("[timing] write hills_ms2.{hills_ext}: {:.2?}", t.elapsed());
+        } else {
+            log::info!("No MS2 hills produced (input may have no MS2 spectra).");
+        }
+    }
+
     // Stage 2: Feature detection — hills borrowed here, features clone Hill structs
     // (intensity_profile is Arc so no data duplication)
     log::info!("Detecting features...");
@@ -114,14 +157,16 @@ fn main() -> anyhow::Result<()> {
             .map(|f| koth_ff::models::ScoredFeature {
                 feature: f.clone(),
                 neutron_offset: 0,
-                score: 0.0,
+                isotope_score: 0.0,
+                cosine_score: f.cosine_score,
+                combined_score: 0.0,
                 theoretical_pattern: Vec::new(),
             })
             .collect::<Vec<_>>()
     } else {
         log::info!("Scoring features...");
         let t = Instant::now();
-        let s = run_scoring(&features, &config.scoring, config.features.min_score);
+        let s = run_scoring(&features, &config.scoring, &config.features);
         log::info!("[timing] scoring: {:.2?}", t.elapsed());
         s
     };

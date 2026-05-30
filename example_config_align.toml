@@ -3,6 +3,22 @@
 #
 # <batch_dir> must contain one subdirectory per run, each with:
 #   hills.{tsv,parquet} and features.{tsv,parquet}
+#
+# Feature quality is carried as three separate scores (each in [0, 1]):
+#   - isotope_score  : Bhattacharyya isotope-pattern match (vs averagine)
+#   - cosine_score   : mean chromatographic cosine between isotope hills
+#                      (time-domain co-elution — set in feature finding,
+#                      gated per-extension by `min_chain_cosine` there)
+#   - combined_score : isotope_score × cosine_score (default quality knob)
+#
+# Alignment, consensus grouping, and seed selection all filter on
+# `combined_score`. Independent isotope/cosine filtering is available at the
+# feature-finding stage via `min_isotope_score` / `min_cosine_score` /
+# `min_combined_score` in [features] of the upstream koth_ff config.
+#
+# LFQ stage adds two more scores (different things — don't confuse):
+#   - spectral_cosine : cosine(XIC column, theoretical pattern) at peak apex
+#   - hybrid_score    : cbrt(rt × intensity × spectral_cosine) at peak apex
 
 # ── Alignment ──────────────────────────────────────────────────────────────────
 [alignment]
@@ -16,11 +32,13 @@ rt_anchor_window = 0.05
 # Ion mobility tolerance for anchor matching (1/K0 units)
 im_tolerance = 0.05
 
-# Minimum feature score for a feature to be used as an alignment anchor
-min_anchor_score = 0.5
+# Minimum `combined_score` (isotope × chromatographic cosine) for a feature
+# to be eligible as an alignment anchor. Anchors are the highest-quality
+# features; stricter = cleaner warp fit, fewer anchors.
+min_anchor_combined_score = 0.5
 
-# Minimum number of anchor pairs required to fit a warp.
-# Runs with fewer anchors fall back to an identity (no-warp) correction.
+# Minimum anchor count required to fit a warp.
+# Runs below this fall back to an identity (no-warp) correction.
 min_anchor_count = 10
 
 # Bandwidth of the sliding-window median for RT warp fitting,
@@ -53,9 +71,9 @@ n_isotopes = 3
 # Number of RT bins per grid (default 100)
 grid_cols = 100
 
-# Minimum spectral angle used as a peak-expansion stopping criterion.
-# Peak expansion stops when the spectral angle at the edge drops below this.
-spectral_angle_min = 0.1
+# Spectral-cosine floor for peak expansion; columns below this don't extend the peak.
+# (Cosine of XIC column vs theoretical pattern at the apex, in [0, 1].)
+spectral_cosine_min = 0.1
 
 # Peak scoring mode: "hybrid" (default), "rt", "intensity", or "spectral"
 score_mode = "hybrid"
@@ -63,28 +81,39 @@ score_mode = "hybrid"
 # Run target-decoy competition to compute per-entry q-values
 run_tdc = true
 
-# Minimum feature score for a reference feature to appear as a consensus row.
-# 0.0 includes all detected features.  Increase (e.g. 0.5) to restrict to
-# high-confidence identifications if the reference run has many noise features.
-min_feature_score = 0.0
+# Decoy m/z shift in Da. The decoy grid is centred at
+#   decoy_mz = target_mz + decoy_mz_shift_da / charge.
+# Pick a value large enough to clear the target's isotope envelope and any
+# nearby adducts. 11 Da is the historical default and is safely off-pattern.
+decoy_mz_shift_da = 11.0
+
+# Decoy RT shift, as a fraction of the run's RT span. The decoy grid is
+# centred at decoy_rt = target_rt − decoy_rt_shift_pct · rt_span.
+# With the default 0.01 and `rt_window_pct = 0.02` the decoy window still
+# partially overlaps the target window; raise to ≥ 2 × `rt_window_pct` for
+# fully disjoint decoy windows.
+decoy_rt_shift_pct = 0.01
 
 # ── Consensus grouping ────────────────────────────────────────────────────────
-# Grouping uses mz_ppm, rt_window_pct, and im_tolerance from [lfq] above.
+# Builds the multi-run consensus feature list. Tolerances reuse mz_ppm,
+# rt_window_pct, and im_tolerance from [lfq] above. The three filters below
+# run at different points in the pipeline — see the comments.
 [lfq.consensus]
 
-# Minimum feature score for a feature to be eligible as a group member or seed.
-# Features below this score are ignored during grouping entirely.
-min_member_score = 0.0
+# Pre-grouping filter on individual features (uses `combined_score`).
+# Features below are excluded entirely — they cannot seed a group AND do not
+# count toward `n_contributing_runs`. 0.0 = keep everything.
+min_member_combined_score = 0.0
 
-# Minimum number of runs that must have detected a feature in a group for it
-# to be quantified. 1 = include single-run detections (default).
-# Set to 2 or higher to require reproducibility before attempting LFQ.
+# Post-grouping filter on detection count. A group must have features from
+# at least this many distinct runs to survive. 1 = MBR on (single-run
+# detections kept). 2+ = require reproducibility.
 min_group_size = 1
 
-# Minimum isotope-pattern score of the group's best feature (the LFQ seed).
-# Groups whose seed falls below this threshold are dropped before LFQ.
-# 0.0 = keep all groups (default). Suggested: 0.3–0.5 to reduce noise rows.
-min_seed_score = 0.0
+# Post-grouping filter on the seed's `combined_score`. Drops groups whose
+# top feature is too weak to trust, even when other members are present.
+# 0.0 = keep everything. Suggested: 0.1–0.3 to drop noise rows.
+min_seed_combined_score = 0.0
 
 # ── Output ────────────────────────────────────────────────────────────────────
 [output]
@@ -95,3 +124,16 @@ format = "tsv"
 # Maximum q-value to report in the intensity matrix (1.0 = report all entries).
 # Set to 0.01 to keep only entries passing 1% FDR.
 max_qvalue = 1.0
+
+# Write `decoy_intensity_matrix.tsv` — wide-format decoy LFQ values mirroring
+# `intensity_matrix.tsv`. Useful for FDR sanity-checks. Has no effect when
+# `lfq.run_tdc = false`.
+export_decoys = true
+
+# Write `lfq_details.tsv` — long-format file with one row per
+# (consensus feature, run, target/decoy pass) containing:
+#   intensity, hybrid_score, cosine_score, n_isotopes_found,
+#   expected_rt, apex_rt, rt_diff, peak_width_rt,
+#   observed_mz, ppm_error, observed_im, im_delta, q_value.
+# Recommended for QC / plotting; ~2 × n_features × n_runs rows when TDC is on.
+export_details = true
