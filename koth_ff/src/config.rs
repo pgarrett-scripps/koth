@@ -17,6 +17,25 @@ pub enum ImToleranceType {
     Absolute,
 }
 
+/// Per-hill mass-uncertainty model used during isotope-chain extension.
+///
+/// - `Off` (default): legacy behaviour. Chain extension uses the flat
+///   `mz_tolerance` window regardless of per-hill confidence.
+/// - `Kish`: each hill carries a `mz_se` (intensity-weighted-mean standard
+///   error via Kish's effective sample size). Chain extension combines the
+///   instrument tolerance with both endpoints' SEs in quadrature:
+///   `tol² = mz_tolerance² + (σ_mult × se_ref)² + (σ_mult × se_cand)²`.
+///   Hills with confident m/z get the legacy-tight window; hills with
+///   sparse / skewed intensity get a wider window, recovering low-S/N
+///   peptides that the flat tolerance would have excluded.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MzUncertaintyMode {
+    #[default]
+    Off,
+    Kish,
+}
+
 /// File-reading and shared tolerance settings.
 ///
 /// Tolerances defined here are used by both hill detection and feature finding.
@@ -40,32 +59,57 @@ pub struct FileConfig {
     pub intensity_coverage: f64,
     /// Number of threads (None = use all available CPUs)
     pub n_threads: Option<usize>,
-    /// For Bruker .d centroiding: m/z tolerance in ppm
-    pub bruker_mz_ppm: f64,
-    /// For Bruker .d centroiding: ion mobility tolerance in percent
-    pub bruker_im_pct: f64,
-    /// For Bruker .d centroiding: minimum raw subpeaks required per centroided peak
-    pub bruker_min_subpeaks: usize,
-    /// Half-window for Bruker raw-cloud smoothing along the scan (IM) axis,
-    /// in scan-index units. Full window = 2*N + 1. 0 disables. Default 2 (window 5).
-    #[serde(default = "default_bruker_im_smoothing")]
-    pub bruker_im_smoothing_window: usize,
-    /// Half-window for Bruker raw-cloud smoothing along the TOF (m/z) axis,
-    /// in TOF-index units. Full window = 2*N + 1. 0 disables. Default 1 (window 3).
-    #[serde(default = "default_bruker_mz_smoothing")]
-    pub bruker_mz_smoothing_window: usize,
-    /// Half-width (Da) of the satellite-suppression window applied after each
-    /// centroid is emitted. Within this window, raw peaks falling under a
-    /// linear ramp from the anchor's raw intensity (at d=0) down to
-    /// anchor * `bruker_satellite_end_fraction` (at d=window) are marked used
-    /// and prevented from seeding their own centroids. 0.0 disables. Default 0.15.
-    #[serde(default = "default_bruker_satellite_window")]
-    pub bruker_satellite_window_da: f64,
-    /// End fraction for the satellite-suppression linear ramp (see
-    /// `bruker_satellite_window_da`). 0.0 = full triangle ramp; 0.3 = ramp
-    /// floor sits at 30% of the anchor intensity at the window edge.
-    #[serde(default = "default_bruker_satellite_end_fraction")]
-    pub bruker_satellite_end_fraction: f64,
+    /// Bruker vertical-IM filter: column half-width in TOF-index units.
+    /// The filter scans each TOF column over the IM (scan) axis looking for
+    /// long vertical streaks of signal; this width sets how many TOF indices
+    /// to the left/right of each column are summed into the column profile.
+    #[serde(default = "default_bruker_filter_mz_half_width")]
+    pub bruker_filter_mz_half_width: u32,
+    /// Bruker vertical-IM filter: maximum consecutive empty scans tolerated
+    /// inside a kept run (morphological-close radius). Default 1.
+    #[serde(default = "default_bruker_filter_max_internal_gap")]
+    pub bruker_filter_max_internal_gap: usize,
+    /// Bruker vertical-IM filter: minimum run span (gap-inclusive) in scans
+    /// for a column feature to survive. Default 5.
+    #[serde(default = "default_bruker_filter_min_feature_length")]
+    pub bruker_filter_min_feature_length: usize,
+    /// Bruker vertical-IM filter: per-scan summed-intensity floor for a scan
+    /// to count as "occupied" in the column profile. 0 = keep every nonzero
+    /// scan. Default 0.
+    #[serde(default)]
+    pub bruker_filter_min_window_intensity: u64,
+    /// Bruker vertical-IM filter: total summed intensity over the kept span
+    /// (including sub-threshold cells inside gaps) required to keep a run.
+    /// 0 = no floor. Default 0.
+    #[serde(default)]
+    pub bruker_filter_min_feature_intensity: u64,
+    /// Bruker vertical-IM filter: how many times to re-apply the filter to
+    /// its own survivors. Each pass is strictly more aggressive. Default 1.
+    #[serde(default = "default_bruker_filter_num_iterations")]
+    pub bruker_filter_num_iterations: usize,
+    /// Bruker watershed centroider: nearest-neighbour reach on the scan axis
+    /// (scans). Two points farther apart than this on either axis cannot
+    /// join the same group. Default 10.
+    #[serde(default = "default_bruker_watershed_box_scan")]
+    pub bruker_watershed_box_scan: u32,
+    /// Bruker watershed centroider: nearest-neighbour reach on the TOF axis
+    /// (TOF indices). Default 3.
+    #[serde(default = "default_bruker_watershed_box_mz_idx")]
+    pub bruker_watershed_box_mz_idx: u32,
+    /// Bruker watershed centroider: intensity floor for promoting an orphan
+    /// (point with no in-box neighbour) to a new seed. Below this it is
+    /// dropped without claiming territory. Default 0.
+    #[serde(default)]
+    pub bruker_watershed_min_seed_intensity: u64,
+    /// Bruker watershed centroider: drop final centroids whose summed group
+    /// intensity is below this floor. Default 0.
+    #[serde(default)]
+    pub bruker_watershed_min_centroid_total: u64,
+    /// Bruker watershed centroider: hard cap on how far (in TOF-index units)
+    /// any member of a group can sit from that group's seed. Prevents a
+    /// long follower chain from creeping past the real peak edge. Default 10.
+    #[serde(default = "default_bruker_watershed_max_tof_offset")]
+    pub bruker_watershed_max_tof_offset: u32,
     /// Per-frame iterative MAD noise filter applied to the centroided peaks
     /// before the Bruker reader emits a `Spectrum`. Same algorithm as
     /// `noise_filter_sigma` (median + sigma * 1.4826 * MAD of the noise
@@ -89,6 +133,34 @@ pub struct FileConfig {
     /// Bruker .d MS2 frames are not yet supported.
     #[serde(default)]
     pub ms2_hills_enabled: bool,
+    /// Enable two-pass empirical m/z tolerance calibration. Pass 1 runs hill
+    /// detection at a widened tolerance (`mz_tolerance × pass1_multiplier`),
+    /// records the absolute ppm-delta of every accepted peak-to-hill match,
+    /// then sets the pass-2 tolerance to `median + sigma_mult × σ`, capped
+    /// by the pass-1 ceiling. Only honoured when `mz_tolerance_type = Ppm`;
+    /// silently skipped for Dalton tolerances.
+    #[serde(default)]
+    pub adaptive_mz_tolerance: bool,
+    /// Multiplier applied to `mz_tolerance` for the pass-1 calibration
+    /// sweep. The calibrated pass-2 tolerance is hard-capped at this same
+    /// `mz_tolerance × pass1_multiplier` value, so it's also the upper
+    /// safety bound. Default 2.0.
+    #[serde(default = "default_adaptive_mz_tolerance_pass1_multiplier")]
+    pub adaptive_mz_tolerance_pass1_multiplier: f64,
+    /// `N` in `median + N × σ` when deriving the calibrated pass-2 ppm.
+    /// Default 3.0 (matches AlphaPept).
+    #[serde(default = "default_adaptive_mz_tolerance_sigma_mult")]
+    pub adaptive_mz_tolerance_sigma_mult: f64,
+    /// Per-hill mass-uncertainty model for isotope-chain extension. See
+    /// `MzUncertaintyMode` for details. Default `Off` (legacy behaviour).
+    #[serde(default)]
+    pub mz_uncertainty_mode: MzUncertaintyMode,
+    /// `σ_mult` in the combined-tolerance formula
+    /// `tol² = mz_tolerance² + (σ_mult × se_ref)² + (σ_mult × se_cand)²`.
+    /// Default 3.0 — wraps each hill's standard error in a 3σ envelope.
+    /// Ignored when `mz_uncertainty_mode = Off`.
+    #[serde(default = "default_mz_uncertainty_sigma_mult")]
+    pub mz_uncertainty_sigma_mult: f64,
 }
 
 impl Default for FileConfig {
@@ -102,19 +174,40 @@ impl Default for FileConfig {
             global_max_mz: f64::INFINITY,
             intensity_coverage: 1.0,
             n_threads: None,
-            bruker_mz_ppm: 5.0,
-            bruker_im_pct: 3.0,
-            bruker_min_subpeaks: 1,
-            bruker_im_smoothing_window: default_bruker_im_smoothing(),
-            bruker_mz_smoothing_window: default_bruker_mz_smoothing(),
-            bruker_satellite_window_da: default_bruker_satellite_window(),
-            bruker_satellite_end_fraction: default_bruker_satellite_end_fraction(),
+            bruker_filter_mz_half_width: default_bruker_filter_mz_half_width(),
+            bruker_filter_max_internal_gap: default_bruker_filter_max_internal_gap(),
+            bruker_filter_min_feature_length: default_bruker_filter_min_feature_length(),
+            bruker_filter_min_window_intensity: 0,
+            bruker_filter_min_feature_intensity: 0,
+            bruker_filter_num_iterations: default_bruker_filter_num_iterations(),
+            bruker_watershed_box_scan: default_bruker_watershed_box_scan(),
+            bruker_watershed_box_mz_idx: default_bruker_watershed_box_mz_idx(),
+            bruker_watershed_min_seed_intensity: 0,
+            bruker_watershed_min_centroid_total: 0,
+            bruker_watershed_max_tof_offset: default_bruker_watershed_max_tof_offset(),
             bruker_noise_sigma: None,
             noise_filter_sigma: None,
             decoy_mode: false,
             ms2_hills_enabled: false,
+            adaptive_mz_tolerance: false,
+            adaptive_mz_tolerance_pass1_multiplier: default_adaptive_mz_tolerance_pass1_multiplier(),
+            adaptive_mz_tolerance_sigma_mult: default_adaptive_mz_tolerance_sigma_mult(),
+            mz_uncertainty_mode: MzUncertaintyMode::Off,
+            mz_uncertainty_sigma_mult: default_mz_uncertainty_sigma_mult(),
         }
     }
+}
+
+fn default_adaptive_mz_tolerance_pass1_multiplier() -> f64 {
+    2.0
+}
+
+fn default_adaptive_mz_tolerance_sigma_mult() -> f64 {
+    3.0
+}
+
+fn default_mz_uncertainty_sigma_mult() -> f64 {
+    3.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,10 +236,36 @@ pub struct HillsConfig {
     /// 0 = no averaging (gap-fill only). Ignored when smoothing_enabled is false.
     #[serde(default = "default_smoothing_window")]
     pub smoothing_window: usize,
+    /// Drop "large baseline-like" hills before isotope chain assembly.
+    /// A hill is dropped when its scan length ≥ `large_hill_min_scans` AND
+    /// `max(unsmoothed) / smoothed_endpoint < large_hill_peak_factor` on
+    /// either end — i.e., the intensity profile lacks a clear apex.
+    /// Catches column-bleed contaminants, plasticizers, and baseline
+    /// drift centroids that masquerade as hills. Default `false` for
+    /// backward compatibility. Ported from AlphaPept's `filter_hills`.
+    #[serde(default)]
+    pub filter_large_baseline_hills: bool,
+    /// Minimum scan span for a hill to be considered for the
+    /// baseline-hill filter. Default 40.
+    #[serde(default = "default_large_hill_min_scans")]
+    pub large_hill_min_scans: usize,
+    /// Required ratio of `max(intensity_profile)` to the smoothed
+    /// endpoint intensity. A clear chromatographic peak easily exceeds
+    /// this; a flat baseline trace fails. Default 2.0.
+    #[serde(default = "default_large_hill_peak_factor")]
+    pub large_hill_peak_factor: f64,
 }
 
 fn default_smoothing_window() -> usize {
     1
+}
+
+fn default_large_hill_min_scans() -> usize {
+    40
+}
+
+fn default_large_hill_peak_factor() -> f64 {
+    2.0
 }
 
 fn default_global_min_mz() -> f64 {
@@ -157,20 +276,32 @@ fn default_global_max_mz() -> f64 {
     f64::INFINITY
 }
 
-fn default_bruker_im_smoothing() -> usize {
+fn default_bruker_filter_mz_half_width() -> u32 {
     2
 }
 
-fn default_bruker_mz_smoothing() -> usize {
+fn default_bruker_filter_max_internal_gap() -> usize {
     1
 }
 
-fn default_bruker_satellite_window() -> f64 {
-    0.15
+fn default_bruker_filter_min_feature_length() -> usize {
+    5
 }
 
-fn default_bruker_satellite_end_fraction() -> f64 {
-    0.3
+fn default_bruker_filter_num_iterations() -> usize {
+    1
+}
+
+fn default_bruker_watershed_box_scan() -> u32 {
+    10
+}
+
+fn default_bruker_watershed_box_mz_idx() -> u32 {
+    3
+}
+
+fn default_bruker_watershed_max_tof_offset() -> u32 {
+    10
 }
 
 fn default_min_prominence() -> f64 {
@@ -189,6 +320,9 @@ impl Default for HillsConfig {
             lfc_weight: 0.5,
             smoothing_enabled: false,
             smoothing_window: 1,
+            filter_large_baseline_hills: false,
+            large_hill_min_scans: default_large_hill_min_scans(),
+            large_hill_peak_factor: default_large_hill_peak_factor(),
         }
     }
 }

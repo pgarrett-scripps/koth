@@ -43,6 +43,23 @@ struct Args {
     #[arg(long)]
     ms2: bool,
 
+    /// Enable two-pass empirical m/z tolerance calibration. Overrides the
+    /// `file.adaptive_mz_tolerance` config setting when set. See
+    /// `example_config.toml` for the full algorithm.
+    #[arg(long)]
+    adaptive: bool,
+
+    /// Enable Kish per-hill mass-uncertainty for isotope-chain extension.
+    /// Overrides `file.mz_uncertainty_mode` to `Kish` when set.
+    #[arg(long)]
+    kish: bool,
+
+    /// Drop large baseline-like hills (≥40 scans without a clear apex).
+    /// Overrides `hills.filter_large_baseline_hills` when set. Targets
+    /// column bleed / solvent ions / plasticizer contamination.
+    #[arg(long)]
+    filter_baseline_hills: bool,
+
     /// Log level: error, warn, info, debug, trace (default: info)
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -63,6 +80,15 @@ fn main() -> anyhow::Result<()> {
     };
     if args.ms2 {
         config.file.ms2_hills_enabled = true;
+    }
+    if args.adaptive {
+        config.file.adaptive_mz_tolerance = true;
+    }
+    if args.kish {
+        config.file.mz_uncertainty_mode = koth_ff::config::MzUncertaintyMode::Kish;
+    }
+    if args.filter_baseline_hills {
+        config.hills.filter_large_baseline_hills = true;
     }
 
     let file_stem = args

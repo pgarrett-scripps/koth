@@ -36,7 +36,7 @@ pub mod scoring;
 
 use std::path::Path;
 
-use config::{FeaturesConfig, FileConfig, HillsConfig, ScoringConfig};
+use config::{FeaturesConfig, FileConfig, HillsConfig, ScoringConfig, ToleranceType};
 use error::KothError;
 use models::{Feature, Hill, ScoredFeature, Spectrum};
 use rand::seq::SliceRandom;
@@ -92,6 +92,12 @@ pub fn run_ms2_hills_streaming(
 }
 
 fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
+    let effective_file = match maybe_calibrate(path, config, file)? {
+        Some(f) => std::borrow::Cow::Owned(f),
+        None => std::borrow::Cow::Borrowed(file),
+    };
+    let file = effective_file.as_ref();
+
     #[cfg(feature = "tdf")]
     {
         if path.extension().and_then(|e| e.to_str()) == Some("d") || path.is_dir() {
@@ -123,6 +129,113 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
         log::info!("Streaming hill detection from {}", path.display());
         Ok(hills::detect_hills_from_iter(iter, config, file))
     }
+}
+
+/// If `adaptive_mz_tolerance` is enabled and the tolerance is ppm-typed,
+/// run a wide-tolerance pass-1 sweep to gather the empirical ppm-delta
+/// distribution and return a `FileConfig` whose `mz_tolerance` has been
+/// replaced with `min(median + sigma_mult × σ, pass1_ceiling)`.
+///
+/// Returns `Ok(None)` when calibration is disabled or not applicable
+/// (Dalton tolerances, decoy mode where shuffled spectra wouldn't give a
+/// real-signal distribution, or when too few samples were recorded to
+/// compute a meaningful σ).
+fn maybe_calibrate(
+    path: &Path,
+    config: &HillsConfig,
+    file: &FileConfig,
+) -> Result<Option<FileConfig>, KothError> {
+    if !file.adaptive_mz_tolerance {
+        return Ok(None);
+    }
+    if !matches!(file.mz_tolerance_type, ToleranceType::Ppm) {
+        log::warn!(
+            "adaptive_mz_tolerance is enabled but mz_tolerance_type is not Ppm — skipping calibration"
+        );
+        return Ok(None);
+    }
+    if file.decoy_mode {
+        log::info!(
+            "Decoy mode active — skipping adaptive m/z tolerance calibration (shuffled spectra would skew the distribution)"
+        );
+        return Ok(None);
+    }
+
+    let pass1_multiplier = file.adaptive_mz_tolerance_pass1_multiplier.max(1.0);
+    let pass1_ceiling = file.mz_tolerance * pass1_multiplier;
+    let mut pass1_file = file.clone();
+    pass1_file.mz_tolerance = pass1_ceiling;
+    // Disable adaptive in the pass-1 file so we don't recurse.
+    pass1_file.adaptive_mz_tolerance = false;
+
+    let calibrated = calibrate_streaming(path, config, &pass1_file)?;
+    let Some((calibrated_ppm, n_samples)) = calibrated else {
+        log::warn!(
+            "Adaptive m/z calibration: insufficient samples to compute σ — keeping user-set tolerance {:.2} ppm",
+            file.mz_tolerance
+        );
+        return Ok(None);
+    };
+
+    let final_ppm = calibrated_ppm.min(pass1_ceiling);
+    log::info!(
+        "Adaptive m/z tolerance: user-set {:.2} ppm, pass-1 ceiling {:.2} ppm, calibrated median+σ → {:.2} ppm (n={} samples)",
+        file.mz_tolerance,
+        pass1_ceiling,
+        final_ppm,
+        n_samples
+    );
+
+    let mut out = file.clone();
+    out.mz_tolerance = final_ppm;
+    // Disable adaptive in the returned config so downstream doesn't re-run.
+    out.adaptive_mz_tolerance = false;
+    Ok(Some(out))
+}
+
+/// Pass-1 sweep that returns `(calibrated_ppm, n_samples)` if enough
+/// matches landed in the histogram, else `None`.
+fn calibrate_streaming(
+    path: &Path,
+    config: &HillsConfig,
+    file: &FileConfig,
+) -> Result<Option<(f64, u64)>, KothError> {
+    use hills::detector::HillDetector;
+
+    let sigma_mult = file.adaptive_mz_tolerance_sigma_mult;
+    let noise_sigma = file.noise_filter_sigma;
+
+    // Branch on input format. For Bruker we already buffer the spectra
+    // (timsrust has no streaming API), so the pass-1 + pass-2 cost is
+    // bounded by `2× detect_hills` over the same Vec. For mzML, pass 1
+    // streams the file directly and discards everything except the
+    // ppm-delta histogram.
+    #[cfg(feature = "tdf")]
+    {
+        if path.extension().and_then(|e| e.to_str()) == Some("d") || path.is_dir() {
+            let spectra = io::read_spectra(path, file)?;
+            let mut det = HillDetector::new(config, file).with_calibration_recording();
+            for mut spec in spectra {
+                if let Some(sigma) = noise_sigma {
+                    hills::noise::filter_spectrum(&mut spec, sigma);
+                }
+                det.process_scan(&spec);
+            }
+            let n = det.calibration_sample_count();
+            return Ok(det.calibrated_tolerance_ppm(sigma_mult).map(|p| (p, n)));
+        }
+    }
+
+    let iter = io::mzml::stream_mzml(path)?;
+    let mut det = HillDetector::new(config, file).with_calibration_recording();
+    for mut spec in iter {
+        if let Some(sigma) = noise_sigma {
+            hills::noise::filter_spectrum(&mut spec, sigma);
+        }
+        det.process_scan(&spec);
+    }
+    let n = det.calibration_sample_count();
+    Ok(det.calibrated_tolerance_ppm(sigma_mult).map(|p| (p, n)))
 }
 
 /// Stage 2: Detect isotope features from hills.

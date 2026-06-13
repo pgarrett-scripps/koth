@@ -1,5 +1,7 @@
 pub mod active;
+pub mod calibration;
 pub mod detector;
+pub mod filter;
 pub mod noise;
 pub mod smooth;
 pub mod split;
@@ -70,6 +72,14 @@ where
             config.min_prominence,
         );
         log::info!("{} hills after co-elution splitting", hills.len());
+    }
+
+    if config.filter_large_baseline_hills {
+        hills = filter::filter_large_baseline_hills(
+            hills,
+            config.large_hill_min_scans,
+            config.large_hill_peak_factor,
+        );
     }
 
     assign_hill_ids(&mut hills);
@@ -153,6 +163,13 @@ where
                 config.min_peak_height,
                 config.min_scans,
                 config.min_prominence,
+            );
+        }
+        if config.filter_large_baseline_hills {
+            window_hills = filter::filter_large_baseline_hills(
+                window_hills,
+                config.large_hill_min_scans,
+                config.large_hill_peak_factor,
             );
         }
         hills.extend(window_hills);

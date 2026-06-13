@@ -24,6 +24,7 @@ crate-type = ["rlib"]
 mzdata     = { workspace = true }
 flate2     = "1"
 timsrust   = { workspace = true, optional = true }
+dnoise     = { path = "../../d_noise", default-features = false, optional = true }
 rayon      = { workspace = true }
 csv        = { workspace = true }
 serde      = { workspace = true }
@@ -40,4 +41,4 @@ rand       = { workspace = true }
 
 [features]
 default = ["tdf"]
-tdf = ["timsrust"]
+tdf = ["dep:timsrust", "dep:dnoise"]

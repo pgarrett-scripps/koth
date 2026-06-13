@@ -105,6 +105,12 @@ pub fn split_hill(
             hill_id: 0, // re-assigned by `assign_hill_ids` after splitting
             mz: hill.mz,
             mz_std: hill.mz_std,
+            // SE inherited from the parent hill. A split sub-hill has fewer
+            // contributing scans than the parent, so its true SE would be
+            // larger by √(n_parent / n_sub), but the raw peak data isn't
+            // retained past finalization. Inheritance is a conservative
+            // under-estimate that keeps Kish-aware chain extension functional.
+            mz_se: hill.mz_se,
             rt: rt_apex,
             rt_start,
             rt_end,

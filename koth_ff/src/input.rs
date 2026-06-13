@@ -42,6 +42,8 @@ struct HillRow {
     hill_id: Option<u64>,
     mz: f64,
     mz_std: f64,
+    #[serde(default)]
+    mz_se: f64,
     rt: f64,
     rt_start: f64,
     rt_end: f64,
@@ -99,6 +101,7 @@ pub fn read_hills_tsv(path: &Path) -> Result<Vec<Hill>, KothError> {
             hill_id: row.hill_id.unwrap_or(row_idx as u64),
             mz: row.mz,
             mz_std: row.mz_std,
+            mz_se: row.mz_se,
             rt: row.rt,
             rt_start: row.rt_start,
             rt_end: row.rt_end,
@@ -177,6 +180,7 @@ fn scored_feature_from_row(row: FeatureRow, theoretical_pattern: Vec<f64>) -> Sc
         hill_id: 0,
         mz: raw_mz,
         mz_std: 0.0,
+        mz_se: 0.0,
         rt: row.rt_apex,
         rt_start: row.rt_start,
         rt_end: row.rt_end,
@@ -271,6 +275,10 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
 
         let mz_col = f64_col!("mz");
         let mz_std_col = f64_col!("mz_std");
+        // mz_se was added later; tolerate older parquets by defaulting to 0.
+        let mz_se_col = batch
+            .column_by_name("mz_se")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
         let rt_col = f64_col!("rt");
         let rt_start_col = f64_col!("rt_start");
         let rt_end_col = f64_col!("rt_end");
@@ -321,6 +329,7 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
                 hill_id,
                 mz: mz_col.value(i),
                 mz_std: mz_std_col.value(i),
+                mz_se: mz_se_col.map(|c| c.value(i)).unwrap_or(0.0),
                 rt: rt_col.value(i),
                 rt_start: rt_start_col.value(i),
                 rt_end: rt_end_col.value(i),
@@ -424,6 +433,7 @@ pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothErro
                 hill_id: 0,
                 mz: raw_mz,
                 mz_std: 0.0,
+                mz_se: 0.0,
                 rt: rt_apex_col.value(i),
                 rt_start: rt_start_col.value(i),
                 rt_end: rt_end_col.value(i),

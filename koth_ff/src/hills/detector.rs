@@ -5,7 +5,17 @@ use crate::config::{FileConfig, HillsConfig, ImToleranceType, ToleranceType};
 use crate::models::{Hill, Spectrum};
 
 use super::active::ActiveHill;
+use super::calibration::MzDeltaHistogram;
 use super::smooth;
+
+/// Upper edge of the ppm-delta histogram used during adaptive-tolerance
+/// calibration. 50 ppm is loose enough to capture even mis-calibrated
+/// instruments; samples beyond it land in the overflow bucket and are
+/// excluded from the median/σ calculation.
+const CALIBRATION_HIST_MAX_PPM: f64 = 50.0;
+/// Histogram bin width. 0.01 ppm gives 5000 bins (~20 KB) — plenty of
+/// resolution for sub-ppm calibration.
+const CALIBRATION_HIST_BIN_PPM: f64 = 0.01;
 
 pub struct HillDetector {
     min_mz: f64,
@@ -33,6 +43,9 @@ pub struct HillDetector {
     intensity_sorted: Vec<(f64, usize)>,
     /// Per-scan claimed-peak flags; resized each scan to reuse allocation.
     claimed_peaks: Vec<bool>,
+    /// Histogram of accepted peak-to-hill |ppm| deltas, populated only
+    /// when adaptive-tolerance calibration is enabled (pass 1).
+    mz_delta_histogram: Option<MzDeltaHistogram>,
 }
 
 impl HillDetector {
@@ -69,6 +82,7 @@ impl HillDetector {
             scan_idx: 0,
             intensity_sorted: Vec::new(),
             claimed_peaks: Vec::new(),
+            mz_delta_histogram: None,
         }
     }
 
@@ -76,6 +90,37 @@ impl HillDetector {
     pub fn with_isolation_window(mut self, iw: crate::models::IsolationWindow) -> Self {
         self.isolation_window = Some(iw);
         self
+    }
+
+    /// Enable ppm-delta recording on every accepted peak-to-hill match.
+    /// Use during a pass-1 sweep to gather the calibration distribution,
+    /// then call `calibrated_tolerance_ppm` after `finish` (or before) to
+    /// derive the pass-2 tolerance.
+    pub fn with_calibration_recording(mut self) -> Self {
+        self.mz_delta_histogram = Some(MzDeltaHistogram::new(
+            CALIBRATION_HIST_MAX_PPM,
+            CALIBRATION_HIST_BIN_PPM,
+        ));
+        self
+    }
+
+    /// Median + `sigma_mult × σ` of the recorded ppm-deltas, in ppm.
+    /// Returns `None` if calibration recording was not enabled or fewer
+    /// than two samples landed in range.
+    pub fn calibrated_tolerance_ppm(&self, sigma_mult: f64) -> Option<f64> {
+        self.mz_delta_histogram
+            .as_ref()
+            .and_then(|h| h.calibrated_ppm(sigma_mult))
+    }
+
+    /// Total in-range ppm-delta samples recorded during pass 1. Useful for
+    /// logging and for deciding whether the calibration is statistically
+    /// meaningful before applying it.
+    pub fn calibration_sample_count(&self) -> u64 {
+        self.mz_delta_histogram
+            .as_ref()
+            .map(|h| h.count_in_range())
+            .unwrap_or(0)
     }
 
     pub fn process_scan(&mut self, spectrum: &Spectrum) {
@@ -193,6 +238,12 @@ impl HillDetector {
 
             if let Some(pk_idx) = best_peak_idx {
                 let peak = &spectrum.peaks[pk_idx];
+                if let Some(hist) = self.mz_delta_histogram.as_mut() {
+                    if hill_mz > 0.0 {
+                        let ppm = (peak.mz as f64 - hill_mz).abs() / hill_mz * 1e6;
+                        hist.record(ppm);
+                    }
+                }
                 self.active_hills
                     .get_mut(&hill_id)
                     .unwrap()
@@ -286,6 +337,7 @@ impl HillDetector {
         let apex_scan = hill.scan_start + apex_idx;
         let mz_mean = hill.mz_weighted_mean();
         let mz_std = hill.mz_weighted_std();
+        let mz_se = hill.mz_kish_se();
         let im_mean = hill.im_weighted_mean();
         let im_std = hill.im_weighted_std();
         let rt_start = hill.min_rt();
@@ -304,6 +356,7 @@ impl HillDetector {
             hill_id: 0, // filled in by `assign_hill_ids` after splitting
             mz: mz_mean,
             mz_std,
+            mz_se,
             rt: rt_apex,
             rt_start,
             rt_end,
@@ -405,6 +458,45 @@ mod tests {
         let hills = det.finish();
         assert_eq!(hills.len(), 1, "expected 1 bridged hill, got {}", hills.len());
         assert_eq!(hills[0].skipped_scans, 1);
+    }
+
+    /// Calibration recording: when `with_calibration_recording` is set,
+    /// every accepted peak-to-hill match contributes one |ppm| delta to
+    /// the histogram. A clean signal (same m/z every scan) lands at 0 ppm
+    /// so the calibrated tolerance approaches 0 — the calibration loop
+    /// has nothing to widen against.
+    #[test]
+    fn calibration_records_zero_ppm_for_constant_signal() {
+        let (h, f) = default_cfgs(0);
+        let mut det = HillDetector::new(&h, &f).with_calibration_recording();
+        for i in 0..10 {
+            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
+        }
+        // 9 accepted matches (peak in scans 1..9 each match the hill
+        // started in scan 0). All are at exactly 500.0 m/z so |ppm|=0.
+        assert_eq!(det.calibration_sample_count(), 9);
+        let cal = det.calibrated_tolerance_ppm(3.0).unwrap();
+        assert!(cal < 0.1, "expected calibrated ~0, got {cal}");
+    }
+
+    /// Calibration with a drift: m/z walks up by ~1 ppm per scan. The
+    /// histogram median + 3σ should land somewhere comfortably above 0
+    /// (the drift magnitude × sigma_mult).
+    #[test]
+    fn calibration_widens_for_drifting_signal() {
+        let (h, f) = default_cfgs(0);
+        let mut det = HillDetector::new(&h, &f).with_calibration_recording();
+        // 1 ppm/scan walk on a 500 Da peak = +0.0005 Da/scan.
+        for i in 0..20 {
+            let mz = 500.0 + (i as f32) * 5e-4;
+            det.process_scan(&spec(i, i as f64 * 0.1, &[mz]));
+        }
+        assert!(det.calibration_sample_count() > 0);
+        let cal = det.calibrated_tolerance_ppm(3.0).unwrap();
+        assert!(
+            cal > 0.5,
+            "expected calibrated > 0.5 ppm for drifting signal, got {cal}"
+        );
     }
 
     /// With `max_gap = 1`, two consecutive missed scans must split the hill.

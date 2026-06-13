@@ -26,27 +26,36 @@ intensity_coverage = 1.0
 # Number of threads (omit or set to 0 to use all available CPUs)
 # n_threads = 8
 
-# Bruker .d centroiding parameters
-bruker_mz_ppm = 5.0
-bruker_im_pct = 3.0
-# Minimum raw subpeaks required to emit a centroided peak (1 = keep all, 2+ filters noise)
-bruker_min_subpeaks = 1
+# Bruker .d pipeline: vertical-IM filter (Stage 1) + watershed centroider
+# (Stage 3). Tolerances are in integer TOF-index and scan-number units —
+# everything runs on the raw integer cloud before m/z / 1/K0 conversion.
 
-# Raw-cloud smoothing in TOF/scan-index space, applied before m/z and 1/K0
-# conversion. Half-window units; full window = 2*N + 1. Real signal clusters
-# along these axes and reinforces under the rolling average; random noise gets
-# dispersed. Set to 0 to disable a given axis.
-bruker_im_smoothing_window = 2   # scan-index axis (full window 5)
-bruker_mz_smoothing_window = 1   # TOF-index axis  (full window 3)
+# Stage 1: vertical-IM feature filter. Walks each TOF column, sums intensities
+# across the ±half_width window into a per-scan profile, finds runs of
+# "occupied" scans (with internal-gap closing), and keeps only points whose
+# scan falls in a run that clears both the length and total-intensity floors.
+# Each pass re-applies the filter to the prior pass's survivors.
+bruker_filter_mz_half_width = 2       # TOF-index half-width of the column window
+bruker_filter_max_internal_gap = 1    # max consecutive empty scans tolerated inside a run
+bruker_filter_min_feature_length = 5  # minimum kept-run span (gap-inclusive), in scans
+bruker_filter_min_window_intensity = 0     # per-scan summed-intensity floor for "occupied"
+bruker_filter_min_feature_intensity = 0    # total summed intensity over the run span
+bruker_filter_num_iterations = 1      # how many passes to run
 
-# Satellite-peak suppression: after each centroid is emitted, raw peaks within
-# +/- bruker_satellite_window_da of the centroid that fall under a linear ramp
-# starting at the anchor's raw intensity (d=0) and ending at
-# anchor * bruker_satellite_end_fraction (d=window) are marked used so they
-# cannot seed their own centroids. Kills "shadow" wiggles next to real peaks.
-# Set window to 0.0 to disable.
-bruker_satellite_window_da = 0.15
-bruker_satellite_end_fraction = 0.3
+# Stage 3: watershed centroider. Processes points in descending intensity
+# order; each point joins the group of its nearest in-box assigned neighbour
+# (Manhattan distance, ±box_scan × ±box_mz_idx). Points with no in-box
+# neighbour become new seeds iff their intensity >= min_seed_intensity;
+# otherwise they are dropped as orphans. Centroids whose group total falls
+# below min_centroid_total are discarded.
+bruker_watershed_box_scan = 10        # nearest-neighbour reach (scans)
+bruker_watershed_box_mz_idx = 3       # nearest-neighbour reach (TOF indices)
+bruker_watershed_min_seed_intensity = 0
+bruker_watershed_min_centroid_total = 0
+# Hard cap on how far (TOF-index units) any group member can sit from that
+# group's seed. Prevents a long follower chain from extending past the real
+# peak's TOF edge. ±10 indices is a sensible default for typical timsTOF data.
+bruker_watershed_max_tof_offset = 10
 
 # Per-frame iterative MAD noise filter applied to the centroided peaks before
 # the Bruker reader emits a Spectrum. Same algorithm as `noise_filter_sigma`
@@ -66,6 +75,31 @@ bruker_satellite_end_fraction = 0.3
 # hills. mzML only — Bruker .d MS2 frames are not yet supported.
 # Can also be enabled at the command line with --ms2.
 ms2_hills_enabled = true
+
+# Two-pass empirical m/z tolerance calibration (inspired by AlphaPept). When
+# enabled, koth_ff runs hill detection twice: pass 1 uses a widened tolerance
+# (mz_tolerance × pass1_multiplier) and records the absolute ppm-delta of
+# every accepted peak-to-hill match; pass 2 then uses
+# `min(median + sigma_mult × σ, mz_tolerance × pass1_multiplier)` as the
+# calibrated tolerance. Removes the "what's the right ppm?" tuning question
+# at the cost of a roughly 2× hill-detection wall-clock. Only honoured when
+# mz_tolerance_type = "ppm" and decoy_mode = false.
+# adaptive_mz_tolerance = false
+# adaptive_mz_tolerance_pass1_multiplier = 2.0
+# adaptive_mz_tolerance_sigma_mult = 3.0
+
+# Per-hill mass-uncertainty model for isotope-chain extension. Inspired by
+# AlphaPept's bootstrap mass uncertainty, replaced with the closed-form
+# Kish-effective standard error (essentially free; equivalent for unimodal
+# distributions). Each hill stores `mz_se` = `mz_weighted_std / √neff`, where
+# `neff = (Σintensity)² / Σintensity²`. Chain extension then combines the
+# instrument tolerance with both endpoints' SEs in quadrature:
+#   tol² = mz_tolerance² + (σ_mult × se_ref)² + (σ_mult × se_cand)²
+# Hills with confident m/z get the legacy-tight window; sparse / skewed hills
+# get a wider window, recovering low-S/N peptides that flat tolerance excluded.
+# Modes: "off" (default, legacy behaviour) or "kish".
+# mz_uncertainty_mode = "off"
+# mz_uncertainty_sigma_mult = 3.0
 
 [hills]
 # Minimum number of scans a hill must span
@@ -99,6 +133,17 @@ smoothing_enabled = false
 # Half-width of the smoothing window. Total window = 2 * smoothing_window + 1 scans.
 # 0 = gap-fill only (no averaging). Ignored when smoothing_enabled is false.
 smoothing_window = 1
+
+# Drop "large baseline-like" hills before isotope-chain assembly. Inspired by
+# AlphaPept's filter_hills / check_large_hills. A hill is dropped when its scan
+# span >= large_hill_min_scans AND its unsmoothed max isn't >= large_hill_peak_factor
+# times the smoothed intensity at *both* endpoints — i.e., the profile lacks a
+# clear chromatographic apex. Catches column-bleed contaminants, plasticizers,
+# and baseline-drift centroids that masquerade as hills. Default off for
+# backward compatibility; flip on with `--filter-baseline-hills` to test.
+# filter_large_baseline_hills = false
+# large_hill_min_scans = 40
+# large_hill_peak_factor = 2.0
 
 [features]
 # Charge state range to consider

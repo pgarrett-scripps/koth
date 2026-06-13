@@ -2,10 +2,17 @@ pub mod cosine;
 
 use std::cmp::Ordering;
 
-use crate::config::{FeaturesConfig, FileConfig, ImToleranceType, ToleranceType};
+use crate::config::{FeaturesConfig, FileConfig, ImToleranceType, MzUncertaintyMode, ToleranceType};
 use crate::models::{Feature, Hill};
 use crate::scoring::averagine;
 use cosine::cosine_similarity;
+
+/// When `mz_uncertainty_mode = Kish`, the binary-search window is widened
+/// by this factor so candidates with high `mz_se` that pass the exact
+/// combined-tolerance check below aren't pre-filtered out. The exact
+/// check inside `find_neighbors` then rejects anything outside the
+/// per-candidate Kish-combined window.
+const KISH_SEARCH_EXPANSION: f64 = 4.0;
 
 struct Candidate {
     hill_indices: Vec<usize>, // indices into sorted_hills, lowest mz first
@@ -174,6 +181,8 @@ fn generate_best_candidate(
     } else {
         file.mz_tolerance
     };
+    let kish_on = matches!(file.mz_uncertainty_mode, MzUncertaintyMode::Kish);
+    let sigma_mult = file.mz_uncertainty_sigma_mult;
 
     let mut best = Candidate {
         hill_indices: vec![seed_idx],
@@ -213,14 +222,22 @@ fn generate_best_candidate(
                 &exclude,
                 file,
                 use_im,
+                kish_on,
+                sigma_mult,
             );
             if cands.is_empty() {
                 break;
             }
 
+            // Cosine vs the immediate predecessor in the chain (ref_hill),
+            // not vs the seed. For M+1 the predecessor IS the seed; for
+            // M+k≥2 it's the previously-claimed isotope hill. Verifies
+            // adjacent isotopes co-elute, which is the actual physical
+            // constraint — chains drift in S/N from the seed as you go
+            // out, so a seed-anchored cosine over-rejects far isotopes.
             let (best_c, best_cos) = cands
                 .iter()
-                .map(|&c| (c, cosine_similarity(sorted_hills[seed_idx], sorted_hills[c])))
+                .map(|&c| (c, cosine_similarity(ref_hill, sorted_hills[c])))
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                 .unwrap();
 
@@ -260,14 +277,22 @@ fn generate_best_candidate(
                 &exclude,
                 file,
                 use_im,
+                kish_on,
+                sigma_mult,
             );
             if cands.is_empty() {
                 break;
             }
 
+            // Cosine vs the immediate predecessor in the chain (ref_hill),
+            // not vs the seed. For M+1 the predecessor IS the seed; for
+            // M+k≥2 it's the previously-claimed isotope hill. Verifies
+            // adjacent isotopes co-elute, which is the actual physical
+            // constraint — chains drift in S/N from the seed as you go
+            // out, so a seed-anchored cosine over-rejects far isotopes.
             let (best_c, best_cos) = cands
                 .iter()
-                .map(|&c| (c, cosine_similarity(sorted_hills[seed_idx], sorted_hills[c])))
+                .map(|&c| (c, cosine_similarity(ref_hill, sorted_hills[c])))
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                 .unwrap();
 
@@ -391,15 +416,31 @@ fn find_neighbors(
     exclude_indices: &[usize],
     file: &FileConfig,
     use_im: bool,
+    kish_on: bool,
+    sigma_mult: f64,
 ) -> Vec<usize> {
-    let lo = mz_array.partition_point(|&x| x < target_mz - mz_tol);
-    let hi = mz_array.partition_point(|&x| x <= target_mz + mz_tol);
+    // Binary-search window: the flat tolerance by default; widened by
+    // KISH_SEARCH_EXPANSION when Kish is on so candidates whose own SE
+    // pushes the combined window beyond `mz_tol` aren't pre-filtered out.
+    // The exact Kish check inside the loop still rejects anything outside
+    // the per-candidate combined tolerance.
+    let search_window = if kish_on {
+        mz_tol * KISH_SEARCH_EXPANSION
+    } else {
+        mz_tol
+    };
+
+    let lo = mz_array.partition_point(|&x| x < target_mz - search_window);
+    let hi = mz_array.partition_point(|&x| x <= target_mz + search_window);
 
     if lo >= hi {
         return Vec::new();
     }
 
     let min_intensity = ref_hill.intensity_max * max_decrease;
+    let ref_se_term = if kish_on { sigma_mult * ref_hill.mz_se } else { 0.0 };
+    let base_tol_sq = mz_tol * mz_tol;
+    let ref_se_sq = ref_se_term * ref_se_term;
 
     (lo..hi)
         .filter(|&i| {
@@ -415,6 +456,16 @@ fn find_neighbors(
                     ImToleranceType::Relative => ref_hill.im.max(im_array[i]) * file.im_tolerance,
                 };
                 if (im_array[i] - ref_hill.im).abs() > im_tol {
+                    return false;
+                }
+            }
+            if kish_on {
+                // Combined-quadrature tolerance:
+                //   tol² = mz_tol² + (σ·se_ref)² + (σ·se_cand)²
+                let cand_se_term = sigma_mult * sorted_hills[i].mz_se;
+                let tol_sq = base_tol_sq + ref_se_sq + cand_se_term * cand_se_term;
+                let delta = mz_array[i] - target_mz;
+                if delta * delta > tol_sq {
                     return false;
                 }
             }
