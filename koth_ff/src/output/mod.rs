@@ -8,6 +8,69 @@ use std::path::Path;
 use crate::error::KothError;
 use crate::models::{Hill, ScoredFeature};
 
+/// Alternative quant estimators derived from a feature's per-scan elution
+/// profile (the total-across-isotopes intensity at each scan — the same source
+/// as `intensityApex` = max and `intensitySum` = sum). Returns
+/// `(apex_parabolic, scattered5, consec5)`:
+///   * `apex_parabolic` — peak height refined by 3-point parabolic
+///     interpolation around the max scan (standard MS centroiding). Removes
+///     scan-grid-alignment jitter from the raw apex; falls back to the raw
+///     apex when there is no concave-down interior maximum.
+///   * `scattered5` — sum of the 5 highest scans (or all scans if fewer). A
+///     robust peak-top area that ignores noisy flanks/tails and dodges dips.
+///   * `consec5` — max sum over contiguous windows of length min(5, n). The
+///     contiguous-window analogue of `scattered5`.
+/// These accompany the conventional `intensityApex` / `intensitySum` so the
+/// LFQ layer can compare quant readouts (see SI estimator comparison).
+fn quant_variants(profile: &[f64]) -> (f64, f64, f64) {
+    if profile.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let n = profile.len();
+
+    // argmax
+    let mut i_max = 0;
+    for (i, &v) in profile.iter().enumerate() {
+        if v > profile[i_max] {
+            i_max = i;
+        }
+    }
+
+    // parabolic-refined apex (vertex of the parabola through the 3 points
+    // around the max). Only when the fit is concave-down (denom < 0).
+    let apex_parab = if i_max > 0 && i_max + 1 < n {
+        let (y0, y1, y2) = (profile[i_max - 1], profile[i_max], profile[i_max + 1]);
+        let denom = y0 - 2.0 * y1 + y2;
+        if denom < 0.0 {
+            y1 - 0.125 * (y2 - y0).powi(2) / denom
+        } else {
+            y1
+        }
+    } else {
+        profile[i_max]
+    };
+
+    // scattered top-5: sum of the 5 largest scans.
+    let k = n.min(5);
+    let mut sorted = profile.to_vec();
+    sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let scattered5: f64 = sorted[..k].iter().sum();
+
+    // consecutive-5: max sum over contiguous windows of length min(5, n),
+    // via a sliding window.
+    let w = n.min(5);
+    let mut window: f64 = profile[..w].iter().sum();
+    let mut consec5 = window;
+    for j in w..n {
+        window += profile[j] - profile[j - w];
+        if window > consec5 {
+            consec5 = window;
+        }
+    }
+
+    (apex_parab, scattered5, consec5)
+}
+
 /// Write hills to a TSV file.
 ///
 /// Column order matches the Python zenith_feature_finder hills.tsv exactly.
@@ -157,6 +220,9 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
         "isotope_profile",
         "elution_profile",
         "hill_ids",
+        "intensityApexParab",
+        "intensityScattered5",
+        "intensityConsec5",
     ])?;
 
     for sf in &scored {
@@ -179,6 +245,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
 
         let (min_scan, max_scan, elution_vec) = f.elution_profile();
         let _ = (min_scan, max_scan);
+        let (apex_parab, scattered5, consec5) = quant_variants(&elution_vec);
         let isotope_profile = f.isotope_profile_apex();
 
         let theo_json = serde_json::to_string(&sf.theoretical_pattern)?;
@@ -214,6 +281,9 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
             isotope_json,
             elution_json,
             hill_ids_json,
+            format!("{:.5e}", apex_parab),
+            format!("{:.5e}", scattered5),
+            format!("{:.5e}", consec5),
         ])?;
     }
 
@@ -378,6 +448,9 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         Field::new("isotope_profile",          DataType::Utf8,    false),
         Field::new("elution_profile",          DataType::Utf8,    false),
         Field::new("hill_ids",                 DataType::Utf8,    false),
+        Field::new("intensityApexParab",       DataType::Float64, false),
+        Field::new("intensityScattered5",      DataType::Float64, false),
+        Field::new("intensityConsec5",         DataType::Float64, false),
     ]));
 
     let n = scored.len();
@@ -401,6 +474,9 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
     let mut iso_json         = Vec::<String>::with_capacity(n);
     let mut elut_json        = Vec::<String>::with_capacity(n);
     let mut hill_ids_json    = Vec::<String>::with_capacity(n);
+    let mut apex_parab_col   = Vec::<f64>::with_capacity(n);
+    let mut scattered5_col   = Vec::<f64>::with_capacity(n);
+    let mut consec5_col      = Vec::<f64>::with_capacity(n);
 
     for sf in &scored {
         let f = &sf.feature;
@@ -423,6 +499,10 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
 
         let (_, _, elution_vec) = f.elution_profile();
         let iso_profile = f.isotope_profile_apex();
+        let (apex_parab, scattered5, consec5) = quant_variants(&elution_vec);
+        apex_parab_col.push(apex_parab);
+        scattered5_col.push(scattered5);
+        consec5_col.push(consec5);
 
         theo_json.push(serde_json::to_string(&sf.theoretical_pattern)?);
         iso_json.push(serde_json::to_string(&iso_profile)?);
@@ -453,6 +533,9 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         Arc::new(iso_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
         Arc::new(elut_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
         Arc::new(hill_ids_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
+        Arc::new(apex_parab_col.into_iter().collect::<Float64Array>()),
+        Arc::new(scattered5_col.into_iter().collect::<Float64Array>()),
+        Arc::new(consec5_col.into_iter().collect::<Float64Array>()),
     ];
 
     let batch = RecordBatch::try_new(schema.clone(), columns)

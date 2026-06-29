@@ -38,6 +38,7 @@ clap       = { workspace = true }
 arrow      = { workspace = true }
 parquet    = { workspace = true }
 rand       = { workspace = true }
+rustc-hash = "1"
 
 [features]
 default = ["tdf"]

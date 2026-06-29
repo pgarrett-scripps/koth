@@ -31,7 +31,7 @@ pub fn read_mzml(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 ///
 /// Spectra are yielded in file order (assumed to be RT order for standard
 /// LC-MS acquisitions). Each spectrum is dropped after the caller processes it.
-pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum>>, KothError> {
+pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> + Send>, KothError> {
     crate::mem::log_mem("before open_reader (stream_mzml)");
     Ok(Box::new(ms1_stream(open_reader(path)?)))
 }
@@ -41,7 +41,7 @@ pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum>>, Ko
 /// Only spectra with `ms_level == 2` and a parsable precursor isolation window
 /// are yielded. The `scan_index` on each yielded spectrum is its absolute
 /// position in the file, so callers can later re-index per-isolation-window.
-pub fn stream_mzml_ms2(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum>>, KothError> {
+pub fn stream_mzml_ms2(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> + Send>, KothError> {
     crate::mem::log_mem("before open_reader (stream_mzml_ms2)");
     Ok(Box::new(ms2_stream(open_reader(path)?)))
 }
@@ -52,7 +52,7 @@ pub fn stream_mzml_ms2(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum>>
 
 /// Boxed iterator over MultiLayerSpectrum that works for both compressed and
 /// uncompressed readers.
-type BoxedRawIter = Box<dyn Iterator<Item = MultiLayerSpectrum>>;
+type BoxedRawIter = Box<dyn Iterator<Item = MultiLayerSpectrum> + Send>;
 
 fn open_reader(path: &Path) -> Result<BoxedRawIter, KothError> {
     let name = path

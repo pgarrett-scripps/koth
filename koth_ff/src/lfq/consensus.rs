@@ -59,12 +59,23 @@ pub struct ConsensusFeature {
     pub seed_run_idx: usize,
     /// How many runs contributed at least one feature to this group.
     pub n_contributing_runs: usize,
+    /// For each run index in `runs`, the per-run feature index that joined this
+    /// group (highest combined_score among that run's contributing features) or
+    /// `None` if the run contributed nothing. Length = n_runs.
+    ///
+    /// Used by `lfq::quantify` to take the per-run feature's
+    /// `total_intensity()` directly for contributing runs, falling back to XIC
+    /// re-integration only for runs that did not contribute (MBR transfer).
+    pub per_run_feature: Vec<Option<u32>>,
 }
 
 /// Internal: one feature projected into reference-run coordinate space.
 /// `combined_score` is the seed-selection / filter axis (isotope × chromato cosine).
 struct ProjectedFeature {
     run_idx: usize,
+    /// Index into `runs[run_idx].features`. Carried through grouping so each
+    /// contributing run's feature intensity can be recovered downstream.
+    feature_idx: u32,
     ref_mz: f64,
     ref_rt: f64,
     ref_im: f64,
@@ -74,7 +85,7 @@ struct ProjectedFeature {
     theoretical_pattern: Vec<f64>,
 }
 
-fn emit_group(projected: &[ProjectedFeature], group: &[usize]) -> ConsensusFeature {
+fn emit_group(projected: &[ProjectedFeature], group: &[usize], n_runs: usize) -> ConsensusFeature {
     // Keep best-combined-scoring feature per run to avoid double-counting split peaks.
     let mut best_per_run: HashMap<usize, usize> = HashMap::new();
     for &i in group {
@@ -85,17 +96,29 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize]) -> ConsensusFeatu
         }
     }
 
-    let deduped: Vec<usize> = best_per_run.values().copied().collect();
+    // Sort the deduped members before selecting the seed: `best_per_run.values()`
+    // iterates a HashMap in nondeterministic order, and `max_by` returns the
+    // *last* maximum, so on a combined_score tie the seed (and hence the group's
+    // m/z / RT, which drive the downstream merge) would flip run-to-run. Sorting
+    // by projected index gives a stable, deterministic tie-break.
+    let mut deduped: Vec<usize> = best_per_run.values().copied().collect();
+    deduped.sort_unstable();
     let seed_idx = *deduped
         .iter()
         .max_by(|&&a, &&b| {
             projected[a]
                 .combined_score
                 .partial_cmp(&projected[b].combined_score)
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap();
     let seed = &projected[seed_idx];
+
+    // Densify the per-run-feature map so downstream consumers can do O(1) lookup.
+    let mut per_run_feature: Vec<Option<u32>> = vec![None; n_runs];
+    for (&run_idx, &proj_i) in &best_per_run {
+        per_run_feature[run_idx] = Some(projected[proj_i].feature_idx);
+    }
 
     ConsensusFeature {
         ref_mz: seed.ref_mz,
@@ -107,6 +130,7 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize]) -> ConsensusFeatu
         seed_combined_score: seed.combined_score,
         seed_run_idx: seed.run_idx,
         n_contributing_runs: deduped.len(),
+        per_run_feature,
     }
 }
 
@@ -139,7 +163,7 @@ pub fn build_consensus(
     for (run_idx, run) in runs.iter().enumerate() {
         let is_reference = run_idx == alignment.reference_idx;
 
-        for feat in &run.features {
+        for (feat_idx, feat) in run.features.iter().enumerate() {
             if feat.feature.charge == 0
                 || feat.combined_score < config.consensus.min_member_combined_score
             {
@@ -166,6 +190,7 @@ pub fn build_consensus(
 
             projected.push(ProjectedFeature {
                 run_idx,
+                feature_idx: feat_idx as u32,
                 ref_mz,
                 ref_rt,
                 ref_im,
@@ -241,12 +266,12 @@ pub fn build_consensus(
         if same_charge && mass_ok && rt_ok && im_ok {
             group.push(i);
         } else {
-            push_if_passes(emit_group(&projected, &group), config, &mut consensus);
+            push_if_passes(emit_group(&projected, &group, runs.len()), config, &mut consensus);
             group.clear();
             group.push(i);
         }
     }
-    push_if_passes(emit_group(&projected, &group), config, &mut consensus);
+    push_if_passes(emit_group(&projected, &group, runs.len()), config, &mut consensus);
     log::info!(
         "[timing] consensus sweep ({} pre-merge groups): {:.2?}",
         consensus.len(),
@@ -376,7 +401,10 @@ fn merge_consensus(
         cluster_members.entry(root).or_default().push(i);
     }
 
-    // Collapse each cluster: best-scoring seed wins, contributing runs sum.
+    // Collapse each cluster: best-scoring seed wins; per_run_feature is the
+    // union across cluster members (per-run, prefer the member whose feature
+    // has the highest combined_score — approximated by seed score of the
+    // group that owned that run-slot).
     let mut merged: Vec<ConsensusFeature> = Vec::with_capacity(cluster_members.len());
     for (_, members) in cluster_members {
         if members.len() == 1 {
@@ -393,10 +421,31 @@ fn merge_consensus(
             })
             .unwrap();
         let mut out = groups[best].clone();
-        out.n_contributing_runs = members
-            .iter()
-            .map(|&k| groups[k].n_contributing_runs)
-            .sum();
+        // Union per_run_feature: for each run-slot that's None in `out`, take
+        // the first non-None entry from any other cluster member. Iterating
+        // members in score-descending order ensures we prefer higher-quality
+        // owner-groups when more than one member fills the same slot.
+        let mut order: Vec<usize> = members.clone();
+        order.sort_by(|&a, &b| {
+            groups[b]
+                .seed_combined_score
+                .partial_cmp(&groups[a].seed_combined_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for &k in &order {
+            if k == best {
+                continue;
+            }
+            let src = &groups[k].per_run_feature;
+            for (slot, dst) in out.per_run_feature.iter_mut().enumerate() {
+                if dst.is_none() {
+                    if let Some(v) = src.get(slot).and_then(|x| *x) {
+                        *dst = Some(v);
+                    }
+                }
+            }
+        }
+        out.n_contributing_runs = out.per_run_feature.iter().filter(|x| x.is_some()).count();
         merged.push(out);
     }
 

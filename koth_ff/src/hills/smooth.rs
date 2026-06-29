@@ -50,10 +50,22 @@ pub fn running_average(profile: &mut Vec<f32>, half_window: usize) {
     *profile = out;
 }
 
-/// Fill gaps then apply running average — the single entry point used by the detector.
-pub fn smooth_profile(profile: &mut Vec<f32>, half_window: usize) {
-    fill_gaps(profile);
-    running_average(profile, half_window);
+/// Optionally fill internal zero-gaps, then optionally apply a running average.
+/// Either flag is a no-op when false. The two operations are independent —
+/// callers select each by feature-config knob (`gap_fill_enabled` and
+/// `smoothing_enabled` respectively).
+pub fn apply_intensity_filters(
+    profile: &mut Vec<f32>,
+    gap_fill: bool,
+    smoothing: bool,
+    half_window: usize,
+) {
+    if gap_fill {
+        fill_gaps(profile);
+    }
+    if smoothing {
+        running_average(profile, half_window);
+    }
 }
 
 /// Monotonicity-fraction hill score (0–1, higher = more hill-like).

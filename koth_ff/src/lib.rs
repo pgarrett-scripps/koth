@@ -127,9 +127,18 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
         Ok(hills::detect_hills_from_iter(spectra.into_iter(), config, file))
     } else {
         log::info!("Streaming hill detection from {}", path.display());
+        // Decode the mzML (decompress + XML parse + peak extraction) on a
+        // background reader thread so it overlaps with `process_scan` on the
+        // consumer side. Order is preserved, so hill detection is unchanged.
+        let iter = io::prefetch::prefetch(iter, PREFETCH_CAPACITY);
         Ok(hills::detect_hills_from_iter(iter, config, file))
     }
 }
+
+/// Bounded look-ahead (in spectra) for the mzML reader thread. At ~1–2k peaks
+/// per MS1 scan this caps the prefetch buffer at a few MB while giving the
+/// consumer enough slack to stay busy across decode-time variance.
+const PREFETCH_CAPACITY: usize = 64;
 
 /// If `adaptive_mz_tolerance` is enabled and the tolerance is ppm-typed,
 /// run a wide-tolerance pass-1 sweep to gather the empirical ppm-delta
@@ -256,7 +265,11 @@ pub fn run_scoring(
     scoring_cfg: &ScoringConfig,
     features_cfg: &FeaturesConfig,
 ) -> Vec<ScoredFeature> {
-    let mut scored = scoring::score_features(features, scoring_cfg);
+    let mut scored = scoring::score_features(
+        features,
+        scoring_cfg,
+        features_cfg.sulfur_aware_scoring,
+    );
     let any_filter = features_cfg.min_isotope_score > 0.0
         || features_cfg.min_cosine_score > 0.0
         || features_cfg.min_combined_score > 0.0;

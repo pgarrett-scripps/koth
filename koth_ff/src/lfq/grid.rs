@@ -159,10 +159,20 @@ pub fn build_grid(
         let lo = hills.keys.partition_point(|k| k.mz < mz_lo);
         let hi = hills.keys.partition_point(|k| k.mz <= mz_hi);
 
-        // Among all candidates in the mz band, pick the one whose apex is
-        // closest to the target RT and whose RT range overlaps the window.
-        // Each record is one ~cache-line fetch with all five fields hot.
-        let mut best_local: Option<(usize, f64)> = None;
+        // Sum *every* in-box hill into this isotope row. Each hill emits
+        // per-scan intensities (its `intensity_profile`) which are binned
+        // into the grid's RT columns; calling `fill_row_from_hill` more
+        // than once accumulates because the inner loop does `row[col] +=`.
+        // The net effect is a reconstruction of the raw MS1 XIC at this
+        // m/z across the grid's RT window, built from the hill database
+        // without going back to the mzML.
+        //
+        // The "winner" hill (highest `intensity_sum` among contributors)
+        // is tracked only for the diagnostic `observed_mz` / `observed_im`
+        // fields written into LfqEntry — it does not change which signal
+        // is integrated.
+        let mut any_added = false;
+        let mut winner_intensity: f32 = 0.0;
         for k_idx in lo..hi {
             let k = &hills.keys[k_idx];
             if k.rt_end < rt_min || k.rt_start > rt_max {
@@ -171,15 +181,7 @@ pub fn build_grid(
             if has_im && k.im != 0.0 && (k.im - target_im).abs() > config.im_tolerance {
                 continue;
             }
-            let rt_dist = (k.rt - target_rt).abs();
-            match best_local {
-                Some((_, d)) if d <= rt_dist => {}
-                _ => best_local = Some((k_idx, rt_dist)),
-            }
-        }
-
-        if let Some((k_idx, _)) = best_local {
-            let hill = &run.hills[hills.keys[k_idx].hill_idx as usize];
+            let hill = &run.hills[k.hill_idx as usize];
             let added = fill_row_from_hill(
                 hill,
                 &mut grid.intensities[iso],
@@ -189,10 +191,17 @@ pub fn build_grid(
                 &run.scan_times,
             );
             if added {
-                grid.n_slots_filled += 1;
-                grid.winner_mz[iso] = hill.mz;
-                grid.winner_im[iso] = hill.im;
+                any_added = true;
+                let intensity_sum = hill.intensity_sum as f32;
+                if intensity_sum > winner_intensity {
+                    winner_intensity = intensity_sum;
+                    grid.winner_mz[iso] = hill.mz;
+                    grid.winner_im[iso] = hill.im;
+                }
             }
+        }
+        if any_added {
+            grid.n_slots_filled += 1;
         }
     }
 }

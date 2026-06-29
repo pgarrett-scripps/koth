@@ -12,6 +12,34 @@ use anchors::{find_anchors, AnchorPair};
 use drift::DriftFit;
 use warp::RtWarp;
 
+/// RT-warp model. `Ransac` is the default: it tolerates the ~25% wrong-match
+/// contamination in coordinate-only anchors and degrades far less than the
+/// others as contamination rises, with fewer tuning knobs. `Piecewise` keeps
+/// the historical sliding-window median + sigma-clip behaviour; `Linear` fits a
+/// single affine `ref = a · run + b` line via least squares (lowest-noise when
+/// drift is globally affine and anchors are clean).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WarpKind {
+    Piecewise,
+    Linear,
+    /// RANSAC inlier selection → median piecewise-linear fit on the inliers →
+    /// isotonic monotonicity. Robust to a contaminated anchor set (wrong
+    /// coordinate-matches) without the sigma-clip schedule: the diagonal is
+    /// found from a global line consensus rather than refitting on a
+    /// contaminated seed. `rt_warp_sigma_clip` / `rt_warp_clip_iters` are
+    /// unused in this mode.
+    Ransac,
+}
+
+fn default_warp_kind() -> WarpKind {
+    WarpKind::Ransac
+}
+
+fn default_ransac_thresh() -> f64 {
+    0.01
+}
+
 /// Configuration for multi-run alignment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlignmentConfig {
@@ -26,12 +54,24 @@ pub struct AlignmentConfig {
     pub min_anchor_combined_score: f64,
     /// Minimum anchor count required to fit a warp; falls back to identity if below
     pub min_anchor_count: usize,
-    /// Bandwidth for the sliding-window median (fraction of normalised RT range)
+    /// Bandwidth for the sliding-window median (fraction of normalised RT range).
+    /// Ignored when `rt_warp_kind = linear`.
     pub rt_warp_bandwidth: f64,
     /// Sigma threshold for anchor sigma-clipping
     pub rt_warp_sigma_clip: f64,
     /// Number of sigma-clip iterations
     pub rt_warp_clip_iters: usize,
+    /// Which warp model to fit. Defaults to `linear` for low-noise global
+    /// drift correction; switch to `piecewise` to recover the historical
+    /// sliding-median behaviour.
+    #[serde(default = "default_warp_kind")]
+    pub rt_warp_kind: WarpKind,
+    /// Inlier half-band for `rt_warp_kind = ransac`, in normalised RT units
+    /// (0.01 ≈ 1.4 min on a 142-min gradient). An anchor is an inlier if its
+    /// reference RT is within this distance of the consensus diagonal. Unused
+    /// by the linear/piecewise warps.
+    #[serde(default = "default_ransac_thresh")]
+    pub rt_warp_ransac_thresh: f64,
 }
 
 impl Default for AlignmentConfig {
@@ -45,6 +85,8 @@ impl Default for AlignmentConfig {
             rt_warp_bandwidth: 0.1,
             rt_warp_sigma_clip: 3.0,
             rt_warp_clip_iters: 5,
+            rt_warp_kind: WarpKind::Ransac,
+            rt_warp_ransac_thresh: default_ransac_thresh(),
         }
     }
 }
@@ -201,7 +243,11 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
         );
 
         let (rt_warp, rt_active) = if anchors.len() >= config.min_anchor_count {
-            warp::fit_rt_warp(&anchors, config)
+            match config.rt_warp_kind {
+                WarpKind::Piecewise => warp::fit_rt_warp(&anchors, config),
+                WarpKind::Linear => warp::fit_linear_warp(&anchors, config),
+                WarpKind::Ransac => warp::fit_ransac_warp(&anchors, config),
+            }
         } else {
             log::warn!(
                 "Run '{}': only {} anchors (< {}), using identity RT warp",

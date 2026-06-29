@@ -126,12 +126,19 @@ min_prominence = 0.2
 # For data with a lot of noisy peaks, like timsTOF PASEF, a value around 0.5 can help. 
 lfc_weight = 0.5
 
-# Smooth hill intensity profiles after finalization using a running average.
-# Reduces scan-to-scan noise before cosine similarity and scoring.
-# Disabled by default; enable for noisy data.
+# Linear-interpolate intensity through internal zero-gap scans during hill
+# finalization. Independent of `smoothing_enabled`. Default false.
+# NOTE: turning this on can create artificial local maxima that the
+# split-hills logic picks up as new peaks — it materially increases final
+# hill count on data with many short gaps (timsTOF DDA in particular).
+gap_fill_enabled = false
+
+# Apply a running-average filter to the hill intensity profile after
+# finalization. Reduces scan-to-scan noise before cosine similarity and
+# scoring. Independent of `gap_fill_enabled`. Default false.
 smoothing_enabled = false
 # Half-width of the smoothing window. Total window = 2 * smoothing_window + 1 scans.
-# 0 = gap-fill only (no averaging). Ignored when smoothing_enabled is false.
+# 0 = no averaging. Ignored when smoothing_enabled is false.
 smoothing_window = 1
 
 # Drop "large baseline-like" hills before isotope-chain assembly. Inspired by
@@ -162,6 +169,14 @@ right_max_decrease = 0.05
 
 # Maximum number of isotope peaks to consider
 max_isotopes = 6
+
+# Per-extension intensity-ratio gate. After a candidate hill clears
+# `min_chain_cosine`, also check that its apex intensity vs the predecessor's
+# matches the averagine ratio within ± this many log2 units. Catches
+# column-bleed / contaminant hills that co-elute (so pass cosine) but have
+# wrong intensity for an isotope. 1.5 ≈ within 2.83× of expected.
+# Set very large (e.g. 100) to effectively disable.
+max_isotope_log2_ratio = 1.5
 
 # C13 neutron mass in Da (rarely needs changing)
 neutron_mass = 1.003354835

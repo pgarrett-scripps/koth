@@ -1,256 +1,202 @@
-/// Averagine-based theoretical isotope distribution table.
+//! Averagine-based theoretical isotope distribution + Bhattacharyya scoring.
+//!
+//! The averagine model (Senko, 1995) approximates the average amino-acid
+//! composition: C₄.₉₃₈₄ H₇.₇₅₈₃ N₁.₃₅₇₇ O₁.₄₇₇₃ S₀.₀₄₁₇ per 111.1254 Da.
+//!
+//! For a molecule of mass M, element counts are scaled, rounded to integers,
+//! and the isotopologue distribution is computed by convolving the five
+//! per-element distributions from [`super::elements`]. This module is a
+//! thin wrapper that hands off all the arithmetic to the element cache —
+//! the cache makes sulfur-aware scoring (vary `n_S` alone) cheap and exact.
+
+use super::elements::{cache, K_PATTERN};
+
+/// Averagine atomic ratios per 111.1254 Da of neutral mass. The single
+/// "averagine residue" mass used by Senko's model.
+const AVG_RESIDUE_MASS: f64 = 111.1254;
+const AVG_C_PER: f64 = 4.9384;
+const AVG_H_PER: f64 = 7.7583;
+const AVG_N_PER: f64 = 1.3577;
+const AVG_O_PER: f64 = 1.4773;
+const AVG_S_PER: f64 = 0.0417;
+
+/// Estimate integer element counts (C, H, N, O, S) from a neutral mass.
+/// Half-up rounding from the averagine-scaled floats.
+pub fn averagine_counts(neutral_mass: f64) -> (u32, u32, u32, u32, u32) {
+    let scale = neutral_mass.max(0.0) / AVG_RESIDUE_MASS;
+    let round = |x: f64| -> u32 { (x + 0.5).floor().max(0.0) as u32 };
+    (
+        round(AVG_C_PER * scale),
+        round(AVG_H_PER * scale),
+        round(AVG_N_PER * scale),
+        round(AVG_O_PER * scale),
+        round(AVG_S_PER * scale),
+    )
+}
+
+/// Theoretical isotope distribution for the averagine-estimated composition
+/// of a neutral mass. Returns a normalized `[p0, p1, …, p9]`.
+pub fn averagine_distribution(neutral_mass: f64) -> [f64; K_PATTERN] {
+    let (c, h, n, o, s) = averagine_counts(neutral_mass);
+    cache().distribution(c, h, n, o, s)
+}
+
+/// Backward-compatible alias used by existing call sites. The return type is
+/// now owned (cheap — 10 doubles) rather than `&'static`: pass-through is
+/// the same since callers immediately use the array.
+pub fn lookup_template(neutral_mass: f64) -> [f64; K_PATTERN] {
+    averagine_distribution(neutral_mass)
+}
+
+/// Theoretical isotope distribution with an overridden sulfur count.
+/// Useful for sulfur-aware scoring: hold C/H/N/O fixed, vary S.
+pub fn averagine_distribution_with_sulfur(neutral_mass: f64, n_s: u32) -> [f64; K_PATTERN] {
+    let (c, h, n, o, _) = averagine_counts(neutral_mass);
+    cache().distribution(c, h, n, o, n_s)
+}
+
+/// Sulfur-aware Bhattacharyya scoring.
 ///
-/// The averagine model approximates the average amino acid composition:
-/// C₄.₉₃₈₄ H₇.₇₅₈₃ N₁.₃₅₇₇ O₁.₄₇₇₃ S₀.₀₄₁₇ per 111.1254 Da
+/// Builds isotope-pattern templates for a small set of sulfur counts spanning
+/// the realistic biological range, scores observed against each, returns the
+/// best BC and the winning `n_S`. This corrects the systematic bias on
+/// peptides with 2+ Cys/Met where ³⁴S (4.25 %, +2 Da) elevates M+2 well
+/// above the averagine prediction.
 ///
-/// For a molecule of mass M, element counts are scaled proportionally,
-/// then the multinomial isotope distribution is computed via convolution.
-use std::sync::OnceLock;
+/// Template set per call: `[0, max(1, averagine_S), averagine_S + 2, averagine_S + 4]`,
+/// deduplicated and clamped to `MAX_S` by the element cache.
+pub fn bhattacharyya_score_best_sulfur(obs: &[f64], neutral_mass: f64) -> (f64, u32) {
+    let (c, h, n, o, s_avg) = averagine_counts(neutral_mass);
+    let variants = sulfur_variants(s_avg);
 
-/// Table of (neutral_mass, [p0, p1, ..., p9]) where each entry is the
-/// theoretical isotope distribution (normalized to sum=1) for the given mass.
-/// Masses span 50 to 5050 in steps of 50.
-static TEMPLATE_TABLE: OnceLock<Vec<(f64, [f64; 10])>> = OnceLock::new();
-
-/// Get or build the averagine template table.
-pub fn get_table() -> &'static Vec<(f64, [f64; 10])> {
-    TEMPLATE_TABLE.get_or_init(build_table)
-}
-
-fn build_table() -> Vec<(f64, [f64; 10])> {
-    const STEP: f64 = 50.0;
-    const MIN: f64 = 50.0;
-    const MAX: f64 = 5050.0;
-
-    let mut table = Vec::new();
-    let mut mass = MIN;
-    while mass <= MAX {
-        let dist = compute_averagine_distribution(mass);
-        table.push((mass, dist));
-        mass += STEP;
-    }
-    table
-}
-
-/// Look up the theoretical isotope template for the given neutral mass.
-/// Returns the template for the nearest tabulated mass.
-pub fn lookup_template(neutral_mass: f64) -> &'static [f64; 10] {
-    let table = get_table();
-    // Binary search for closest mass
-    let idx = table.partition_point(|(m, _)| *m < neutral_mass);
-    let idx = idx.min(table.len() - 1);
-
-    // Compare with the entry before, if available
-    if idx > 0 {
-        let prev_dist = (table[idx - 1].0 - neutral_mass).abs();
-        let curr_dist = (table[idx].0 - neutral_mass).abs();
-        if prev_dist < curr_dist {
-            return &table[idx - 1].1;
+    let mut best_bc = 0.0f64;
+    let mut best_s = s_avg;
+    for &n_s in &variants {
+        let template = cache().distribution(c, h, n, o, n_s);
+        let bc = bhattacharyya_score(obs, &template);
+        if bc > best_bc {
+            best_bc = bc;
+            best_s = n_s;
         }
     }
-    &table[idx].1
+    (best_bc, best_s)
 }
 
-/// Compute the isotope distribution for a molecule of given neutral mass
-/// using the averagine model.
-///
-/// Returns probabilities [p(M), p(M+1), ..., p(M+9)] normalized to sum=1.
-fn compute_averagine_distribution(mass: f64) -> [f64; 10] {
-    // Averagine formula: per 111.1254 Da
-    const AVG_MASS: f64 = 111.1254;
-    let scale = mass / AVG_MASS;
-
-    // Element counts (scaled)
-    let n_c = 4.9384 * scale;
-    let n_h = 7.7583 * scale;
-    let n_n = 1.3577 * scale;
-    let n_o = 1.4773 * scale;
-    let n_s = 0.0417 * scale;
-
-    // Isotope abundances for each element
-    // C: C12, C13
-    let c_dist = element_dist(n_c, &[(0, 0.9893), (1, 0.0107)]);
-    // H: H1, D (H2)
-    let h_dist = element_dist(n_h, &[(0, 0.999885), (1, 0.000115)]);
-    // N: N14, N15
-    let n_dist = element_dist(n_n, &[(0, 0.99632), (1, 0.00368)]);
-    // O: O16, O17, O18
-    let o_dist = element_dist(n_o, &[(0, 0.99757), (1, 0.00038), (2, 0.00205)]);
-    // S: S32, S33, S34, S36
-    let s_dist = element_dist(n_s, &[(0, 0.9499), (1, 0.0075), (2, 0.0425), (4, 0.0001)]);
-
-    // Convolve all element distributions
-    let mut dist = convolve(&c_dist, &h_dist);
-    dist = convolve(&dist, &n_dist);
-    dist = convolve(&dist, &o_dist);
-    dist = convolve(&dist, &s_dist);
-
-    // Take first 10 and normalize
-    let mut result = [0.0f64; 10];
-    let n = result.len().min(dist.len());
-    result[..n].copy_from_slice(&dist[..n]);
-    normalize(&mut result);
-    result
-}
-
-/// Compute isotope distribution for `n` atoms of an element given its isotope masses/abundances.
-///
-/// `isotopes` is a list of (mass_offset, abundance) pairs.
-/// Uses the binomial/multinomial approximation via repeated convolution.
-fn element_dist(n: f64, isotopes: &[(usize, f64)]) -> Vec<f64> {
-    if n < 1e-9 {
-        let mut d = vec![0.0; 10];
-        d[0] = 1.0;
-        return d;
-    }
-
-    // Poisson approximation: for each heavy isotope with abundance p,
-    // the number of heavy atoms ~ Poisson(λ = n * p). Uses the full
-    // floating-point n, so fractional atom counts are handled correctly.
-    let heavy: Vec<(usize, f64)> = isotopes[1..].iter().copied().collect();
-
-    let mut result = vec![0.0f64; 10];
-    result[0] = 1.0;
-
-    for &(offset, abundance) in &heavy {
-        let lambda = n * abundance;
-        // Poisson PMF: P(k) = e^(-λ) * λ^k / k!
-        let e_neg_lambda = (-lambda).exp();
-        let mut poisson = vec![0.0f64; 10];
-        let mut term = e_neg_lambda;
-        poisson[0] = term;
-        for k in 1..10 {
-            term *= lambda / k as f64;
-            poisson[k] = term;
-        }
-        // Spread: k heavy atoms contribute k*offset mass units, so P(k) goes at index k*offset.
-        // (A plain shift was wrong — it placed P(0) at index `offset` instead of 0.)
-        let mut spread = vec![0.0f64; 10];
-        for (k, &p) in poisson.iter().enumerate() {
-            let pos = k * offset;
-            if pos < 10 {
-                spread[pos] += p;
-            }
-        }
-        result = convolve_fixed(&result, &spread);
-        normalize_slice(&mut result);
-    }
-
-    result
-}
-
-/// Convolve two distributions (polynomial multiplication, take first 10 terms).
-fn convolve(a: &[f64], b: &[f64]) -> Vec<f64> {
-    let mut result = vec![0.0f64; 10];
-    for (i, &av) in a.iter().enumerate().take(10) {
-        for (j, &bv) in b.iter().enumerate().take(10 - i) {
-            result[i + j] += av * bv;
-        }
-    }
-    result
-}
-
-/// Fixed-size (10-element) convolution.
-fn convolve_fixed(a: &[f64], b: &[f64]) -> Vec<f64> {
-    convolve(a, b)
-}
-
-fn normalize(v: &mut [f64]) {
-    let sum: f64 = v.iter().sum();
-    if sum > 0.0 {
-        for x in v.iter_mut() {
-            *x /= sum;
-        }
-    }
-}
-
-fn normalize_slice(v: &mut [f64]) {
-    let sum: f64 = v.iter().sum();
-    if sum > 0.0 {
-        for x in v.iter_mut() {
-            *x /= sum;
-        }
-    }
+/// Deduplicated sulfur-count variants we score against:
+/// `[0, max(1, s_avg), s_avg + 2, s_avg + 4]`. For small peptides (s_avg = 0)
+/// this collapses to `{0, 1, 2, 4}`. For larger ones (s_avg = 2) it's
+/// `{0, 2, 4, 6}`. Always includes both the no-S and a high-S extreme.
+fn sulfur_variants(s_avg: u32) -> [u32; 4] {
+    [0, s_avg.max(1), s_avg + 2, s_avg + 4]
 }
 
 /// Compute Bhattacharyya coefficient between observed and theoretical distributions.
 ///
-/// BC = Σ sqrt(p_i * q_i) over active positions only.
+/// BC = Σ sqrt(p_i * q_i) over all `k = min(obs.len(), 10)` positions, then
+/// multiplied by `(1 - missed_penalty)` where `missed_penalty` is the
+/// theoretical mass beyond position k.
 ///
-/// The template is scaled to absolute experimental units (template[i] * obs_sum /
-/// template_k_sum). Positions where the expected absolute intensity falls below
-/// `min_intensity` are excluded from the comparison — theoretical peaks below the
-/// noise floor should not be matched against observed peaks. Pass 0.0 to disable.
+/// No active-position mask. Positions where the template predicts ~nothing
+/// still appear in both `obs_sum` and `theo_sum`. Effect: an over-extended
+/// chain that grafted a noise hill at M+8 (where theory is ~0) dilutes
+/// `obs_sum`, shrinking p_i at the real positions; the noise position itself
+/// contributes ~0 to BC because q_i ≈ 0. Net: BC drops, as it should.
 ///
 /// Returns BC in [0, 1].
-pub fn bhattacharyya_score(obs: &[f64], template: &[f64; 10], min_intensity: f64) -> f64 {
-    static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    let debug = obs.iter().any(|&x| x > 1e8);
-    if debug {
-        ONCE.get_or_init(|| {
-            let k = obs.len().min(10);
-            let obs_sum: f64 = obs.iter().sum();
-            let template_k_sum: f64 = template[..k].iter().sum();
-            let scale = if template_k_sum > 0.0 { obs_sum / template_k_sum } else { 0.0 };
-            let active: Vec<usize> = (0..k)
-                .filter(|&i| min_intensity <= 0.0 || template[i] * scale >= min_intensity)
-                .collect();
-            eprintln!("[bc] k={k} obs_sum={obs_sum:.3e} template_k_sum={template_k_sum:.6} scale={scale:.3e} min_intensity={min_intensity:.3e}");
-            eprintln!("[bc] template={:?}", &template[..k]);
-            eprintln!("[bc] active={active:?}");
-            if !active.is_empty() {
-                let obs_active_sum: f64 = active.iter().map(|&i| obs[i]).sum();
-                let theo_active_sum: f64 = active.iter().map(|&i| template[i]).sum();
-                eprintln!("[bc] obs_active_sum={obs_active_sum:.3e} theo_active_sum={theo_active_sum:.6}");
-                let bc: f64 = active.iter().map(|&i| {
-                    let p = obs[i] / obs_active_sum;
-                    let q = template[i] / theo_active_sum;
-                    eprintln!("[bc]   i={i} obs={:.3e} p={p:.4} q={q:.4} sqrt(pq)={:.4}", obs[i], (p*q).sqrt());
-                    (p * q).sqrt()
-                }).sum();
-                eprintln!("[bc] bc={bc:.4} missed_penalty={:.4} final={:.4}", 1.0-template_k_sum, bc*(template_k_sum));
-            }
-        });
-    }
-
-    let k = obs.len().min(10);
+pub fn bhattacharyya_score(obs: &[f64], template: &[f64; K_PATTERN]) -> f64 {
+    let k = obs.len().min(K_PATTERN);
     if k == 0 {
         return 0.0;
     }
 
-    let obs_sum: f64 = obs.iter().sum();
+    let obs_sum: f64 = obs[..k].iter().sum();
     if obs_sum <= 0.0 {
         return 0.0;
     }
 
-    // Missed penalty: template signal beyond the observed k peaks.
     let template_k_sum: f64 = template[..k].iter().sum();
+    if template_k_sum <= 0.0 {
+        return 0.0;
+    }
     let missed_penalty = 1.0 - template_k_sum;
 
-    // Scale template to absolute experimental units and build active-position mask.
-    let scale = if template_k_sum > 0.0 { obs_sum / template_k_sum } else { 0.0 };
-    let active: Vec<usize> = (0..k)
-        .filter(|&i| min_intensity <= 0.0 || template[i] * scale >= min_intensity)
-        .collect();
-
-    if active.is_empty() {
-        return 0.0;
-    }
-
-    let obs_active_sum: f64 = active.iter().map(|&i| obs[i]).sum();
-    let theo_active_sum: f64 = active.iter().map(|&i| template[i]).sum();
-    if obs_active_sum <= 0.0 || theo_active_sum <= 0.0 {
-        return 0.0;
-    }
-
-    let bc: f64 = active
-        .iter()
-        .map(|&i| {
-            let p = obs[i] / obs_active_sum;
-            let q = template[i] / theo_active_sum;
+    let bc: f64 = (0..k)
+        .map(|i| {
+            let p = obs[i] / obs_sum;
+            let q = template[i] / template_k_sum;
             (p * q).sqrt()
         })
         .sum();
 
     (bc * (1.0 - missed_penalty)).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn averagine_counts_scales_linearly() {
+        // 1500 Da peptide → averagine integer composition
+        let (c, h, n, o, s) = averagine_counts(1500.0);
+        let scale = 1500.0 / AVG_RESIDUE_MASS;
+        assert!((c as f64 - 4.9384 * scale).abs() <= 1.0);
+        assert!((h as f64 - 7.7583 * scale).abs() <= 1.0);
+        assert!((n as f64 - 1.3577 * scale).abs() <= 1.0);
+        assert!((o as f64 - 1.4773 * scale).abs() <= 1.0);
+        assert!((s as f64 - 0.0417 * scale).abs() <= 1.0);
+    }
+
+    #[test]
+    fn averagine_distribution_sums_to_one() {
+        for mass in [500.0, 1500.0, 3000.0, 5000.0] {
+            let d = averagine_distribution(mass);
+            let sum: f64 = d.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-9, "{mass}: sum={sum}");
+        }
+    }
+
+    /// Well-aligned 5-hill chain — BC should be high.
+    #[test]
+    fn well_aligned_chain_scores_high() {
+        let template: [f64; K_PATTERN] = [0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0, 0.0, 0.0];
+        let obs = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5];
+        let bc = bhattacharyya_score(&obs, &template);
+        assert!(bc > 0.95, "BC for well-aligned chain should be > 0.95, got {bc}");
+    }
+
+    /// Over-extended chain — same well-aligned first 5 positions plus 3 noise hills
+    /// where the template predicts essentially nothing. New BC must drop noticeably.
+    #[test]
+    fn over_extended_chain_drops_score() {
+        let template: [f64; K_PATTERN] = [0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0001, 0.0, 0.0];
+        let obs_real = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5];
+        let bc_real = bhattacharyya_score(&obs_real, &template);
+        let obs_overextended = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5, 5.0e6, 5.0e6, 5.0e6];
+        let bc_over = bhattacharyya_score(&obs_overextended, &template);
+        assert!(
+            bc_over < bc_real - 0.05,
+            "over-extended BC ({bc_over:.3}) should drop at least 0.05 below clean BC ({bc_real:.3})"
+        );
+    }
+
+    /// Empty / zero input safe.
+    #[test]
+    fn empty_input_returns_zero() {
+        let template: [f64; K_PATTERN] = [0.5, 0.3, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(bhattacharyya_score(&[], &template), 0.0);
+        assert_eq!(bhattacharyya_score(&[0.0, 0.0], &template), 0.0);
+    }
+
+    /// Sanity: sulfur-override path returns a different template than the default.
+    #[test]
+    fn sulfur_override_changes_pattern() {
+        let m = 1500.0;
+        let avg = averagine_distribution(m);
+        let high_s = averagine_distribution_with_sulfur(m, 3);
+        assert!(
+            (high_s[2] - avg[2]).abs() > 0.005,
+            "3-S override should noticeably shift M+2 (avg={}, hi-S={})", avg[2], high_s[2]
+        );
+    }
 }

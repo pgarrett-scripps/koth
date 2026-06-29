@@ -417,7 +417,7 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
     writeln!(
         f,
         "feature_idx\tmassCalib\tmz\tcharge\trefRtApex\trefIm\tseed_combined_score\tseed_run\
-         \tn_contributing_runs\trun_name\tis_decoy\tintensity\thybrid_score\tspectral_cosine\
+         \tn_contributing_runs\trun_name\tis_decoy\tis_mbr\tintensity\thybrid_score\tspectral_cosine\
          \tn_isotopes_found\texpected_rt\tapex_rt\trt_diff\tpeak_width_rt\
          \tobserved_mz\tppm_error\tobserved_im\tim_delta\tq_value"
     )?;
@@ -476,7 +476,7 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
         writeln!(
             f,
             "{feat}\t{mass:.6}\t{mz:.6}\t{charge}\t{rt:.6}\t{im}\t{seed_combined:.6}\t{seed_run}\
-             \t{ncont}\t{run_name}\t{decoy}\t{intensity}\t{hybrid:.6}\t{spectral:.6}\
+             \t{ncont}\t{run_name}\t{decoy}\t{is_mbr}\t{intensity}\t{hybrid:.6}\t{spectral:.6}\
              \t{nslots}\t{exp_rt}\t{apex_rt}\t{rtdiff}\t{pw}\
              \t{obs_mz}\t{ppm}\t{obs_im}\t{im_delta}\t{qv}",
             feat = feat,
@@ -494,6 +494,7 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
             ncont = matrix.feature_n_contributing_runs[feat],
             run_name = matrix.run_names[run],
             decoy = entry.is_decoy,
+            is_mbr = entry.is_mbr,
             intensity = intensity_str,
             hybrid = entry.hybrid_score,
             spectral = entry.spectral_cosine,

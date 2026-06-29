@@ -56,6 +56,25 @@ pub struct LfqConfig {
     pub spectral_cosine_min: f64,
     /// Scoring mode used to find the best integration window
     pub score_mode: ScoreMode,
+    /// Use the averagine Bhattacharyya coefficient for the per-column spectral
+    /// score instead of a plain cosine. Unlike the cosine path (which gives a
+    /// single observed isotope a free 1.0), the Bhattacharyya score penalises a
+    /// column for theoretical isotope peaks that *should* be present but are
+    /// not (via the missed-mass term), so a lone-monoisotope decoy no longer
+    /// scores a perfect spectral match. This is the same isotope-pattern
+    /// scoring the feature finder already uses (`scoring::averagine`), making
+    /// the two halves of the tool consistent. Default false.
+    #[serde(default)]
+    pub spectral_bhattacharyya: bool,
+    /// Fold isotope-to-isotope chromatographic co-elution into the per-cell
+    /// hybrid score. The grid spectral term (cosine/Bhattacharyya) measures the
+    /// isotope *abundance pattern* at one RT; this measures whether the isotope
+    /// rows actually rise and fall *together* across RT — orthogonal signal that
+    /// the per-cell q-value otherwise ignores (it lives only in the feature
+    /// finder's combined_score). When on, hybrid = (rt·int·spectral·coelution)^¼
+    /// instead of (rt·int·spectral)^⅓. Default false.
+    #[serde(default)]
+    pub spectral_coelution: bool,
     /// Whether to run target-decoy competition and compute q-values
     pub run_tdc: bool,
     /// Decoy m/z shift in Da, added to the target m/z and divided by charge
@@ -73,6 +92,40 @@ pub struct LfqConfig {
     /// Tolerances for building the multi-run consensus feature list.
     #[serde(default)]
     pub consensus: ConsensusConfig,
+    /// Cross-run intensity normalization applied to the assembled matrix.
+    /// "none"           = raw intensities (original; downstream must normalize).
+    /// "median_ratios"  = DESeq/edgeR-style size factors: each run is scaled by
+    ///                    the median, over features detected in ALL runs, of its
+    ///                    log2 deviation from the per-feature mean. Robust to a
+    ///                    fraction of genuinely-changing features, unlike a plain
+    ///                    column-median (which is biased when a sizeable subset of
+    ///                    peptides changes systematically). Default "none".
+    #[serde(default = "default_normalize")]
+    pub normalize: String,
+    /// Per-cell intensity estimator for the consensus matrix.
+    /// "sum"  = integrated peak area (detected: feature `intensitySum`; MBR:
+    ///          summed XIC grid over [start,end]). Original behaviour.
+    /// "apex" = peak height (detected: feature `intensityApex`; MBR: total
+    ///          isotopologue intensity at the apex grid column). Removes the
+    ///          integration-window variance that inflates replicate CV on
+    ///          MBR-filled cells, matching the per-run finder's apex estimator.
+    #[serde(default = "default_quant_estimator")]
+    pub quant_estimator: String,
+    /// Quantify EVERY consensus cell (detected and MBR) by the same grid
+    /// re-integration, instead of using the per-run feature's own intensity for
+    /// detected cells. Keeps detected and MBR cells on one commensurate scale —
+    /// important on timsTOF, where the feature integrates the ion-mobility
+    /// dimension but the 2-D XIC grid does not, so mixing the two inflates CV.
+    #[serde(default)]
+    pub detected_use_grid: bool,
+}
+
+fn default_normalize() -> String {
+    "none".to_string()
+}
+
+fn default_quant_estimator() -> String {
+    "sum".to_string()
 }
 
 fn default_decoy_mz_shift_da() -> f64 {
@@ -102,12 +155,118 @@ impl Default for LfqConfig {
             grid_cols: 100,
             spectral_cosine_min: 0.1,
             score_mode: ScoreMode::Hybrid,
+            spectral_bhattacharyya: false,
+            spectral_coelution: false,
             run_tdc: true,
             decoy_mz_shift_da: default_decoy_mz_shift_da(),
             decoy_rt_shift_pct: default_decoy_rt_shift_pct(),
             consensus: ConsensusConfig::default(),
+            normalize: default_normalize(),
+            quant_estimator: default_quant_estimator(),
+            detected_use_grid: false,
         }
     }
+}
+
+#[cfg(test)]
+mod norm_tests {
+    use super::apply_median_ratio_normalization;
+
+    /// A uniform per-run scale factor must be fully removed (columns equalize
+    /// for every complete-case feature).
+    #[test]
+    fn median_ratio_removes_uniform_scale() {
+        let (n_features, n_runs) = (3usize, 3usize);
+        // run 1 is uniformly 2x brighter than runs 0 and 2.
+        let mut t = vec![
+            100.0, 200.0, 100.0, //
+            300.0, 600.0, 300.0, //
+            50.0, 100.0, 50.0,
+        ];
+        let mut d = vec![0.0f64; n_features * n_runs];
+        let sf = apply_median_ratio_normalization(&mut t, &mut d, n_features, n_runs);
+        assert!((sf[1] - 1.0).abs() < 1e-9, "run 1 size factor should be +1 log2, got {}", sf[1]);
+        for feat in 0..n_features {
+            let b = feat * n_runs;
+            assert!((t[b] - t[b + 1]).abs() < 1e-6 && (t[b] - t[b + 2]).abs() < 1e-6,
+                    "columns should equalize after removing the 2x scale");
+        }
+    }
+
+    /// Features missing in some run (0 intensity) are excluded from the size
+    /// factor (complete-case only) and left untouched if zero.
+    #[test]
+    fn median_ratio_ignores_incomplete_features() {
+        let (n_features, n_runs) = (2usize, 2usize);
+        let mut t = vec![100.0, 100.0, 500.0, 0.0]; // 2nd feature missing in run 1
+        let mut d = vec![0.0f64; 4];
+        let sf = apply_median_ratio_normalization(&mut t, &mut d, n_features, n_runs);
+        // only the complete feature (equal) drives the factor -> no scaling
+        assert!(sf[0].abs() < 1e-9 && sf[1].abs() < 1e-9);
+        assert_eq!(t[3], 0.0, "missing cell stays zero");
+    }
+}
+
+/// Compute DESeq/edgeR-style size factors from the assembled target matrix and
+/// apply them in place to both the target and decoy intensities.
+///
+/// A run's size factor is the median, over features present (> 0) in EVERY run,
+/// of `log2(intensity) - mean_over_runs(log2(intensity))`. Factors are centred
+/// so the median run is unscaled (overall intensity scale preserved). Returns
+/// the centred per-run log2 size factors for logging.
+///
+/// Robust to a fraction of genuinely-changing features because the median
+/// ignores the tails where real biology lives — unlike a plain column-median,
+/// which shifts with the changing subset.
+fn apply_median_ratio_normalization(
+    intensities: &mut [f64],
+    decoy_intensities: &mut [f64],
+    n_features: usize,
+    n_runs: usize,
+) -> Vec<f64> {
+    if n_runs < 2 {
+        return vec![0.0; n_runs];
+    }
+    let mut ratios_per_run: Vec<Vec<f64>> = vec![Vec::new(); n_runs];
+    for feat in 0..n_features {
+        let base = feat * n_runs;
+        let row = &intensities[base..base + n_runs];
+        if row.iter().any(|&v| v <= 0.0) {
+            continue; // complete cases only
+        }
+        let mean_log = row.iter().map(|&v| v.log2()).sum::<f64>() / n_runs as f64;
+        for (run, &v) in row.iter().enumerate() {
+            ratios_per_run[run].push(v.log2() - mean_log);
+        }
+    }
+    let median = |v: &mut Vec<f64>| -> f64 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let m = v.len();
+        if m % 2 == 1 { v[m / 2] } else { 0.5 * (v[m / 2 - 1] + v[m / 2]) }
+    };
+    let mut size_factors: Vec<f64> = ratios_per_run.iter_mut().map(median).collect();
+    // Centre so the median run is unscaled.
+    let mut sf_copy = size_factors.clone();
+    let center = median(&mut sf_copy);
+    for s in &mut size_factors {
+        *s -= center;
+    }
+    // Apply to both target and decoy columns: intensity /= 2^size_factor[run].
+    for arr in [intensities, decoy_intensities] {
+        for feat in 0..n_features {
+            let base = feat * n_runs;
+            for run in 0..n_runs {
+                let v = arr[base + run];
+                if v > 0.0 {
+                    arr[base + run] = v / 2f64.powf(size_factors[run]);
+                }
+            }
+        }
+    }
+    size_factors
 }
 
 /// Per-feature, per-run quantification result.
@@ -134,6 +293,10 @@ pub struct LfqEntry {
     pub spectral_cosine: f32,
     pub n_isotopes_found: u8,
     pub is_decoy: bool,
+    /// True when this run did NOT contribute a feature to the consensus group,
+    /// so the intensity was re-integrated from raw hills at the predicted RT/mz
+    /// (match-between-runs). False = the run's own detected feature intensity.
+    pub is_mbr: bool,
     /// Expected RT in native run space used to centre the XIC grid. For
     /// targets this is the alignment-predicted RT; for decoys it is the
     /// shifted decoy RT (`expected_rt = target_rt − decoy_rt_shift_pct · rt_span`).
@@ -310,7 +473,7 @@ pub fn quantify(
                 let tgt_obs_mz = grid.winner_mz[0];
                 let tgt_obs_im = grid.winner_im[0];
                 let t_s = Instant::now();
-                score_grid(&grid, &cf.theoretical_pattern, config, &mut scores, &mut col_totals, &mut obs);
+                score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs);
                 ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 let t_i = Instant::now();
                 let tgt_peak = integrate(&grid, &scores, &col_totals, config);
@@ -318,14 +481,48 @@ pub fn quantify(
                 let (tgt_apex_rt, tgt_peak_width) =
                     peak_rt_stats(&grid, config.grid_cols, &tgt_peak);
 
+                // Override the XIC target intensity with the contributing
+                // per-run feature's `total_intensity()` whenever this run was
+                // a member of the consensus group. The feature finder's own
+                // isotope-pattern + peak-shape match is more reliable than a
+                // closest-RT hill lookup; using the feature intensity here
+                // restores Sage-style MBR semantics ("detected ⇒ trust the
+                // feature; otherwise re-integrate at the predicted RT").
+                let contributed = cf.per_run_feature.get(run_idx).and_then(|x| *x);
+                let use_apex = config.quant_estimator.eq_ignore_ascii_case("apex");
+                let grid_intensity = if use_apex { tgt_peak.apex_intensity } else { tgt_peak.intensity };
+                // For detected cells we normally trust the per-run feature's own
+                // intensity. But that puts detected cells on a different SCALE
+                // than MBR cells (grid re-integration), and mixing the two within
+                // a feature's replicate group inflates CV badly on timsTOF (the
+                // feature integrates the IM dimension; the 2-D grid does not).
+                // `detected_use_grid` quantifies EVERY cell (detected + MBR) by
+                // the same grid re-integration so the whole row is commensurate.
+                let target_intensity = if config.detected_use_grid {
+                    grid_intensity
+                } else {
+                    match contributed {
+                        Some(fi) => {
+                            let feat = &runs[run_idx].features[fi as usize].feature;
+                            if use_apex {
+                                feat.total_intensity_at_apex()
+                            } else {
+                                feat.total_intensity()
+                            }
+                        }
+                        None => grid_intensity,
+                    }
+                };
+
                 entries.push(LfqEntry {
                     feature_idx: feat_idx,
                     run_idx,
-                    intensity: tgt_peak.intensity,
+                    intensity: target_intensity,
                     hybrid_score: tgt_peak.hybrid_score,
                     spectral_cosine: tgt_peak.spectral_cosine_at_apex,
                     n_isotopes_found: tgt_slots,
                     is_decoy: false,
+                    is_mbr: contributed.is_none(),
                     expected_rt: corr_rt,
                     apex_rt: tgt_apex_rt,
                     peak_width_rt: tgt_peak_width,
@@ -352,7 +549,7 @@ pub fn quantify(
                     let dec_obs_mz = grid.winner_mz[0];
                     let dec_obs_im = grid.winner_im[0];
                     let t_s = Instant::now();
-                    score_grid(&grid, &cf.theoretical_pattern, config, &mut scores, &mut col_totals, &mut obs);
+                    score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs);
                     ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     let t_i = Instant::now();
                     let dec_peak = integrate(&grid, &scores, &col_totals, config);
@@ -363,11 +560,12 @@ pub fn quantify(
                     entries.push(LfqEntry {
                         feature_idx: feat_idx,
                         run_idx,
-                        intensity: dec_peak.intensity,
+                        intensity: if use_apex { dec_peak.apex_intensity } else { dec_peak.intensity },
                         hybrid_score: dec_peak.hybrid_score,
                         spectral_cosine: dec_peak.spectral_cosine_at_apex,
                         n_isotopes_found: dec_slots,
                         is_decoy: true,
+                        is_mbr: false,
                         expected_rt: dec_rt,
                         apex_rt: dec_apex_rt,
                         peak_width_rt: dec_peak_width,
@@ -480,6 +678,24 @@ pub fn quantify(
     }
 
     log::info!("[timing] intensity matrix assemble: {:.2?}", t_assemble.elapsed());
+
+    if config.normalize.eq_ignore_ascii_case("median_ratios") {
+        let sf = apply_median_ratio_normalization(
+            &mut intensities,
+            &mut decoy_intensities,
+            n_features,
+            n_runs,
+        );
+        let lo = sf.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = sf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        log::info!(
+            "LFQ normalization: median-of-ratios size factors applied, \
+             per-run log2 range [{:.3}, {:.3}] (~{:.1}% max scale)",
+            lo,
+            hi,
+            (2f64.powf(hi - lo) - 1.0) * 100.0
+        );
+    }
 
     IntensityMatrix {
         n_features,

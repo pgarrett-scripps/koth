@@ -33,6 +33,27 @@ pub fn filter_spectrum(spectrum: &mut Spectrum, sigma: f64) {
     spectrum.peaks.retain(|p| p.intensity > threshold);
 }
 
+/// Keep only the `n` most intense peaks in the spectrum, preserving m/z order.
+///
+/// Mirrors AlphaPept's `n_most_abundant` per-scan peak cap. A no-op when the
+/// spectrum already has `<= n` peaks.
+pub fn keep_most_abundant(spectrum: &mut Spectrum, n: usize) {
+    if spectrum.peaks.len() <= n {
+        return;
+    }
+    // Partition so the n highest-intensity peaks are first, then keep them.
+    let mut idx: Vec<usize> = (0..spectrum.peaks.len()).collect();
+    idx.select_nth_unstable_by(n, |&a, &b| {
+        spectrum.peaks[b]
+            .intensity
+            .partial_cmp(&spectrum.peaks[a].intensity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    idx.truncate(n);
+    idx.sort_unstable(); // restore m/z (index) order
+    spectrum.peaks = idx.into_iter().map(|i| spectrum.peaks[i].clone()).collect();
+}
+
 /// Compute `median + sigma * (1.4826 * MAD)` from a sorted intensity slice.
 ///
 /// The 1.4826 factor makes MAD a consistent estimator of σ for Gaussian noise.

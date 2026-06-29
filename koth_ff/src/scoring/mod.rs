@@ -1,4 +1,5 @@
 pub mod averagine;
+pub mod elements;
 
 use crate::config::ScoringConfig;
 use crate::models::{Feature, ScoredFeature};
@@ -11,28 +12,16 @@ use averagine::{bhattacharyya_score, lookup_template};
 /// 2. Try neutron offsets in [offset_min, offset_max]
 /// 3. Score each offset with Bhattacharyya coefficient + zero-offset bonus
 /// 4. Keep best offset; if below `min_isotope_score_for_offset`, fall back to offset=0
-pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<ScoredFeature> {
+pub fn score_features(
+    features: &[Feature],
+    config: &ScoringConfig,
+    sulfur_aware: bool,
+) -> Vec<ScoredFeature> {
     log::info!("Scoring {} features", features.len());
-
-    // Compute min_intensity from 5th percentile of hill intensity_sum
-    let mut all_intensities: Vec<f64> = features
-        .iter()
-        .flat_map(|f| f.hills.iter().map(|h| h.intensity_sum))
-        .collect();
-    all_intensities.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let min_intensity = if all_intensities.is_empty() {
-        0.0
-    } else {
-        let p5_idx = (all_intensities.len() as f64 * 0.05) as usize;
-        all_intensities[p5_idx] * 0.8
-    };
-    eprintln!("[koth_ff] score min_intensity: {:.3e} (from {} hill intensities, p5_idx={})",
-        min_intensity, all_intensities.len(),
-        if all_intensities.is_empty() { 0 } else { (all_intensities.len() as f64 * 0.05) as usize });
 
     let all_scored: Vec<ScoredFeature> = features
         .iter()
-        .map(|feature| score_one(feature, config, min_intensity))
+        .map(|feature| score_one(feature, config, sulfur_aware))
         .collect();
 
     let charged: Vec<&ScoredFeature> = all_scored.iter().filter(|sf| sf.feature.charge > 0).collect();
@@ -73,7 +62,7 @@ pub fn score_features(features: &[Feature], config: &ScoringConfig) -> Vec<Score
     scored
 }
 
-fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> ScoredFeature {
+fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_aware: bool) -> ScoredFeature {
     let neutral_mass = match feature.monoisotopic_neutral_mass() {
         Some(m) => m,
         None => {
@@ -97,6 +86,14 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
     let mut best_bc = 0.0f64;
     let mut best_offset: i8 = 0;
 
+    let score_obs = |o: &[f64]| -> f64 {
+        if sulfur_aware {
+            averagine::bhattacharyya_score_best_sulfur(o, neutral_mass).0
+        } else {
+            bhattacharyya_score(o, &template)
+        }
+    };
+
     for o in config.isotope_offset_min..=config.isotope_offset_max {
         // Shift obs: obs_aligned[j] = obs[j + o] (shift left by o)
         let mut obs_aligned = vec![0.0f64; k];
@@ -107,7 +104,7 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
             }
         }
 
-        let sc = bhattacharyya_score(&obs_aligned, template, min_intensity);
+        let sc = score_obs(&obs_aligned);
         // Bonus is used only to prefer offset=0 when scores are close; never stored.
         let combined = sc + if o == 0 { config.offset_zero_bonus } else { 0.0 };
         if combined > best_combined {
@@ -120,7 +117,7 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
     // If below the isotope-score floor, reset to offset=0 (no neutron reassignment).
     if best_combined < config.min_isotope_score_for_offset {
         best_offset = 0;
-        best_bc = bhattacharyya_score(&obs, template, min_intensity);
+        best_bc = score_obs(&obs);
     }
 
     // Build normalized theoretical pattern for output
@@ -137,6 +134,13 @@ fn score_one(feature: &Feature, config: &ScoringConfig, min_intensity: f64) -> S
     //   isotope_score  — Bhattacharyya isotope-pattern match (this stage)
     //   cosine_score   — chromatographic co-elution of isotope hills (feature stage)
     //   combined_score — product, the default "quality" knob
+    //
+    // The chromatographic cosine is now computed over the mutual scan
+    // OVERLAP only (see features::cosine::cosine_similarity), which
+    // removes the systematic penalty against short low-abundance hills
+    // that the previous union-padded form imposed. With that fix the
+    // multiplicative composition cleanly separates real features from
+    // noise on the PXD003881 ground-truth set.
     let isotope_score = best_bc.clamp(0.0, 1.0);
     let cosine_score = feature.cosine_score.clamp(0.0, 1.0);
     let combined_score = (isotope_score * cosine_score).clamp(0.0, 1.0);

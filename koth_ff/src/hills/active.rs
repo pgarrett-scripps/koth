@@ -19,14 +19,19 @@ pub struct ActiveHill {
     pub intensity_profile: Vec<f32>,
     /// Retention time at each position (f32::NAN at gap positions)
     pub rt_profile: Vec<f32>,
-    /// Ion mobility at each position (f32::NAN at gap positions)
+    /// Ion mobility at each position (f32::NAN at gap positions). Left EMPTY
+    /// (never allocated) when the run has no ion-mobility dimension, so non-IM
+    /// data skips one Vec alloc + one push per scan per hill.
     pub im_profile: Vec<f32>,
+    /// Whether this run carries an IM dimension. When false, `im_profile` is
+    /// never populated and all IM stats return 0.0.
+    track_im: bool,
     /// Monotonically increasing count of real peaks added (for running mean update)
     pub n_real: usize,
 }
 
 impl ActiveHill {
-    pub fn new(mz: f64, intensity: f64, rt: f64, im: f64, scan_index: usize) -> Self {
+    pub fn new(mz: f64, intensity: f64, rt: f64, im: f64, scan_index: usize, track_im: bool) -> Self {
         Self {
             running_mz_mean: mz,
             running_im_mean: im,
@@ -35,7 +40,8 @@ impl ActiveHill {
             mz_profile: vec![mz as f32],
             intensity_profile: vec![intensity as f32],
             rt_profile: vec![rt as f32],
-            im_profile: vec![im as f32],
+            im_profile: if track_im { vec![im as f32] } else { Vec::new() },
+            track_im,
             n_real: 1,
         }
     }
@@ -54,7 +60,9 @@ impl ActiveHill {
         self.mz_profile.push(mz as f32);
         self.intensity_profile.push(intensity as f32);
         self.rt_profile.push(rt as f32);
-        self.im_profile.push(im as f32);
+        if self.track_im {
+            self.im_profile.push(im as f32);
+        }
         self.last_scan_seen = scan_index;
 
         // Update running means (online Welford)
@@ -69,7 +77,9 @@ impl ActiveHill {
         self.mz_profile.push(f32::NAN);
         self.intensity_profile.push(0.0);
         self.rt_profile.push(f32::NAN);
-        self.im_profile.push(f32::NAN);
+        if self.track_im {
+            self.im_profile.push(f32::NAN);
+        }
     }
 
     pub fn end_scan(&self) -> usize {
@@ -103,7 +113,9 @@ impl ActiveHill {
             self.mz_profile = self.mz_profile[start..end].to_vec();
             self.intensity_profile = self.intensity_profile[start..end].to_vec();
             self.rt_profile = self.rt_profile[start..end].to_vec();
-            self.im_profile = self.im_profile[start..end].to_vec();
+            if self.track_im {
+                self.im_profile = self.im_profile[start..end].to_vec();
+            }
         }
     }
 
@@ -162,7 +174,9 @@ impl ActiveHill {
             self.mz_profile = self.mz_profile[left..=right].to_vec();
             self.intensity_profile = self.intensity_profile[left..=right].to_vec();
             self.rt_profile = self.rt_profile[left..=right].to_vec();
-            self.im_profile = self.im_profile[left..=right].to_vec();
+            if self.track_im {
+                self.im_profile = self.im_profile[left..=right].to_vec();
+            }
         }
 
         // Remove any zero-intensity prefix/suffix exposed by the slice.
@@ -346,7 +360,7 @@ mod tests {
 
     fn make_hill_with_gaps() -> ActiveHill {
         // 6 scans, gaps at indices 1, 2, 4. Real m/z values cluster within ~0.005 Da.
-        let mut h = ActiveHill::new(524.270, 100.0, 0.0, 0.9, 0);
+        let mut h = ActiveHill::new(524.270, 100.0, 0.0, 0.9, 0, true);
         h.add_gap();
         h.add_gap();
         h.mz_profile.push(524.275);
@@ -368,7 +382,7 @@ mod tests {
     /// Kish SE for a single peak is 0 (no variance to estimate from).
     #[test]
     fn mz_kish_se_zero_for_singleton() {
-        let h = ActiveHill::new(500.0, 1000.0, 0.0, 0.0, 0);
+        let h = ActiveHill::new(500.0, 1000.0, 0.0, 0.0, 0, true);
         assert_eq!(h.mz_kish_se(), 0.0);
     }
 
@@ -380,7 +394,7 @@ mod tests {
         // weighted_std = sqrt(mean(d²)) where d = mz - 500.0 = [-0.01, -0.005, 0, 0.005, 0.01]
         // = sqrt((1e-4 + 0.25e-4 + 0 + 0.25e-4 + 1e-4) / 5) = sqrt(2.5e-4 / 5) ≈ 0.00707
         // neff = 5, SE = weighted_std / √5 ≈ 0.00316
-        let mut h = ActiveHill::new(499.99, 1000.0, 0.0, 0.0, 0);
+        let mut h = ActiveHill::new(499.99, 1000.0, 0.0, 0.0, 0, true);
         for (i, mz) in [499.995f32, 500.0, 500.005, 500.01].iter().enumerate() {
             h.mz_profile.push(*mz);
             h.intensity_profile.push(1000.0);
@@ -405,7 +419,7 @@ mod tests {
     #[test]
     fn mz_kish_se_skewed_intensity_inflates_se() {
         // 5 peaks, but peak 0 has 100× the intensity of the others.
-        let mut h = ActiveHill::new(500.000, 100_000.0, 0.0, 0.0, 0);
+        let mut h = ActiveHill::new(500.000, 100_000.0, 0.0, 0.0, 0, true);
         for (i, mz) in [500.005f32, 500.010, 500.015, 500.020].iter().enumerate() {
             h.mz_profile.push(*mz);
             h.intensity_profile.push(1000.0);
@@ -460,7 +474,7 @@ mod tests {
     #[test]
     fn mz_std_unaffected_by_smoothing_gap_fill() {
         let mut h = make_hill_with_gaps();
-        smooth::smooth_profile(&mut h.intensity_profile, 1);
+        smooth::apply_intensity_filters(&mut h.intensity_profile, true, true, 1);
 
         let mean = h.mz_weighted_mean();
         let std = h.mz_weighted_std();
@@ -488,7 +502,7 @@ mod tests {
         // rt_profile[1] is NaN — pre-fix, apex_rt() returned 0.0.
         h.intensity_profile[1] = 0.0; // gap, untouched
         h.intensity_profile[3] = 10_000.0; // anchor neighbor so smoothing peaks near idx 2-3
-        smooth::smooth_profile(&mut h.intensity_profile, 2);
+        smooth::apply_intensity_filters(&mut h.intensity_profile, true, true, 2);
 
         let rt = h.apex_rt();
         assert!(
@@ -507,7 +521,7 @@ mod tests {
     #[test]
     fn im_std_unaffected_by_smoothing_gap_fill() {
         let mut h = make_hill_with_gaps();
-        smooth::smooth_profile(&mut h.intensity_profile, 1);
+        smooth::apply_intensity_filters(&mut h.intensity_profile, true, true, 1);
 
         let mean = h.im_weighted_mean();
         let std = h.im_weighted_std();

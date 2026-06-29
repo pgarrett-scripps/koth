@@ -5,6 +5,10 @@ use super::{grid::XicGrid, score::ColumnScores, LfqConfig};
 pub struct PeakResult {
     /// Summed intensity over all isotopologue rows within [start_bin, end_bin]
     pub intensity: f64,
+    /// Peak height: total isotopologue intensity at the apex column only
+    /// (the MBR/grid analog of the feature finder's `intensityApex`). Used by
+    /// the `apex` quant estimator to avoid integration-window variance.
+    pub apex_intensity: f64,
     pub apex_bin: usize,
     pub start_bin: usize,
     pub end_bin: usize,
@@ -16,6 +20,7 @@ impl PeakResult {
     pub fn empty() -> Self {
         Self {
             intensity: 0.0,
+            apex_intensity: 0.0,
             apex_bin: 0,
             start_bin: 0,
             end_bin: 0,
@@ -112,6 +117,7 @@ pub fn integrate(
 
     PeakResult {
         intensity,
+        apex_intensity: col_totals[apex] as f64,
         apex_bin: apex,
         start_bin: start,
         end_bin: end,

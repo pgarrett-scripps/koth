@@ -2,6 +2,8 @@ pub mod cosine;
 
 use std::cmp::Ordering;
 
+use rayon::prelude::*;
+
 use crate::config::{FeaturesConfig, FileConfig, ImToleranceType, MzUncertaintyMode, ToleranceType};
 use crate::models::{Feature, Hill};
 use crate::scoring::averagine;
@@ -65,7 +67,13 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
     };
 
     // Phase 1+2: generate and score one candidate per seed (all hills).
+    // Each seed's candidate is computed independently from read-only shared
+    // arrays, so this is embarrassingly parallel. `into_par_iter().collect()`
+    // is order-preserving (rayon's indexed collect), so `candidates` ends up
+    // in the exact same order as the sequential version — the downstream sort
+    // + greedy claim are unchanged and the output stays deterministic.
     let candidates: Vec<Candidate> = (0..sorted_hills.len())
+        .into_par_iter()
         .map(|seed_idx| {
             generate_best_candidate(
                 seed_idx,
@@ -192,13 +200,37 @@ fn generate_best_candidate(
         composite_score: 0.0,
     };
 
+    const PROTON_MASS: f64 = 1.007_276_466_621;
+
     for charge in (config.min_charge..=config.max_charge).rev() {
         let step = config.neutron_mass / charge as f64;
+
+        // Per-charge averagine template, used to early-stop the right chain
+        // when the next theoretical isotope falls below the noise floor.
+        // We assume the seed is monoisotopic for this check (best guess at
+        // chain-build time; the offset search in scoring/mod.rs corrects later).
+        let neutral_mass_seed_mono = seed_mz * charge as f64 - charge as f64 * PROTON_MASS;
+        let template = averagine::lookup_template(neutral_mass_seed_mono);
+        let template_mono = template[0].max(1e-12);
+        let seed_intensity = seed_hill.intensity_max as f64;
 
         // Right chain: M+1, M+2, ...
         let mut right_chain: Vec<usize> = Vec::new();
         let mut right_cosines: Vec<f64> = Vec::new();
         for iso in 1..=config.max_isotopes {
+            // Early-stop: bail when theory predicts a peak below noise. Stops
+            // the chain from absorbing column-bleed / random hills that happen
+            // to fall on the M+k ladder but have no isotope-pattern basis.
+            // (Cosine ≥ min_chain_cosine on adjacent pairs isn't enough — two
+            // neighbouring contaminants can trivially co-elute with each other.)
+            if iso >= template.len() {
+                break;
+            }
+            let expected = seed_intensity * (template[iso] / template_mono);
+            if expected < min_intensity {
+                break;
+            }
+
             let target_mz = seed_mz + step * iso as f64;
             let ref_hill = right_chain
                 .last()
@@ -244,6 +276,28 @@ fn generate_best_candidate(
             if best_cos < config.min_chain_cosine {
                 break;
             }
+
+            // Intensity-ratio gate: candidate's apex intensity vs predecessor
+            // should match the averagine ratio template[iso]/template[iso-1]
+            // within ± `max_isotope_log2_ratio` log2 units. Catches contaminant
+            // hills that co-elute (so pass cosine) but have wrong intensity
+            // for a real isotope peak.
+            if config.max_isotope_log2_ratio.is_finite() {
+                let pred_int = ref_hill.intensity_max as f64;
+                let cand_int = sorted_hills[best_c].intensity_max as f64;
+                let theo_pred = template[iso - 1].max(1e-12);
+                let theo_cand = template[iso].max(1e-12);
+                if pred_int > 0.0 && cand_int > 0.0 {
+                    let observed_ratio = cand_int / pred_int;
+                    let expected_ratio = theo_cand / theo_pred;
+                    if (observed_ratio / expected_ratio).log2().abs()
+                        > config.max_isotope_log2_ratio
+                    {
+                        break;
+                    }
+                }
+            }
+
             right_chain.push(best_c);
             right_cosines.push(best_cos);
         }
@@ -299,6 +353,29 @@ fn generate_best_candidate(
             if best_cos < config.min_chain_cosine {
                 break;
             }
+
+            // Intensity-ratio gate (left direction). Each left step shifts the
+            // hypothesis: we now assume the previous leftmost (ref_hill) sat at
+            // template[1] and the new candidate sits at template[0]. The
+            // expected ratio is constant across left steps: template[0]/template[1]
+            // (new mono / old "near-mono"). Catches cases where the candidate
+            // is dimmer than the predecessor — the wrong direction for a mono.
+            if config.max_isotope_log2_ratio.is_finite() {
+                let pred_int = ref_hill.intensity_max as f64;
+                let cand_int = sorted_hills[best_c].intensity_max as f64;
+                let theo_pred = template[1].max(1e-12);
+                let theo_cand = template[0].max(1e-12);
+                if pred_int > 0.0 && cand_int > 0.0 {
+                    let observed_ratio = cand_int / pred_int;
+                    let expected_ratio = theo_cand / theo_pred;
+                    if (observed_ratio / expected_ratio).log2().abs()
+                        > config.max_isotope_log2_ratio
+                    {
+                        break;
+                    }
+                }
+            }
+
             left_chain.push(best_c);
             left_cosines.push(best_cos);
         }
@@ -325,7 +402,7 @@ fn generate_best_candidate(
         let mean_cosine = all_cosines.iter().sum::<f64>() / all_cosines.len() as f64;
 
         let chain_hills: Vec<&Hill> = chain.iter().map(|&i| sorted_hills[i]).collect();
-        let isotope_score = score_chain(&chain_hills, charge, min_intensity);
+        let isotope_score = score_chain(&chain_hills, charge, config.sulfur_aware_scoring);
         let composite = isotope_score * mean_cosine.max(0.0);
 
         if composite > best.composite_score {
@@ -358,7 +435,7 @@ fn generate_best_candidate(
 
 /// Bhattacharyya score for an isotope chain.  Returns 0.0 for single-peak
 /// or charge=0 chains.
-fn score_chain(chain_hills: &[&Hill], charge: u8, min_intensity: f64) -> f64 {
+fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_aware: bool) -> f64 {
     if chain_hills.len() <= 1 || charge == 0 {
         return 0.0;
     }
@@ -394,8 +471,13 @@ fn score_chain(chain_hills: &[&Hill], charge: u8, min_intensity: f64) -> f64 {
 
     let obs: Vec<f64> = sorted.iter().map(|h| h.intensity_at_scan(apex_scan)).collect();
     let k = obs.len().min(10);
-    let template = averagine::lookup_template(neutral_mass);
-    averagine::bhattacharyya_score(&obs[..k], template, min_intensity)
+
+    if sulfur_aware {
+        averagine::bhattacharyya_score_best_sulfur(&obs[..k], neutral_mass).0
+    } else {
+        let template = averagine::lookup_template(neutral_mass);
+        averagine::bhattacharyya_score(&obs[..k], &template)
+    }
 }
 
 /// Find candidate isotope partners near `target_mz`.

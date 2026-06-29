@@ -1,4 +1,5 @@
 pub mod mzml;
+pub mod prefetch;
 
 #[cfg(feature = "tdf")]
 pub mod bruker;

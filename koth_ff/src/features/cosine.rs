@@ -21,6 +21,13 @@ const MIN_MUTUAL_OVERLAP_SCANS: usize = 3;
 /// Returns 0.0 when the two hills do not mutually overlap by at least
 /// `MIN_MUTUAL_OVERLAP_SCANS` scans — i.e., each hill's range must
 /// extend at least that far into the other's range.
+///
+/// NB: an "intersection-only" variant was tested empirically on
+/// PXD003881 (see commit history) — it ranks more peptides above the
+/// downstream `min_combined_score` threshold but admits noise modes
+/// where hill lengths disagree, which regresses the LFQ matrix CV. The
+/// union-padded form's penalty against mismatched-length hills is acting
+/// as an implicit noise filter, so we keep it.
 pub fn cosine_similarity(hill1: &Hill, hill2: &Hill) -> f64 {
     // Mutual-overlap gate (AlphaPept-style). The overlap region is
     // `[max(start_a, start_b), min(end_a, end_b)]`, size
@@ -35,32 +42,56 @@ pub fn cosine_similarity(hill1: &Hill, hill2: &Hill) -> f64 {
         return 0.0;
     }
 
-    let min_scan = hill1.scan_start.min(hill2.scan_start);
-    let max_scan = hill1.scan_end.max(hill2.scan_end);
-    let n = max_scan - min_scan + 1;
-
-    let mut p1 = vec![0.0f64; n];
-    let mut p2 = vec![0.0f64; n];
-
-    for (i, &v) in hill1.intensity_profile.iter().enumerate() {
-        let idx = hill1.scan_start + i - min_scan;
-        if idx < n {
-            p1[idx] = v as f64;
-        }
-    }
-    for (i, &v) in hill2.intensity_profile.iter().enumerate() {
-        let idx = hill2.scan_start + i - min_scan;
-        if idx < n {
-            p2[idx] = v as f64;
-        }
-    }
-
-    let dot: f64 = p1.iter().zip(p2.iter()).map(|(a, b)| a * b).sum();
-    let norm1: f64 = p1.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let norm2: f64 = p2.iter().map(|x| x * x).sum::<f64>().sqrt();
+    // Allocation-free equivalent of zero-padding both profiles onto a common
+    // scan axis and taking the L2-normalized cosine. Two facts let us skip the
+    // two temporary Vecs entirely:
+    //
+    //   * Each profile's L2 norm is invariant to zero-padding — `√(Σ xᵢ²)` is
+    //     the same with or without trailing/leading zeros — so we sum the
+    //     squares of each hill's own profile directly.
+    //   * The dot product is nonzero only where both hills have signal, i.e.
+    //     the scan-index overlap `[max(start), min(end)]`; everywhere else one
+    //     side is a padding zero. So we walk just the overlap.
+    //
+    // The summation order over the nonzero terms is identical to the padded
+    // version (ascending scan index), and the skipped terms were all exactly
+    // `0.0`, so the result is bit-for-bit the same as the old implementation.
+    let norm1: f64 = hill1
+        .intensity_profile
+        .iter()
+        .map(|&x| {
+            let x = x as f64;
+            x * x
+        })
+        .sum::<f64>()
+        .sqrt();
+    let norm2: f64 = hill2
+        .intensity_profile
+        .iter()
+        .map(|&x| {
+            let x = x as f64;
+            x * x
+        })
+        .sum::<f64>()
+        .sqrt();
 
     if norm1 == 0.0 || norm2 == 0.0 {
         return 0.0;
+    }
+
+    // Overlap is bounded by each hill's *actual profile extent*
+    // (`[scan_start, scan_start + len - 1]`) rather than `scan_end`, so the
+    // direct indexing below can never run off the end of a profile even if a
+    // hill's `scan_end` were ever out of sync with its profile length.
+    let end1 = hill1.scan_start + hill1.intensity_profile.len().saturating_sub(1);
+    let end2 = hill2.scan_start + hill2.intensity_profile.len().saturating_sub(1);
+    let ov_start = hill1.scan_start.max(hill2.scan_start);
+    let ov_end = end1.min(end2);
+    let mut dot = 0.0f64;
+    for scan in ov_start..=ov_end {
+        let a = hill1.intensity_profile[scan - hill1.scan_start] as f64;
+        let b = hill2.intensity_profile[scan - hill2.scan_start] as f64;
+        dot += a * b;
     }
 
     (dot / (norm1 * norm2)).clamp(0.0, 1.0)
