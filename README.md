@@ -237,24 +237,43 @@ applied to obtain the expected RT, m/z, and IM in that run's coordinate space. A
 from the run are matched to each isotopologue slot (M, M+1, M+2) within `mz_ppm` ppm and the
 RT/IM window. Each matched hill's per-scan intensity profile is binned into the grid columns.
 
-**Column scoring**: Each RT column is scored:
+**Column scoring**: Each RT column is scored on four quality terms. Two of these are the
+*orthogonal* isotope signals — a pattern match and a co-elution measure — that used to be
+conflated under one "spectral" name:
 
 - **RT score**: `1 − ∛(|col − centre| / half_cols)` — penalises columns far from the centre
 - **Intensity score**: `√(col_total / max_col_total)` — relative intensity across the window
-- **Spectral angle**: cosine similarity between the observed (M, M+1, M+2) intensities and the
-  theoretical averagine envelope. Set to 1.0 when only one isotopologue is present.
-- **Hybrid score**: `∛(RT × intensity × spectral)` (default mode)
+- **Bhattacharyya**: agreement between the observed (M, M+1, M+2) intensities and the theoretical
+  averagine pattern, *penalising expected-but-missing peaks* (a lone monoisotope scores low, not
+  a free 1.0). This is the "does the isotope pattern match theory?" signal.
+- **Co-elution**: cosine similarity between the monoisotope's XIC trace and each higher isotope's
+  trace across RT — "do the matched isotopes rise and fall together?". Orthogonal to the pattern
+  match; 1.0 when fewer than two isotope rows carry signal.
+- **Hybrid score**: `(RT × intensity × bhattacharyya × coelution)^¼` (default mode)
+
+Both the Bhattacharyya and co-elution terms are always computed — there is no flag to swap one
+metric for another.
 
 **Peak integration**: The apex column (maximum hybrid score) is found. The peak is expanded
-left and right until: 20 bins have been added, the spectral angle drops below
-`spectral_angle_min`, or the score falls below half the apex score. All intensities in the
-expanded window across all isotopologue rows are summed.
+left and right until: 20 bins have been added, the spectral Bhattacharyya drops below
+`min_spectral_bhattacharyya`, or the score falls below half the apex score. All intensities in
+the expanded window across all isotopologue rows are summed.
 
-**Target-decoy competition**: A decoy feature is generated for each consensus feature by
-shifting m/z by +11 Da (in run space) and RT back by 1% of the gradient. The decoy is
-extracted with identical logic. All target and decoy entries across all features and runs are
-ranked by hybrid score. Q-values are computed as a monotonised running FDR (n_decoy / n_target),
-giving a per-(feature, run) confidence estimate.
+**Target-decoy competition and MBR FDR**: A decoy is generated for each consensus feature by
+shifting m/z by `decoy_mz_shift_da`/charge (default +11 Da) and RT back by `decoy_rt_shift_pct`
+of the gradient, then extracted with identical logic. Q-values are then computed by
+`tdc_method`:
+
+- **`qda`** (default) — a semi-supervised quadratic-discriminant rescorer. Over all target cells
+  (detected + match-between-runs) and the decoys, it learns a QDA over five symmetric per-cell
+  features (`|ppm error|`, `|RT diff|`, Bhattacharyya, co-elution, `|IM delta|` — the last inert
+  on Orbitrap, active on timsTOF) using a Percolator-style loop (iterative confident-positive
+  selection, decoys as negatives, 3-fold cross-validation by feature index), then computes
+  q-values from the held-out scores. Every cell is scored — detected cells get no free pass — so
+  a background-contaminated cell in a depleted well is gatable regardless of how it was populated.
+  Deterministic.
+- **`hybrid`** — the legacy method: rank all target and decoy cells by `hybrid_score` and take
+  the monotonised running FDR (n_decoy / n_target).
 
 ## Memory design
 
@@ -266,6 +285,12 @@ Once hill detection is complete the hill list is passed to feature detection. Hi
 intensity profiles as `Arc<[f32]>`, so features can reference the same profile data without
 copying. After feature detection the hill `Vec` is explicitly dropped; the `Arc` reference
 counts keep the profiles alive inside each `Feature`.
+
+`koth_align` applies the same discipline across runs: it holds only the per-run *features* (small)
+in memory for the whole run, and **streams each run's hills one at a time** during LFQ — loading a
+run's hills, quantifying every consensus feature against them, then dropping them before the next
+run loads. Peak memory is therefore O(one run's hills) rather than O(all runs' hills), so a
+20-run cohort costs about the same as a single run rather than 20×.
 
 ## Outputs
 
@@ -341,8 +366,9 @@ from the XIC grid; 0 means no peak was found. No FDR filtering is applied — us
 
 #### qvalue_matrix.tsv
 
-Same layout as `intensity_matrix.tsv` but cells contain TDC q-values (0–1). Written only when
-`run_tdc = true`. A value of 1.0 means no signal was found or TDC was not run. Filter
+Same layout as `intensity_matrix.tsv` but cells contain q-values (0–1) from the MBR rescorer
+(`tdc_method`, default `qda`). Written only when `run_tdc = true`. A value of 1.0 means no signal
+was found or TDC was not run; a detected (feature-supported) cell reports 0. Filter
 intensity_matrix at q ≤ 0.01 for 1% FDR, for example.
 
 ## Configuration
@@ -424,9 +450,15 @@ rt_window_pct = 0.02        # half-window as fraction of gradient (±2% = 4% tot
 im_tolerance = 0.05         # ion mobility tolerance for hill matching
 n_isotopes = 3              # isotopologue rows: 1=M only, 2=M+M1, 3=M+M1+M2
 grid_cols = 100             # RT bins per grid
-spectral_angle_min = 0.1    # minimum spectral angle for peak expansion
+min_spectral_bhattacharyya = 0.1  # min spectral Bhattacharyya to keep expanding a peak
 score_mode = "hybrid"       # "hybrid", "rt", "intensity", or "spectral"
-run_tdc = true              # compute per-entry q-values via target-decoy competition
+run_tdc = true              # compute per-cell MBR q-values via target-decoy competition
+tdc_method = "qda"          # MBR FDR: "qda" (learned rescorer, default) or "hybrid" (legacy)
+# decoy_mz_shift_da = 11.0  # decoy m/z offset (Da / charge)
+# decoy_rt_shift_pct = 0.01 # decoy RT offset (fraction of gradient)
+# rt_spread_scoring = false # experimental: region-aware, σ-normalised RT term
+# Both isotope metrics (Bhattacharyya pattern + co-elution cosine) are always
+# computed and folded into the hybrid; there is no flag to choose between them.
 
 [lfq.consensus]
 min_member_score = 0.0      # min score for a feature to enter the consensus pool
@@ -486,9 +518,11 @@ let runs: Vec<RunInput> = vec![
 let alignment_config = AlignmentConfig::default();
 let alignment = align_runs(&runs, &alignment_config);
 
-// Stage 5: LFQ
+// Stage 5: LFQ. Hills are fetched per run via the loader and dropped before
+// the next run, so only one run's hills are resident at a time. Here they are
+// already in memory; to stream from disk, read each run's hills in the closure.
 let lfq_config = LfqConfig::default();
-let matrix = quantify(&runs, &alignment, &lfq_config);
+let matrix = quantify(&runs, &alignment, &lfq_config, |i| runs[i].hills.clone());
 
 // Access results
 println!("Reference run: {}", matrix.reference_run);

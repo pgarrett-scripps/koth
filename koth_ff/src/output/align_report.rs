@@ -372,7 +372,9 @@ pub fn build_align_report(
                 .iter()
                 .filter(|f| f.combined_score >= min_combined)
                 .count();
-            let n_hills = ri.hills.len();
+            // Hills are streamed per-run during LFQ (not held on `ri`), so the
+            // count comes from the matrix, which records it as each run loads.
+            let n_hills = matrix.hills_per_run.get(run_idx).copied().unwrap_or(0);
 
             let alignment_block = if is_reference {
                 None

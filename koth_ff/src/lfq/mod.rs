@@ -1,11 +1,12 @@
 pub mod consensus;
 pub mod grid;
 pub mod integrate;
+pub mod rescore;
 pub mod score;
 pub mod tdc;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -49,32 +50,22 @@ pub struct LfqConfig {
     pub n_isotopes: usize,
     /// Number of RT bins per grid (default 100)
     pub grid_cols: usize,
-    /// Minimum spectral cosine (XIC column vs theoretical pattern) used as a
-    /// peak-expansion stopping criterion. Despite the historical "spectral
-    /// angle" name in the literature, the actual value computed here is a
-    /// cosine similarity in [0, 1].
-    pub spectral_cosine_min: f64,
+    /// Minimum spectral **Bhattacharyya** score for a grid column to keep
+    /// extending the integration peak (peak-expansion gate). Named for the
+    /// metric it actually uses — it is NOT a cosine threshold. Defaulted so
+    /// configs using the old `spectral_cosine_min` name don't hard-fail.
+    #[serde(default = "default_min_spectral_bhattacharyya")]
+    pub min_spectral_bhattacharyya: f64,
     /// Scoring mode used to find the best integration window
     pub score_mode: ScoreMode,
-    /// Use the averagine Bhattacharyya coefficient for the per-column spectral
-    /// score instead of a plain cosine. Unlike the cosine path (which gives a
-    /// single observed isotope a free 1.0), the Bhattacharyya score penalises a
-    /// column for theoretical isotope peaks that *should* be present but are
-    /// not (via the missed-mass term), so a lone-monoisotope decoy no longer
-    /// scores a perfect spectral match. This is the same isotope-pattern
-    /// scoring the feature finder already uses (`scoring::averagine`), making
-    /// the two halves of the tool consistent. Default false.
-    #[serde(default)]
-    pub spectral_bhattacharyya: bool,
-    /// Fold isotope-to-isotope chromatographic co-elution into the per-cell
-    /// hybrid score. The grid spectral term (cosine/Bhattacharyya) measures the
-    /// isotope *abundance pattern* at one RT; this measures whether the isotope
-    /// rows actually rise and fall *together* across RT — orthogonal signal that
-    /// the per-cell q-value otherwise ignores (it lives only in the feature
-    /// finder's combined_score). When on, hybrid = (rt·int·spectral·coelution)^¼
-    /// instead of (rt·int·spectral)^⅓. Default false.
-    #[serde(default)]
-    pub spectral_coelution: bool,
+    // NOTE on isotope scoring (this used to be a source of confusion): there
+    // are two DISTINCT isotope signals, both ALWAYS computed, no config flags:
+    //   * spectral Bhattacharyya — observed vs theoretical isotope PATTERN.
+    //   * co-elution cosine       — cosine between the matched isotopes' XIC
+    //                               traces across RT (do they co-elute?).
+    // hybrid = (rt · intensity · bhattacharyya · coelution)^¼. The old
+    // `spectral_bhattacharyya` and `spectral_coelution` flags are gone; any
+    // leftover values in an existing TOML are harmlessly ignored.
     /// Whether to run target-decoy competition and compute q-values
     pub run_tdc: bool,
     /// Decoy m/z shift in Da, added to the target m/z and divided by charge
@@ -89,6 +80,10 @@ pub struct LfqConfig {
     /// `rt_window_pct` if you want some overlap, or larger to fully separate.
     #[serde(default = "default_decoy_rt_shift_pct")]
     pub decoy_rt_shift_pct: f64,
+    /// How MBR q-values are computed: `qda` (semi-supervised QDA rescorer,
+    /// default) or `hybrid` (legacy rank-by-hybrid_score TDC).
+    #[serde(default)]
+    pub tdc_method: TdcMethod,
     /// Tolerances for building the multi-run consensus feature list.
     #[serde(default)]
     pub consensus: ConsensusConfig,
@@ -118,6 +113,21 @@ pub struct LfqConfig {
     /// dimension but the 2-D XIC grid does not, so mixing the two inflates CV.
     #[serde(default)]
     pub detected_use_grid: bool,
+    /// Replace the raw RT closeness term in the hybrid score with a
+    /// σ-normalised Gaussian RT likelihood `exp(−½ z²)`, where
+    /// `z = (column RT − predicted RT) / σ_local(RT)` and `σ_local` is the
+    /// post-warp RT-residual spread estimated per run from the RANSAC inlier
+    /// anchors (see `alignment::RtSigmaModel`). Makes the RT term of the
+    /// target-decoy discriminant region-aware: strict where alignment is
+    /// confident, tolerant where it is not. Applied identically to target and
+    /// decoy cells so the TDC null stays calibrated. Non-reference runs only;
+    /// falls back to the raw term when no σ model is available. Default false.
+    #[serde(default)]
+    pub rt_spread_scoring: bool,
+}
+
+fn default_min_spectral_bhattacharyya() -> f64 {
+    0.1
 }
 
 fn default_normalize() -> String {
@@ -145,6 +155,19 @@ pub enum ScoreMode {
     Spectral,
 }
 
+/// How MBR target-decoy q-values are computed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TdcMethod {
+    /// Semi-supervised QDA rescorer over {|ppm|, |RT diff|, Bhattacharyya,
+    /// coelution, |IM delta|} with 3-fold CV; all cells (detected + MBR)
+    /// compete against decoys (see `rescore`). Default.
+    #[default]
+    Qda,
+    /// Legacy: rank all cells by `hybrid_score` and run plain TDC (`tdc`).
+    Hybrid,
+}
+
 impl Default for LfqConfig {
     fn default() -> Self {
         Self {
@@ -153,17 +176,17 @@ impl Default for LfqConfig {
             im_tolerance: 0.05,
             n_isotopes: 3,
             grid_cols: 100,
-            spectral_cosine_min: 0.1,
+            min_spectral_bhattacharyya: 0.1,
             score_mode: ScoreMode::Hybrid,
-            spectral_bhattacharyya: false,
-            spectral_coelution: false,
             run_tdc: true,
             decoy_mz_shift_da: default_decoy_mz_shift_da(),
             decoy_rt_shift_pct: default_decoy_rt_shift_pct(),
+            tdc_method: TdcMethod::Qda,
             consensus: ConsensusConfig::default(),
             normalize: default_normalize(),
             quant_estimator: default_quant_estimator(),
             detected_use_grid: false,
+            rt_spread_scoring: false,
         }
     }
 }
@@ -275,23 +298,32 @@ fn apply_median_ratio_normalization(
 /// integration outputs (intensity / scores), RT diagnostics, and the
 /// observed monoisotopic m/z + ion mobility of the winning M hill.
 ///
-/// "Score" terminology here:
-///   - `hybrid_score`    = cbrt(rt_score × intensity_score × spectral_cosine)
-///                         at the apex column of the LFQ XIC grid
-///   - `spectral_cosine` = cosine similarity (XIC column vs theoretical
-///                         pattern) at the apex column. Different from
-///                         `Feature.cosine_score` (chromatographic cosine
-///                         between isotope hills, feature-finding stage).
+/// Two ISOTOPE quality signals, kept strictly distinct (this is the pair that
+/// was historically conflated):
+///   - `spectral_bhattacharyya` = observed vs theoretical isotope *abundance
+///                                pattern* (penalises missing peaks).
+///   - `coelution`              = cosine between the matched isotopes' XIC
+///                                traces across RT ("do they co-elute?").
+/// hybrid_score = (rt_score × int_score × spectral_bhattacharyya × coelution)^¼
+/// at the apex column. Neither is `Feature.cosine_score` (the feature-finder's
+/// chromatographic cosine between isotope hills).
 #[derive(Debug, Clone)]
 pub struct LfqEntry {
     pub feature_idx: usize,
     pub run_idx: usize,
     pub intensity: f64,
     pub hybrid_score: f32,
-    /// Spectral cosine (XIC column vs theoretical pattern) at the apex column.
-    /// Bounded [0, 1].
-    pub spectral_cosine: f32,
+    /// Spectral **Bhattacharyya** at the apex column — observed-vs-theoretical
+    /// isotope pattern match; penalises expected-but-missing peaks. [0, 1].
+    pub spectral_bhattacharyya: f32,
     pub n_isotopes_found: u8,
+    /// Individual hybrid components at the apex column, exposed so a downstream
+    /// rescorer can weight each independently instead of using only the
+    /// composite `hybrid_score`. `coelution` is the inter-isotope cosine
+    /// (do the matched isotopes co-elute). All bounded [0, 1].
+    pub rt_score: f32,
+    pub int_score: f32,
+    pub coelution: f32,
     pub is_decoy: bool,
     /// True when this run did NOT contribute a feature to the consensus group,
     /// so the intensity was re-integrated from raw hills at the predicted RT/mz
@@ -341,6 +373,8 @@ pub struct IntensityMatrix {
     pub feature_seed_run: Vec<String>,
     /// Number of runs that contributed at least one detection to each consensus group.
     pub feature_n_contributing_runs: Vec<usize>,
+    /// Hill count per run (recorded as each run's hills were streamed in).
+    pub hills_per_run: Vec<usize>,
     // Flat [feature * n_runs + run] layout
     pub intensities: Vec<f64>,
     pub q_values: Vec<f64>,
@@ -377,11 +411,32 @@ impl IntensityMatrix {
 ///   2. Builds a 100-bin × n_isotopes XIC grid from the run's hills.
 ///   3. Scores each column and integrates the best peak.
 ///   4. Optionally repeats with a decoy feature for target-decoy q-values.
+/// `runs` carry only features (their `hills` may be empty); the full hills for
+/// run `i` are fetched on demand via `load_hills(i)` and dropped before the next
+/// run, so peak memory is O(one run's hills) rather than O(all runs' hills).
 pub fn quantify(
     runs: &[RunInput],
     alignment: &AlignmentResult,
     config: &LfqConfig,
+    load_hills: impl Fn(usize) -> Vec<crate::models::Hill>,
 ) -> IntensityMatrix {
+    // Guard against a degenerate grid: grid_cols / n_isotopes of 0 would make
+    // `n_cols - 1` underflow and index into empty rows (panic). Clamp to 1 and
+    // warn rather than crash on a misconfigured TOML.
+    let config = &if config.grid_cols == 0 || config.n_isotopes == 0 {
+        log::warn!(
+            "LFQ config has grid_cols={} n_isotopes={}; clamping each to a minimum of 1",
+            config.grid_cols,
+            config.n_isotopes
+        );
+        let mut c = config.clone();
+        c.grid_cols = c.grid_cols.max(1);
+        c.n_isotopes = c.n_isotopes.max(1);
+        c
+    } else {
+        config.clone()
+    };
+
     let t_consensus = Instant::now();
     let consensus: Vec<ConsensusFeature> =
         build_consensus(runs, alignment, config);
@@ -395,22 +450,10 @@ pub fn quantify(
         n_features, n_runs
     );
 
-    // Build a cache-friendly, mz-sorted struct-of-arrays per run.
-    // Done in parallel across runs since each run is independent.
-    let t_sort = Instant::now();
-    let sorted_hills: Vec<SortedHills> =
-        runs.par_iter().map(SortedHills::from_run).collect();
-    log::info!(
-        "[timing] sorted_hills build ({} runs, total {} hills): {:.2?}",
-        n_runs,
-        sorted_hills.iter().map(|s| s.len()).sum::<usize>(),
-        t_sort.elapsed()
-    );
-
-    // Precompute each run's RT range once. `RunInput::rt_range` falls back to
-    // a full sweep of `run.features` when `scan_times` is empty (which it is
-    // for the align pipeline — feature/hill files don't carry scan_times),
-    // so calling it inside the hot loop costs ~10ms × 7871 × 20 ≈ 100s.
+    // Precompute each run's RT range once (from features — no hills needed).
+    // `RunInput::rt_range` falls back to a full sweep of `run.features` when
+    // `scan_times` is empty (it always is for the align pipeline), so calling it
+    // inside the hot loop would cost ~10ms × n_features × n_runs.
     let t_rt = Instant::now();
     let run_rt_ranges: Vec<(f64, f64)> =
         runs.par_iter().map(|r| r.rt_range()).collect();
@@ -419,32 +462,40 @@ pub fn quantify(
         t_rt.elapsed()
     );
 
-    // Process every (feature, run) pair in parallel.
-    // Scratch buffers are allocated once per rayon task (once per feature) and
-    // reused across all n_runs iterations and the optional decoy pass.
+    // Quantify RUN-MAJOR: load one run's hills, quantify every consensus feature
+    // against it, then drop the hills before loading the next run. Peak memory is
+    // O(one run's hills) instead of O(all runs' hills loaded at once).
     let t_quant = Instant::now();
-    let progress = AtomicUsize::new(0);
-    let progress_step = (n_features / 20).max(1);
     // Per-phase nanosecond accumulators across all rayon tasks.
     let ns_build = AtomicU64::new(0);
     let ns_score = AtomicU64::new(0);
     let ns_integrate = AtomicU64::new(0);
-    let all_entries: Vec<LfqEntry> = (0..n_features)
-        .into_par_iter()
-        .flat_map_iter(|feat_idx| {
-            let cf = &consensus[feat_idx];
-            let mut entries = Vec::with_capacity(n_runs * 2);
+    let mut all_entries: Vec<LfqEntry> = Vec::new();
+    let mut hills_per_run: Vec<usize> = vec![0; n_runs];
 
-            // Per-task scratch — allocated once, reused for every (run, target/decoy) pair.
-            let mut grid = XicGrid::empty(config.n_isotopes, config.grid_cols, 0.0, 1.0);
-            let mut scores = ColumnScores::new(config.grid_cols);
-            let mut col_totals = vec![0.0f32; config.grid_cols];
-            let mut obs = vec![0.0f64; config.n_isotopes];
+    for run_idx in 0..n_runs {
+        let run = &runs[run_idx];
+        let run_rt_range = run_rt_ranges[run_idx];
+        let t_load = Instant::now();
+        let hills_vec = load_hills(run_idx);
+        hills_per_run[run_idx] = hills_vec.len();
+        let sorted = SortedHills::from_hills(&hills_vec);
+        log::info!(
+            "[lfq] run {}/{} '{}': {} hills loaded [{:.2?}]",
+            run_idx + 1, n_runs, run.name, hills_vec.len(), t_load.elapsed()
+        );
 
-            for run_idx in 0..n_runs {
-                let run = &runs[run_idx];
-                let run_rt_range = run_rt_ranges[run_idx];
-                let hills = &sorted_hills[run_idx];
+        let run_entries: Vec<LfqEntry> = (0..n_features)
+            .into_par_iter()
+            .flat_map_iter(|feat_idx| {
+                let cf = &consensus[feat_idx];
+                let mut entries = Vec::with_capacity(2);
+
+                // Per-task scratch — allocated once per feature, reused for target + decoy.
+                let mut grid = XicGrid::empty(config.n_isotopes, config.grid_cols, 0.0, 1.0);
+                let mut scores = ColumnScores::new(config.grid_cols);
+                let mut col_totals = vec![0.0f32; config.grid_cols];
+                let mut obs = vec![0.0f64; config.n_isotopes];
 
                 // Seed coordinates are already in reference-run space.
                 // For the reference run use them directly; for other runs invert
@@ -462,10 +513,33 @@ pub fn quantify(
 
                 let half_window = config.rt_window_pct * (run_rt_range.1 - run_rt_range.0);
 
+                // Region-aware RT term (LfqConfig.rt_spread_scoring): convert the
+                // per-run normalised residual σ at a given native RT into grid-
+                // column units. σ_cols = σ_norm · grid_cols / (2·rt_window_pct);
+                // the run RT span cancels because half_window = rt_window_pct·span.
+                // Returns None (⇒ raw RT term) for the reference run, when the flag
+                // is off, or when the run has no σ model. Evaluated per-cell so the
+                // target and its decoy use the same model at their own centres.
+                let rt_sigma_cols_at = |native_rt: f64| -> Option<f32> {
+                    if !config.rt_spread_scoring || run_idx == alignment.reference_idx {
+                        return None;
+                    }
+                    let al = &alignment.alignments[&run.name];
+                    let span = run_rt_range.1 - run_rt_range.0;
+                    let run_norm = if span > 0.0 {
+                        ((native_rt - run_rt_range.0) / span).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    al.rt_sigma.sigma_norm_at(run_norm).map(|s_norm| {
+                        (s_norm * config.grid_cols as f64 / (2.0 * config.rt_window_pct)) as f32
+                    })
+                };
+
                 // Target
                 let t_b = Instant::now();
                 build_grid(
-                    &mut grid, run, hills, corr_mz, cf.charge,
+                    &mut grid, &hills_vec, &sorted, &run.scan_times, corr_mz, cf.charge,
                     corr_rt, corr_im, half_window, config,
                 );
                 ns_build.fetch_add(t_b.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -473,7 +547,7 @@ pub fn quantify(
                 let tgt_obs_mz = grid.winner_mz[0];
                 let tgt_obs_im = grid.winner_im[0];
                 let t_s = Instant::now();
-                score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs);
+                score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(corr_rt));
                 ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 let t_i = Instant::now();
                 let tgt_peak = integrate(&grid, &scores, &col_totals, config);
@@ -519,8 +593,11 @@ pub fn quantify(
                     run_idx,
                     intensity: target_intensity,
                     hybrid_score: tgt_peak.hybrid_score,
-                    spectral_cosine: tgt_peak.spectral_cosine_at_apex,
+                    spectral_bhattacharyya: tgt_peak.bhattacharyya_at_apex,
                     n_isotopes_found: tgt_slots,
+                    rt_score: tgt_peak.rt_score_at_apex,
+                    int_score: tgt_peak.int_score_at_apex,
+                    coelution: tgt_peak.coelution,
                     is_decoy: false,
                     is_mbr: contributed.is_none(),
                     expected_rt: corr_rt,
@@ -541,7 +618,7 @@ pub fn quantify(
                         - config.decoy_rt_shift_pct * (run_rt_range.1 - run_rt_range.0);
                     let t_b = Instant::now();
                     build_grid(
-                        &mut grid, run, hills, dec_mz, cf.charge,
+                        &mut grid, &hills_vec, &sorted, &run.scan_times, dec_mz, cf.charge,
                         dec_rt, corr_im, half_window, config,
                     );
                     ns_build.fetch_add(t_b.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -549,7 +626,7 @@ pub fn quantify(
                     let dec_obs_mz = grid.winner_mz[0];
                     let dec_obs_im = grid.winner_im[0];
                     let t_s = Instant::now();
-                    score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs);
+                    score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(dec_rt));
                     ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     let t_i = Instant::now();
                     let dec_peak = integrate(&grid, &scores, &col_totals, config);
@@ -562,8 +639,11 @@ pub fn quantify(
                         run_idx,
                         intensity: if use_apex { dec_peak.apex_intensity } else { dec_peak.intensity },
                         hybrid_score: dec_peak.hybrid_score,
-                        spectral_cosine: dec_peak.spectral_cosine_at_apex,
+                        spectral_bhattacharyya: dec_peak.bhattacharyya_at_apex,
                         n_isotopes_found: dec_slots,
+                        rt_score: dec_peak.rt_score_at_apex,
+                        int_score: dec_peak.int_score_at_apex,
+                        coelution: dec_peak.coelution,
                         is_decoy: true,
                         is_mbr: false,
                         expected_rt: dec_rt,
@@ -575,25 +655,17 @@ pub fn quantify(
                         observed_im: dec_obs_im,
                     });
                 }
-            }
 
-            let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % progress_step == 0 || done == n_features {
-                log::info!(
-                    "[lfq] quantified {}/{} features ({:.0}%) in {:.2?}",
-                    done,
-                    n_features,
-                    100.0 * done as f64 / n_features as f64,
-                    t_quant.elapsed(),
-                );
-            }
-
-            entries
-        })
-        .collect();
+                entries
+            })
+            .collect();
+        all_entries.extend(run_entries);
+        // `hills_vec` and `sorted` are dropped here before the next run loads.
+    }
     log::info!(
-        "[timing] quantification loop ({} entries): {:.2?}",
+        "[timing] quantification loop ({} entries, {} runs streamed): {:.2?}",
         all_entries.len(),
+        n_runs,
         t_quant.elapsed()
     );
     let total_ns = ns_build.load(Ordering::Relaxed)
@@ -616,7 +688,10 @@ pub fn quantify(
     // Target-decoy q-values
     let t_tdc = Instant::now();
     let q_map: HashMap<(usize, usize), f64> = if config.run_tdc {
-        tdc::compute_qvalues(&all_entries)
+        match config.tdc_method {
+            TdcMethod::Qda => rescore::compute_qvalues_qda(&all_entries),
+            TdcMethod::Hybrid => tdc::compute_qvalues(&all_entries),
+        }
     } else {
         all_entries
             .iter()
@@ -716,6 +791,7 @@ pub fn quantify(
             .iter()
             .map(|f| f.n_contributing_runs)
             .collect(),
+        hills_per_run,
         intensities,
         q_values: q_values_out,
         decoy_intensities,

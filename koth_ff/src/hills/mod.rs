@@ -203,6 +203,11 @@ where
     );
 
     let mut hills = Vec::new();
+    // Sort by isolation-window key so hill collection order (and the IDs
+    // assigned by position below) is deterministic across runs — HashMap
+    // iteration order is randomized per process.
+    let mut detectors: Vec<_> = detectors.into_iter().collect();
+    detectors.sort_by_key(|(key, _)| *key);
     for (_key, (_iw, det, _n)) in detectors {
         let mut window_hills = det.finish();
         if config.split_hills {

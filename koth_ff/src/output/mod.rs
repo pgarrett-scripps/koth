@@ -97,7 +97,7 @@ fn write_hills_tsv_inner(
         hills[b]
             .intensity_sum
             .partial_cmp(&hills[a].intensity_sum)
-            .unwrap()
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut wtr = csv::WriterBuilder::new()
@@ -321,7 +321,7 @@ fn write_hills_parquet_inner(
 
     let mut indices: Vec<usize> = (0..hills.len()).collect();
     indices.sort_by(|&a, &b| {
-        hills[b].intensity_sum.partial_cmp(&hills[a].intensity_sum).unwrap()
+        hills[b].intensity_sum.partial_cmp(&hills[a].intensity_sum).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut fields: Vec<Field> = vec![
@@ -424,7 +424,7 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         .filter(|f| f.feature.charge > 0)
         .collect();
     scored.sort_by(|a, b| {
-        b.feature.total_intensity().partial_cmp(&a.feature.total_intensity()).unwrap()
+        b.feature.total_intensity().partial_cmp(&a.feature.total_intensity()).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let schema = Arc::new(Schema::new(vec![

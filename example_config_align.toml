@@ -71,15 +71,29 @@ n_isotopes = 3
 # Number of RT bins per grid (default 100)
 grid_cols = 100
 
-# Spectral-cosine floor for peak expansion; columns below this don't extend the peak.
-# (Cosine of XIC column vs theoretical pattern at the apex, in [0, 1].)
-spectral_cosine_min = 0.1
+# Minimum spectral Bhattacharyya for peak expansion; columns below this don't
+# extend the peak. (Observed vs theoretical isotope pattern at the apex, [0, 1].
+# NOT a cosine — the isotope co-elution cosine is a separate, always-on signal.)
+min_spectral_bhattacharyya = 0.1
 
 # Peak scoring mode: "hybrid" (default), "rt", "intensity", or "spectral"
 score_mode = "hybrid"
 
-# Run target-decoy competition to compute per-entry q-values
+# Run target-decoy competition to compute per-cell MBR q-values
 run_tdc = true
+
+# How MBR q-values are computed:
+#   "qda"    = semi-supervised QDA rescorer (default) over {|ppm|, |RT diff|,
+#              Bhattacharyya, coelution}; Percolator-style loop + 3-fold CV.
+#              Detected cells are kept unconditionally (q = 0); q estimates the
+#              match-between-runs transfer FDR.
+#   "hybrid" = legacy: rank all cells by hybrid_score, monotone running FDR.
+tdc_method = "qda"
+
+# Experimental (default off): replace the raw RT-closeness term with a
+# region-aware, σ-normalised Gaussian RT likelihood from the per-run post-warp
+# RT-residual spread.
+# rt_spread_scoring = false
 
 # Decoy m/z shift in Da. The decoy grid is centred at
 #   decoy_mz = target_mz + decoy_mz_shift_da / charge.

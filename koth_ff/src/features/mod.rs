@@ -1,4 +1,5 @@
 pub mod cosine;
+pub mod recalibration;
 
 use std::cmp::Ordering;
 
@@ -8,6 +9,7 @@ use crate::config::{FeaturesConfig, FileConfig, ImToleranceType, MzUncertaintyMo
 use crate::models::{Feature, Hill};
 use crate::scoring::averagine;
 use cosine::cosine_similarity;
+use recalibration::{MzRecalBuilder, MzRecalModel};
 
 /// When `mz_uncertainty_mode = Kish`, the binary-search window is widened
 /// by this factor so candidates with high `mz_se` that pass the exact
@@ -38,6 +40,19 @@ struct Candidate {
 ///    unclaimed.
 /// 4. Feature structs are built from accepted candidates.
 pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Vec<Feature> {
+    detect_features_with_recal(hills, config, file, None)
+}
+
+/// As [`detect_features`], but shifts the expected isotope position during
+/// chain extension by the per-region offset from an isotope-consistency
+/// recalibration surface (see [`recalibration`]). Pass `None` for the
+/// uncorrected behaviour.
+pub fn detect_features_with_recal(
+    hills: &[Hill],
+    config: &FeaturesConfig,
+    file: &FileConfig,
+    recal: Option<&MzRecalModel>,
+) -> Vec<Feature> {
     if hills.is_empty() {
         return Vec::new();
     }
@@ -45,7 +60,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
     log::info!("Detecting isotope features from {} hills", hills.len());
 
     let mut order: Vec<usize> = (0..hills.len()).collect();
-    order.sort_by(|&a, &b| hills[a].mz.partial_cmp(&hills[b].mz).unwrap());
+    order.sort_by(|&a, &b| hills[a].mz.partial_cmp(&hills[b].mz).unwrap_or(Ordering::Equal));
     let sorted_hills: Vec<&Hill> = order.iter().map(|&i| &hills[i]).collect();
     let mz_array: Vec<f64> = sorted_hills.iter().map(|h| h.mz).collect();
     let im_array: Vec<f64> = sorted_hills.iter().map(|h| h.im).collect();
@@ -86,6 +101,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
                 file,
                 use_im,
                 min_intensity,
+                recal,
             )
         })
         .collect();
@@ -119,7 +135,7 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
         .map(|c| {
             let mut chain_hills: Vec<Hill> =
                 c.hill_indices.iter().map(|&i| (*sorted_hills[i]).clone()).collect();
-            chain_hills.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap());
+            chain_hills.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
 
             let cosine_sims: Vec<f64> = (0..chain_hills.len().saturating_sub(1))
                 .map(|k| cosine_similarity(&chain_hills[k], &chain_hills[k + 1]))
@@ -164,6 +180,54 @@ pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfi
     features
 }
 
+/// Learn an isotope-consistency recalibration surface from a pass-1 feature
+/// detection over `hills`. Collects, for every accepted charged feature with
+/// ≥2 isotope hills, the signed ppm deviation of each adjacent isotope-hill
+/// spacing from the theoretical `neutron_mass / z` step, keyed at the higher
+/// hill's (m/z, RT). Returns `None` when too few samples are collected to be
+/// meaningful (see `mz_recalibration_min_samples`).
+pub fn learn_recal_model(
+    hills: &[Hill],
+    config: &FeaturesConfig,
+    file: &FileConfig,
+) -> Option<MzRecalModel> {
+    let features = detect_features_with_recal(hills, config, file, None);
+
+    // Generous residual cap so a spacing that skipped an isotope can't poison
+    // the marginal fallback: 4× the user tolerance (ppm), or a fixed 40 ppm
+    // for Dalton tolerances where a ppm cap isn't defined.
+    let max_abs_ppm = if matches!(file.mz_tolerance_type, ToleranceType::Ppm) {
+        file.mz_tolerance * 4.0
+    } else {
+        40.0
+    };
+    let mut builder = MzRecalBuilder::new(max_abs_ppm);
+
+    for f in &features {
+        if f.charge < 1 || f.hills.len() < 2 {
+            continue;
+        }
+        let step = config.neutron_mass / f.charge as f64;
+        // `f.hills` is sorted by m/z ascending and chain extension stops at the
+        // first missing isotope, so adjacent pairs are consecutive isotopes.
+        // The 0.5·step guard is a cheap belt-and-braces against any gap.
+        for w in f.hills.windows(2) {
+            let observed = w[1].mz - w[0].mz;
+            if (observed - step).abs() > 0.5 * step {
+                continue;
+            }
+            let resid_ppm = (observed - step) / w[1].mz * 1e6;
+            builder.add(w[1].mz, w[1].rt, resid_ppm);
+        }
+    }
+
+    builder.finalize(
+        file.mz_recalibration_mz_bins,
+        file.mz_recalibration_rt_bins,
+        file.mz_recalibration_min_samples,
+    )
+}
+
 /// Build the best candidate for `seed_idx` across all charge states.
 ///
 /// For each charge, extends isotope chains left and right using chromatographic
@@ -181,11 +245,36 @@ fn generate_best_candidate(
     file: &FileConfig,
     use_im: bool,
     min_intensity: f64,
+    recal: Option<&MzRecalModel>,
 ) -> Candidate {
     let seed_hill = sorted_hills[seed_idx];
     let seed_mz = seed_hill.mz;
-    let mz_tol = if matches!(file.mz_tolerance_type, ToleranceType::Ppm) {
-        seed_mz * file.mz_tolerance / 1e6
+    let seed_rt = seed_hill.rt;
+    // Isotope-consistency recalibration: shift an expected isotope m/z by the
+    // learned per-region proportional offset. All isotopes of a feature
+    // co-elute, so the seed RT keys the whole chain. No-op when `recal` is
+    // `None`.
+    let recal_mz = |expected: f64| -> f64 {
+        match recal {
+            Some(m) => expected * (1.0 + m.predict(expected, seed_rt) / 1e6),
+            None => expected,
+        }
+    };
+    let use_ppm_tol = matches!(file.mz_tolerance_type, ToleranceType::Ppm);
+    // Region-adaptive isotope-match tolerance (#2): when recalibration is on
+    // and `mz_recalibration_adaptive_tol` is set, derive the ppm window from
+    // the surface's per-region residual spread σ instead of the fixed
+    // `mz_tolerance`, clamped to [tol_floor_ppm, mz_tolerance]. Isotopes of one
+    // feature span only a few Da, so a single σ read at the seed applies to
+    // the whole chain. No-op for Dalton tolerances or when `recal` is `None`.
+    let effective_tol_ppm = match (use_ppm_tol, file.mz_recalibration_adaptive_tol, recal) {
+        (true, true, Some(m)) => (file.mz_recalibration_tol_sigma_mult
+            * m.predict_sigma(seed_mz, seed_rt))
+        .clamp(file.mz_recalibration_tol_floor_ppm, file.mz_tolerance),
+        _ => file.mz_tolerance,
+    };
+    let mz_tol = if use_ppm_tol {
+        seed_mz * effective_tol_ppm / 1e6
     } else {
         file.mz_tolerance
     };
@@ -231,7 +320,7 @@ fn generate_best_candidate(
                 break;
             }
 
-            let target_mz = seed_mz + step * iso as f64;
+            let target_mz = recal_mz(seed_mz + step * iso as f64);
             let ref_hill = right_chain
                 .last()
                 .map(|&i| sorted_hills[i])
@@ -306,7 +395,7 @@ fn generate_best_candidate(
         let mut left_chain: Vec<usize> = Vec::new();
         let mut left_cosines: Vec<f64> = Vec::new();
         for iso in 1..=config.max_isotopes {
-            let target_mz = seed_mz - step * iso as f64;
+            let target_mz = recal_mz(seed_mz - step * iso as f64);
             let ref_hill = left_chain
                 .last()
                 .map(|&i| sorted_hills[i])

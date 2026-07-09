@@ -24,35 +24,38 @@ pub fn score_features(
         .map(|feature| score_one(feature, config, sulfur_aware))
         .collect();
 
-    let charged: Vec<&ScoredFeature> = all_scored.iter().filter(|sf| sf.feature.charge > 0).collect();
-    if !charged.is_empty() {
-        let max_score = charged.iter().map(|sf| sf.combined_score).fold(f64::NEG_INFINITY, f64::max);
-        let mean_score = charged.iter().map(|sf| sf.combined_score).sum::<f64>() / charged.len() as f64;
-        let above = charged
-            .iter()
-            .filter(|sf| sf.isotope_score >= config.min_isotope_score_for_offset)
-            .count();
-        eprintln!(
-            "[koth_ff] score diag: {} charged features, max_combined={:.3}, mean_combined={:.3}, isotope>={}: {}",
-            charged.len(), max_score, mean_score, config.min_isotope_score_for_offset, above
-        );
-        // Print first 5 charged features for inspection
-        for sf in charged.iter().take(5) {
-            let obs = sf.feature.isotope_profile_apex();
-            eprintln!(
-                "  charge={} n_isotopes={} obs={:?} iso={:.4} cos={:.4} comb={:.4}",
-                sf.feature.charge,
-                sf.feature.hills.len(),
-                obs.iter().map(|x| format!("{:.0}", x)).collect::<Vec<_>>(),
-                sf.isotope_score,
-                sf.cosine_score,
-                sf.combined_score,
+    if log::log_enabled!(log::Level::Debug) {
+        let charged: Vec<&ScoredFeature> = all_scored.iter().filter(|sf| sf.feature.charge > 0).collect();
+        if !charged.is_empty() {
+            let max_score = charged.iter().map(|sf| sf.combined_score).fold(f64::NEG_INFINITY, f64::max);
+            let mean_score = charged.iter().map(|sf| sf.combined_score).sum::<f64>() / charged.len() as f64;
+            let above = charged
+                .iter()
+                .filter(|sf| sf.isotope_score >= config.min_isotope_score_for_offset)
+                .count();
+            log::debug!(
+                "score diag: {} charged features, max_combined={:.3}, mean_combined={:.3}, isotope>={}: {}",
+                charged.len(), max_score, mean_score, config.min_isotope_score_for_offset, above
             );
+            // First 5 charged features for inspection
+            for sf in charged.iter().take(5) {
+                let obs = sf.feature.isotope_profile_apex();
+                log::debug!(
+                    "  charge={} n_isotopes={} obs={:?} iso={:.4} cos={:.4} comb={:.4}",
+                    sf.feature.charge,
+                    sf.feature.hills.len(),
+                    obs.iter().map(|x| format!("{:.0}", x)).collect::<Vec<_>>(),
+                    sf.isotope_score,
+                    sf.cosine_score,
+                    sf.combined_score,
+                );
+            }
         }
     }
 
-    // Return all charged features; output filtering by score is applied by
-    // the caller via FeaturesConfig::min_score.
+    // Return all charged features; output filtering by score is applied by the
+    // caller via FeaturesConfig::min_isotope_score / min_cosine_score /
+    // min_combined_score.
     let scored: Vec<ScoredFeature> = all_scored
         .into_iter()
         .filter(|sf| sf.feature.charge > 0)

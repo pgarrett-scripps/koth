@@ -144,7 +144,11 @@ pub mod inner {
             return Err(KothError::NoSpectra);
         }
 
-        spectra.sort_by(|a, b| a.retention_time.partial_cmp(&b.retention_time).unwrap());
+        spectra.sort_by(|a, b| {
+            a.retention_time
+                .partial_cmp(&b.retention_time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for (i, s) in spectra.iter_mut().enumerate() {
             s.scan_index = i;
         }

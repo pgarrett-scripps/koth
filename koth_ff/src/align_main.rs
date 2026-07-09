@@ -91,20 +91,19 @@ fn main() -> anyhow::Result<()> {
     // ── Load runs ─────────────────────────────────────────────────────────────
     let mut runs: Vec<RunInput> = Vec::with_capacity(run_paths.len());
 
+    // Load only FEATURES up front (small). Hills (the large intensity profiles)
+    // are streamed one run at a time during LFQ so peak memory stays O(one run's
+    // hills) rather than O(all runs' hills).
     for rp in &run_paths {
         let t = Instant::now();
-
-        let hills = read_hills(&rp.hills_path)
-            .with_context(|| format!("Failed to read hills from {}", rp.hills_path.display()))?;
 
         let features = read_features(&rp.features_path).with_context(|| {
             format!("Failed to read features from {}", rp.features_path.display())
         })?;
 
         log::info!(
-            "Loaded '{}': {} hills, {} features [{:.2?}]",
+            "Loaded '{}': {} features [{:.2?}] (hills streamed during LFQ)",
             rp.name,
-            hills.len(),
             features.len(),
             t.elapsed()
         );
@@ -112,12 +111,12 @@ fn main() -> anyhow::Result<()> {
         runs.push(RunInput {
             name: rp.name.clone(),
             features,
-            hills,
+            hills: Vec::new(), // streamed per-run in quantify()
             scan_times: Vec::new(), // not stored in output files; grid uses rt interpolation
         });
     }
 
-    log_mem("after loading all runs");
+    log_mem("after loading all features");
 
     // ── Alignment ─────────────────────────────────────────────────────────────
     log::info!("Running alignment...");
@@ -143,7 +142,18 @@ fn main() -> anyhow::Result<()> {
     // ── LFQ ───────────────────────────────────────────────────────────────────
     log::info!("Running LFQ quantification...");
     let t = Instant::now();
-    let matrix = quantify(&runs, &alignment, &config.lfq);
+    let matrix = quantify(&runs, &alignment, &config.lfq, |i| {
+        // Stream this run's hills on demand; dropped inside quantify() before
+        // the next run loads. Discovery already verified the file exists.
+        read_hills(&run_paths[i].hills_path).unwrap_or_else(|e| {
+            log::error!(
+                "Failed to read hills from {}: {} — run contributes no signal",
+                run_paths[i].hills_path.display(),
+                e
+            );
+            Vec::new()
+        })
+    });
     let lfq_elapsed = t.elapsed();
     log::info!(
         "[timing] LFQ: {:.2?} ({} features × {} runs)",
@@ -408,16 +418,19 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
     let file = std::fs::File::create(&path)?;
     let mut f = BufWriter::with_capacity(1 << 20, file);
 
-    // Column dictionary:
-    //   seed_combined_score = seed feature's combined_score (isotope × chromato cosine)
-    //   hybrid_score        = cbrt(rt × intensity × spectral_cosine) at apex column
-    //   spectral_cosine     = cosine(XIC column, theoretical pattern) at apex
-    //                         column (LFQ-stage cosine — NOT the chromatographic
-    //                         feature cosine_score)
+    // Column dictionary (all LFQ-stage, at the apex column — NOT the feature
+    // finder's chromatographic cosine_score). The two isotope signals:
+    //   spectral_bhattacharyya = observed-vs-theoretical isotope PATTERN match
+    //                            (penalises expected-but-missing peaks)
+    //   coelution              = cosine between the matched isotopes' XIC traces
+    //                            across RT (do they co-elute?)
+    //   hybrid_score           = (rt × intensity × spectral_bhattacharyya × coelution)^¼
+    //   seed_combined_score    = seed feature's combined_score (feature-stage)
     writeln!(
         f,
         "feature_idx\tmassCalib\tmz\tcharge\trefRtApex\trefIm\tseed_combined_score\tseed_run\
-         \tn_contributing_runs\trun_name\tis_decoy\tis_mbr\tintensity\thybrid_score\tspectral_cosine\
+         \tn_contributing_runs\trun_name\tis_decoy\tis_mbr\tintensity\thybrid_score\tspectral_bhattacharyya\
+         \trt_score\tint_score\tcoelution\
          \tn_isotopes_found\texpected_rt\tapex_rt\trt_diff\tpeak_width_rt\
          \tobserved_mz\tppm_error\tobserved_im\tim_delta\tq_value"
     )?;
@@ -476,7 +489,8 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
         writeln!(
             f,
             "{feat}\t{mass:.6}\t{mz:.6}\t{charge}\t{rt:.6}\t{im}\t{seed_combined:.6}\t{seed_run}\
-             \t{ncont}\t{run_name}\t{decoy}\t{is_mbr}\t{intensity}\t{hybrid:.6}\t{spectral:.6}\
+             \t{ncont}\t{run_name}\t{decoy}\t{is_mbr}\t{intensity}\t{hybrid:.6}\t{bhatt:.6}\
+             \t{rt_score:.6}\t{int_score:.6}\t{coelution:.6}\
              \t{nslots}\t{exp_rt}\t{apex_rt}\t{rtdiff}\t{pw}\
              \t{obs_mz}\t{ppm}\t{obs_im}\t{im_delta}\t{qv}",
             feat = feat,
@@ -497,7 +511,10 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
             is_mbr = entry.is_mbr,
             intensity = intensity_str,
             hybrid = entry.hybrid_score,
-            spectral = entry.spectral_cosine,
+            bhatt = entry.spectral_bhattacharyya,
+            rt_score = entry.rt_score,
+            int_score = entry.int_score,
+            coelution = entry.coelution,
             nslots = entry.n_isotopes_found,
             exp_rt = fmt_f(entry.expected_rt),
             apex_rt = fmt_f(entry.apex_rt),

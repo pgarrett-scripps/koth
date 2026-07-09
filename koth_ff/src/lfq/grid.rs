@@ -1,4 +1,4 @@
-use crate::{alignment::RunInput, models::Hill};
+use crate::models::Hill;
 
 use super::LfqConfig;
 
@@ -32,10 +32,9 @@ pub struct SortedHills {
 }
 
 impl SortedHills {
-    /// Build the sorted view from a run. Records are sorted ascending by mz.
-    pub fn from_run(run: &RunInput) -> Self {
-        let mut keys: Vec<HillKey> = run
-            .hills
+    /// Build the sorted view from a run's hills. Records are sorted ascending by mz.
+    pub fn from_hills(hills: &[Hill]) -> Self {
+        let mut keys: Vec<HillKey> = hills
             .iter()
             .enumerate()
             .map(|(i, h)| HillKey {
@@ -48,7 +47,7 @@ impl SortedHills {
                 _pad: 0,
             })
             .collect();
-        keys.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap());
+        keys.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(std::cmp::Ordering::Equal));
         SortedHills { keys }
     }
 
@@ -127,11 +126,12 @@ impl XicGrid {
 /// reference coordinate space (alignment-corrected).  The function searches
 /// `hills` (a mz-sorted `SortedHills` SoA view of the run) is binary-searched
 /// for hills matching each isotopologue; the winner is then materialised
-/// from `run.hills` to read its `intensity_profile`.
+/// from `hills_data` (the run's full `Vec<Hill>`) to read its `intensity_profile`.
 pub fn build_grid(
     grid: &mut XicGrid,
-    run: &RunInput,
+    hills_data: &[Hill],
     hills: &SortedHills,
+    scan_times: &[f64],
     target_mz: f64,
     charge: u8,
     target_rt: f64,
@@ -181,14 +181,14 @@ pub fn build_grid(
             if has_im && k.im != 0.0 && (k.im - target_im).abs() > config.im_tolerance {
                 continue;
             }
-            let hill = &run.hills[k.hill_idx as usize];
+            let hill = &hills_data[k.hill_idx as usize];
             let added = fill_row_from_hill(
                 hill,
                 &mut grid.intensities[iso],
                 rt_min,
                 rt_max,
                 n_cols,
-                &run.scan_times,
+                scan_times,
             );
             if added {
                 any_added = true;

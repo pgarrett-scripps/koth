@@ -166,6 +166,44 @@ pub struct FileConfig {
     /// Ignored when `mz_uncertainty_mode = Off`.
     #[serde(default = "default_mz_uncertainty_sigma_mult")]
     pub mz_uncertainty_sigma_mult: f64,
+    /// Enable ID-free isotope-consistency m/z recalibration. A pass-1 feature
+    /// detection collects the signed ppm deviation of every adjacent
+    /// isotope-hill spacing from its theoretical `neutron_mass / z` step and
+    /// bins those residuals over (m/z, RT). Pass 2 shifts the *expected*
+    /// isotope position during chain extension by the learned per-region
+    /// median offset, so isotope hills are searched for at their recalibrated
+    /// location. Skipped in decoy mode (shuffled spectra carry no real signal)
+    /// and when too few isotope-spacing samples are collected. Default off.
+    #[serde(default)]
+    pub mz_recalibration: bool,
+    /// Number of m/z bins in the recalibration surface. Bin extents are
+    /// derived from the observed sample range. Default 20.
+    #[serde(default = "default_mz_recalibration_mz_bins")]
+    pub mz_recalibration_mz_bins: usize,
+    /// Number of RT bins in the recalibration surface. Default 8.
+    #[serde(default = "default_mz_recalibration_rt_bins")]
+    pub mz_recalibration_rt_bins: usize,
+    /// Minimum residual samples a surface cell must hold before its own median
+    /// is trusted; below this the cell falls back to the m/z-marginal median,
+    /// then the global median. Default 50.
+    #[serde(default = "default_mz_recalibration_min_samples")]
+    pub mz_recalibration_min_samples: usize,
+    /// When `mz_recalibration` is on, also replace the fixed isotope-match
+    /// tolerance with a region-adaptive one derived from the recalibration
+    /// surface's per-region residual spread σ:
+    /// `tol_ppm = clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm, mz_tolerance)`.
+    /// Tightens the search window where the instrument is precise (rejecting
+    /// false isotope matches) and relaxes it — never beyond `mz_tolerance` —
+    /// where it is noisy. Only honoured for ppm tolerances. Default off.
+    #[serde(default)]
+    pub mz_recalibration_adaptive_tol: bool,
+    /// `N` in the region-adaptive tolerance `N × σ`. Default 3.0.
+    #[serde(default = "default_mz_recalibration_tol_sigma_mult")]
+    pub mz_recalibration_tol_sigma_mult: f64,
+    /// Lower bound (ppm) on the region-adaptive tolerance, so a spuriously
+    /// tiny σ in a sparse region can't collapse the window. Default 1.0.
+    #[serde(default = "default_mz_recalibration_tol_floor_ppm")]
+    pub mz_recalibration_tol_floor_ppm: f64,
 }
 
 impl Default for FileConfig {
@@ -200,8 +238,35 @@ impl Default for FileConfig {
             adaptive_mz_tolerance_sigma_mult: default_adaptive_mz_tolerance_sigma_mult(),
             mz_uncertainty_mode: MzUncertaintyMode::Off,
             mz_uncertainty_sigma_mult: default_mz_uncertainty_sigma_mult(),
+            mz_recalibration: false,
+            mz_recalibration_mz_bins: default_mz_recalibration_mz_bins(),
+            mz_recalibration_rt_bins: default_mz_recalibration_rt_bins(),
+            mz_recalibration_min_samples: default_mz_recalibration_min_samples(),
+            mz_recalibration_adaptive_tol: false,
+            mz_recalibration_tol_sigma_mult: default_mz_recalibration_tol_sigma_mult(),
+            mz_recalibration_tol_floor_ppm: default_mz_recalibration_tol_floor_ppm(),
         }
     }
+}
+
+fn default_mz_recalibration_mz_bins() -> usize {
+    20
+}
+
+fn default_mz_recalibration_rt_bins() -> usize {
+    8
+}
+
+fn default_mz_recalibration_min_samples() -> usize {
+    50
+}
+
+fn default_mz_recalibration_tol_sigma_mult() -> f64 {
+    3.0
+}
+
+fn default_mz_recalibration_tol_floor_ppm() -> f64 {
+    1.0
 }
 
 fn default_adaptive_mz_tolerance_pass1_multiplier() -> f64 {

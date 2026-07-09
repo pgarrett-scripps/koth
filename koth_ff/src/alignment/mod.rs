@@ -130,6 +130,95 @@ impl RunInput {
     }
 }
 
+/// Per-region estimate of the post-warp RT-residual spread σ(run_rt_norm),
+/// in normalised RT units. Built from the RANSAC inlier anchors: for each
+/// inlier, the residual `ref_rt_norm − (run_rt_norm + warp_delta)` is the RT
+/// scatter the warp could not remove. Binned over run-normalised RT with
+/// empirical-Bayes shrinkage toward the global σ (so sparse bins don't produce
+/// a wild estimate) and a floor. `sigma_norm_at` returns `None` when the model
+/// is degenerate (no inliers / zero spread), signalling callers to fall back to
+/// the raw RT term.
+#[derive(Debug, Clone, Serialize)]
+pub struct RtSigmaModel {
+    /// Shrunk σ per RT bin, in normalised RT units. Empty ⇒ degenerate.
+    bins: Vec<f64>,
+    /// Global (all-inlier) σ in normalised RT units.
+    global: f64,
+}
+
+impl RtSigmaModel {
+    /// σ at a run-normalised RT position, or `None` if the model is degenerate.
+    pub fn sigma_norm_at(&self, run_norm: f64) -> Option<f64> {
+        if self.bins.is_empty() || self.global <= 0.0 {
+            return None;
+        }
+        let nb = self.bins.len();
+        let idx = ((run_norm.clamp(0.0, 1.0) * nb as f64) as usize).min(nb - 1);
+        Some(self.bins[idx])
+    }
+}
+
+/// Number of RT bins for the residual-spread model.
+const RT_SIGMA_BINS: usize = 12;
+/// Empirical-Bayes pseudo-count: a bin's σ is shrunk toward the global σ as if
+/// it had this many extra global-variance observations. Larger ⇒ more shrinkage.
+const RT_SIGMA_SHRINK_N0: f64 = 20.0;
+/// Floor on any bin's σ, as a fraction of the global σ, to avoid an
+/// over-peaked RT likelihood in a bin that happens to look near-zero.
+const RT_SIGMA_FLOOR_FRAC: f64 = 0.25;
+
+fn build_rt_sigma_model(anchors: &[AnchorPair], active: &[bool], warp: &RtWarp) -> RtSigmaModel {
+    // Post-warp residuals of inlier anchors, keyed by run-normalised position.
+    let mut xs: Vec<f64> = Vec::new();
+    let mut res: Vec<f64> = Vec::new();
+    for (a, &ok) in anchors.iter().zip(active.iter()) {
+        if !ok {
+            continue;
+        }
+        let pred = a.run_rt_norm + warp.delta_at_run_norm(a.run_rt_norm);
+        xs.push(a.run_rt_norm);
+        res.push(a.ref_rt_norm - pred);
+    }
+    if res.len() < 2 {
+        return RtSigmaModel { bins: Vec::new(), global: 0.0 };
+    }
+
+    let var = |v: &[f64]| -> f64 {
+        let n = v.len();
+        if n < 2 {
+            return 0.0;
+        }
+        let mean = v.iter().sum::<f64>() / n as f64;
+        v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64
+    };
+    let global_var = var(&res);
+    let global = global_var.sqrt();
+    if global <= 0.0 {
+        return RtSigmaModel { bins: Vec::new(), global: 0.0 };
+    }
+    let floor = RT_SIGMA_FLOOR_FRAC * global;
+
+    let nb = RT_SIGMA_BINS;
+    let mut bin_res: Vec<Vec<f64>> = vec![Vec::new(); nb];
+    for (&x, &r) in xs.iter().zip(res.iter()) {
+        let idx = ((x.clamp(0.0, 1.0) * nb as f64) as usize).min(nb - 1);
+        bin_res[idx].push(r);
+    }
+
+    let bins: Vec<f64> = bin_res
+        .iter()
+        .map(|b| {
+            let n = b.len() as f64;
+            // Empirical-Bayes shrink the bin variance toward the global variance.
+            let shrunk_var =
+                (n * var(b) + RT_SIGMA_SHRINK_N0 * global_var) / (n + RT_SIGMA_SHRINK_N0);
+            shrunk_var.sqrt().max(floor)
+        })
+        .collect();
+
+    RtSigmaModel { bins, global }
+}
+
 /// Alignment parameters for a single non-reference run.
 pub struct RunAlignment {
     pub n_anchors: usize,
@@ -138,6 +227,8 @@ pub struct RunAlignment {
     pub im_drift: DriftFit,
     pub run_rt_range: (f64, f64),
     pub ref_rt_range: (f64, f64),
+    /// Per-region post-warp RT-residual spread, in normalised RT units.
+    pub rt_sigma: RtSigmaModel,
     /// All anchor pairs used for this run's alignment.
     /// Retained for diagnostic reporting; aligned 1:1 with the masks below.
     pub anchors: Vec<AnchorPair>,
@@ -261,6 +352,8 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
         let (mass_drift, mass_active) = drift::fit_mass_drift(&anchors, config);
         let (im_drift, im_active) = drift::fit_im_drift(&anchors, config);
 
+        let rt_sigma = build_rt_sigma_model(&anchors, &rt_active, &rt_warp);
+
         let n_anchors = anchors.len();
         alignments.insert(
             run.name.clone(),
@@ -271,6 +364,7 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
                 im_drift,
                 run_rt_range,
                 ref_rt_range,
+                rt_sigma,
                 anchors,
                 rt_active,
                 mass_active,

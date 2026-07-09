@@ -8,7 +8,39 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
+### Changed
+- **`koth_align` now streams hills one run at a time during LFQ** instead of
+  loading every run's hills into memory up front. Peak memory is O(one run's
+  hills) rather than O(all runs' hills), removing the main memory bottleneck on
+  large cohorts. Only per-run *features* (small) are held for the whole run;
+  each run's *hills* (the large intensity profiles) are loaded, quantified, and
+  dropped before the next run. The `lfq::quantify` library API gains a
+  `load_hills: impl Fn(usize) -> Vec<Hill>` parameter that fetches a run's hills
+  on demand; `build_grid`/`SortedHills` now take hills directly rather than a
+  `RunInput`.
+
+- **`koth_align` MBR FDR now uses a semi-supervised QDA rescorer by default**
+  (`[lfq] tdc_method = "qda"`). Instead of ranking every cell by `hybrid_score`,
+  it learns a quadratic discriminant over five symmetric per-cell features —
+  `|ppm error|`, `|RT diff|`, spectral Bhattacharyya, isotope co-elution, and
+  `|IM delta|` (inert on Orbitrap, active on timsTOF) — via a Percolator-style
+  loop (iterative confident-positive selection, decoys as negatives, 3-fold
+  cross-validation by feature). Every cell — detected and match-between-runs
+  alike — competes against the decoys, so a background-contaminated cell in a
+  depleted well is gatable regardless of how it was populated (required for
+  fold-change rescue on large-dynamic-range designs). Improves target/decoy
+  separation over the raw hybrid (MBR-vs-decoy AUROC 0.84 → 0.86). Fully
+  deterministic. The legacy behaviour is available as `tdc_method = "hybrid"`.
+  NOTE: absolute q-value calibration is not yet independently validated.
+- **Isotope scoring is no longer a config choice.** A cosine and a Bhattacharyya
+  were historically conflated under one flag; the two *orthogonal* isotope
+  signals are now always computed and named for what they are:
+  - `spectral_bhattacharyya` — observed vs theoretical isotope *pattern* match
+    (penalises expected-but-missing peaks); the term the hybrid uses.
+  - `coelution` — cosine between the matched isotopes' XIC traces across RT
+    (do they co-elute?).
+
+  `hybrid_score = (rt × intensity × bhattacharyya × coelution)^¼`.
 - `koth_align`: `ppm_error` (and `im_delta`) in `lfq_details.tsv` are now
   computed against the per-row grid centre rather than the target consensus
   m/z. Previously, decoy rows reported the constant decoy m/z shift in ppm
@@ -16,11 +48,77 @@ and this project uses [Semantic Versioning](https://semver.org/).
   broke target/decoy comparability for downstream rescorers.
 
 ### Added
+- **ID-free isotope-consistency m/z recalibration** (`[file] mz_recalibration`,
+  default off; CLI `--recalibrate`). A pass-1 feature detection collects the
+  signed ppm deviation of every adjacent isotope-hill spacing from its
+  theoretical `neutron_mass / z` step and bins the residuals over (m/z, RT).
+  Pass 2 shifts the *expected* isotope position during chain extension by the
+  learned per-region median offset (hierarchical fallback: cell → m/z-marginal
+  → global), so isotope hills are searched at their recalibrated location.
+  Corrects the proportional, m/z-/RT-dependent mass-error component (dominant
+  Orbitrap mode) without IDs or a lock mass; a constant Da offset stays
+  unobservable by design. Deterministic (robust medians, fixed binning),
+  skipped in decoy mode, and costs one extra cheap feature-assembly pass over
+  the same hills. Tunable via `mz_recalibration_mz_bins` (20),
+  `mz_recalibration_rt_bins` (8), `mz_recalibration_min_samples` (50).
+  Inspired by Biosaur's per-isotope "smart" calibration and AlphaPept's
+  multi-dimensional recalibration, adapted to koth_ff's ID-free feature stage.
+  Benchmarked as a no-op on its own — well-calibrated instruments have little
+  proportional error left to correct — but it's the necessary scaffolding for
+  the region-adaptive tolerance below, which *is* a win.
+- **Region-adaptive isotope-match tolerance** (`[file]
+  mz_recalibration_adaptive_tol`, default off; CLI `--adaptive-tol`, implies
+  `--recalibrate`). Replaces the fixed isotope-match ppm window with
+  `clamp(tol_sigma_mult × σ(m/z, RT), tol_floor_ppm, mz_tolerance)`, where σ
+  comes from the recalibration surface's per-region residual spread —
+  tightening the search where the instrument is precise (rejecting false
+  isotope matches) and relaxing it, up to the configured ceiling, where it
+  isn't. **Validated on both benchmark platforms and shipped in
+  `benchmark/config/koth_ff.toml` and `koth_ff_bruker.toml`:** on PXD003881
+  (20-run Orbitrap cohort) it drops features −5.8% (spurious matches at the
+  over-wide fixed 8 ppm window) at flat PSM recall, while median CV improves
+  23.76→23.25%, MV 0.615→0.568%, CV@q≤0.05 20.64→20.47%, +70 complete-quant
+  features @q≤0.05; on the 18-run timsTOF 15-min cohort (fixed 15 ppm vs a
+  learned real spread of σ≈2.8 ppm) it improves PSM recall +1.06 pp
+  (79.34→80.40%) *and* quant (median CV 13.89→13.76%, MV 3.12→3.08%,
+  CV@q≤0.05 11.74→11.69%, +285 complete-quant features), with −0.2% features.
+  No regression found on either platform or metric. Tunable via
+  `mz_recalibration_tol_sigma_mult` (3.0) and `mz_recalibration_tol_floor_ppm`
+  (1.0).
+- `[lfq] tdc_method` — `"qda"` (default) or `"hybrid"`.
+- `[lfq] rt_spread_scoring` (default `false`, experimental) — replaces the raw
+  RT-closeness term with a σ-normalised Gaussian likelihood using the per-run
+  post-warp RT-residual spread (region-aware RT scoring).
+- New per-cell columns in `lfq_details.tsv`: `spectral_bhattacharyya`,
+  `coelution`, `rt_score`, `int_score` — the individual hybrid components,
+  exposed for downstream rescoring.
 - `[lfq] decoy_mz_shift_da` and `[lfq] decoy_rt_shift_pct` config knobs that
   control the decoy grid offsets (previously hard-coded to 11 Da/charge and
   1 % of the RT span). Defaults preserve previous behaviour.
 
-### Removed
+### Fixed
+- Non-deterministic MS2 hill IDs: `detect_ms2_hills_from_iter` collected hills
+  in `HashMap` iteration order before numbering them, so identical input
+  produced different `hill_id`s across runs. Detectors are now sorted by
+  isolation-window key first.
+- NaN-safe sorts: several `partial_cmp(..).unwrap()` sorts (mzML/Bruker RT and
+  peak m/z, output intensity, LFQ grid and feature m/z) could panic on a NaN
+  value; all now fall back to `Ordering::Equal`.
+- LFQ guards against a degenerate grid (`grid_cols`/`n_isotopes` = 0) that could
+  underflow and panic; clamps to ≥ 1 with a warning.
+- Scoring diagnostics that were printed unconditionally to stderr are now gated
+  behind `--log-level debug`.
+
+### Removed / renamed
+- `[lfq] spectral_cosine` output column removed (it held a Bhattacharyya value —
+  the source of much confusion); replaced by the correctly named
+  `spectral_bhattacharyya` and `coelution` columns.
+- `[lfq] spectral_bhattacharyya` and `[lfq] spectral_coelution` *flags* removed
+  — both metrics are always computed now. Leftover values in an existing TOML
+  are silently ignored.
+- `[lfq] spectral_cosine_min` renamed to `min_spectral_bhattacharyya` (it gates
+  peak expansion on the Bhattacharyya score, never a cosine). The old name is
+  ignored; the default (0.1) is unchanged.
 - `koth-ff` PyO3 Python bindings (`koth_ff_py` crate) and the wheel-publish
   workflow. Use the `koth_ff` CLI instead.
 

@@ -101,6 +101,36 @@ ms2_hills_enabled = true
 # mz_uncertainty_mode = "off"
 # mz_uncertainty_sigma_mult = 3.0
 
+# ID-free isotope-consistency m/z recalibration (Biosaur-style). A pass-1
+# feature detection collects the signed ppm deviation of every adjacent
+# isotope-hill spacing from its theoretical neutron/z step and bins the
+# residuals over (m/z, RT). Pass 2 shifts the *expected* isotope position
+# during chain extension by the learned per-region median offset, so isotope
+# hills are searched for at their recalibrated location. Corrects the
+# proportional, m/z-/RT-dependent component of the mass error (the dominant
+# Orbitrap mode); a constant Da offset is unobservable without IDs/lock mass.
+# Skipped in decoy mode and when too few isotope-spacing samples are collected.
+# Costs one extra (cheap) feature-assembly pass over the same hills.
+# mz_recalibration = false
+# mz_recalibration_mz_bins = 20
+# mz_recalibration_rt_bins = 8
+# mz_recalibration_min_samples = 50
+
+# Region-adaptive isotope-match tolerance, built on the surface above: instead
+# of a fixed ppm window, use clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm,
+# mz_tolerance), where σ is the surface's per-region residual spread. This is
+# the part that actually moves numbers — position-only recalibration alone was
+# a no-op on both benchmark platforms, but sizing the isotope-match window to
+# the instrument's real local precision was a win on both: PXD003881 (Orbitrap,
+# fixed 8 ppm vs learned σ≈0.9 ppm) drops -5.8% spurious features at flat
+# recall with better CV/MV; a 15-min timsTOF cohort (fixed 15 ppm vs learned
+# σ≈2.8 ppm) gains +1.06 pp PSM recall AND better CV/MV. No regression found on
+# either platform. Requires mz_recalibration = true. Only honoured for ppm
+# tolerances.
+# mz_recalibration_adaptive_tol = false
+# mz_recalibration_tol_sigma_mult = 3.0
+# mz_recalibration_tol_floor_ppm = 1.0
+
 [hills]
 # Minimum number of scans a hill must span
 min_scans = 3

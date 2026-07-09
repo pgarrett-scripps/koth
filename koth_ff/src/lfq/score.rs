@@ -7,8 +7,16 @@ use crate::scoring::elements::K_PATTERN;
 pub struct ColumnScores {
     pub rt: Vec<f32>,
     pub intensity: Vec<f32>,
-    pub spectral: Vec<f32>,
+    /// **Bhattacharyya** coefficient per column: observed isotope abundances vs
+    /// the theoretical averagine pattern, with a penalty for expected-but-missing
+    /// peaks. This is the "does the isotope pattern match theory?" signal.
+    pub bhattacharyya: Vec<f32>,
     pub hybrid: Vec<f32>,
+    /// **Co-elution cosine** (grid-level scalar): cosine similarity between the
+    /// monoisotope's XIC trace and each higher isotope's XIC trace across RT —
+    /// i.e. "do the matched isotopes rise and fall together?". Orthogonal to
+    /// the Bhattacharyya pattern match. 1.0 when <2 isotope rows carry signal.
+    pub coelution: f32,
 }
 
 impl ColumnScores {
@@ -17,8 +25,9 @@ impl ColumnScores {
         Self {
             rt: vec![0.0f32; n_cols],
             intensity: vec![0.0f32; n_cols],
-            spectral: vec![0.0f32; n_cols],
+            bhattacharyya: vec![0.0f32; n_cols],
             hybrid: vec![0.0f32; n_cols],
+            coelution: 1.0,
         }
     }
 }
@@ -44,6 +53,10 @@ pub fn score_grid(
     scores: &mut ColumnScores,
     col_totals: &mut [f32],
     obs: &mut [f64],
+    // When `Some(σ)`, the RT term becomes a Gaussian likelihood `exp(−½ z²)`
+    // with `z = (col − center) / σ` (σ in grid-column units); when `None`,
+    // the raw `1 − cbrt(rt_dev)` term is used. See `LfqConfig.rt_spread_scoring`.
+    rt_sigma_cols: Option<f32>,
 ) {
     let n_cols = grid.n_cols();
     let n_rows = grid.n_rows();
@@ -76,33 +89,20 @@ pub fn score_grid(
             }
         }
     }
-    let norm_theory: f64 = theory.iter().map(|x| x * x).sum::<f64>().sqrt();
+    // Full-length averagine template (sums ~1 over all K_PATTERN positions) for
+    // the Bhattacharyya score. Unlike `theory` above — trimmed to n_rows and
+    // re-normalised — this keeps the full distribution so `bhattacharyya_score`
+    // can penalise a column for expected isotope peaks beyond n_rows that are
+    // absent. Always computed: both spectral metrics are produced every call.
+    let bc_template: [f64; K_PATTERN] = lookup_template(neutral_mass);
 
-    let single_isotope = n_rows == 1 || grid.n_slots_filled <= 1;
-
-    // Full-length averagine template (sums ~1 over all K_PATTERN positions),
-    // used only by the Bhattacharyya path. Unlike `theory` above — which is
-    // trimmed to n_rows and re-normalised, discarding the missed-mass tail —
-    // this keeps the full distribution so `bhattacharyya_score` can penalise a
-    // column for expected isotope peaks beyond n_rows that are absent.
-    let bc_template: [f64; K_PATTERN] = if config.spectral_bhattacharyya {
-        lookup_template(neutral_mass)
-    } else {
-        [0.0; K_PATTERN]
-    };
-
-    // Grid-level isotope co-elution scalar (constant across columns), folded
-    // into the hybrid below when enabled. Distinct from the per-column spectral
-    // term: this asks whether the isotope rows rise and fall *together* across
-    // RT. Computed as the theory-weighted mean cosine of the monoisotope row
-    // against each higher isotope row that carries signal, over all columns.
-    // Rows with no signal are skipped (absence is the spectral term's job, not
-    // co-elution's); when fewer than two rows carry signal it defaults to 1.0.
-    let coelution: f64 = if config.spectral_coelution {
-        isotope_coelution(&grid.intensities, theory, n_rows, n_cols)
-    } else {
-        1.0
-    };
+    // Co-elution cosine (always computed, grid-level scalar): the theory-weighted
+    // mean cosine of the monoisotope XIC trace against each higher isotope's XIC
+    // trace across RT — "do the matched isotopes rise and fall together?". This
+    // is the true inter-isotope cosine; it is orthogonal to the Bhattacharyya
+    // pattern match. Rows with no signal are skipped; <2 signal rows → 1.0.
+    let coelution: f64 = isotope_coelution(&grid.intensities, theory, n_rows, n_cols);
+    scores.coelution = coelution as f32;
 
     for col in 0..n_cols {
         // RT score: 1 - cbrt(|col - center| / center)
@@ -111,7 +111,15 @@ pub fn score_grid(
         } else {
             0.0
         };
-        let rt_score = (1.0 - rt_dev.cbrt()).max(0.0) as f32;
+        let rt_score = match rt_sigma_cols {
+            Some(sigma) if sigma > 0.0 => {
+                // σ-normalised Gaussian RT likelihood, region-aware.
+                let z = (col as f64 - center) / sigma as f64;
+                (-0.5 * z * z).exp() as f32
+            }
+            // Raw closeness term (original behaviour).
+            _ => (1.0 - rt_dev.cbrt()).max(0.0) as f32,
+        };
         scores.rt[col] = rt_score;
 
         // Intensity score: sqrt(col_total / max_total)
@@ -122,47 +130,27 @@ pub fn score_grid(
         };
         scores.intensity[col] = int_score;
 
-        // Spectral score: agreement between the observed isotopologue
-        // intensities at this column and the theoretical averagine pattern.
-        // Fill the obs scratch buffer in-place to avoid per-column allocation.
-        let spec_score = if config.spectral_bhattacharyya {
-            // Bhattacharyya path: penalises absent-but-expected isotope peaks
-            // via the missed-mass term, so a lone monoisotope no longer scores
-            // a free 1.0. Note: no single_isotope short-circuit — the penalty
-            // is exactly the behaviour we want for single-peak columns.
-            for (r, v) in obs[..n_rows].iter_mut().enumerate() {
-                *v = grid.intensities[r][col] as f64;
-            }
-            bhattacharyya_score(&obs[..n_rows], &bc_template) as f32
-        } else if single_isotope {
-            1.0f32
-        } else {
-            for (r, v) in obs[..n_rows].iter_mut().enumerate() {
-                *v = grid.intensities[r][col] as f64;
-            }
-            let dot: f64 = obs[..n_rows].iter().zip(theory.iter()).map(|(x, y)| x * y).sum();
-            let norm_a: f64 = obs[..n_rows].iter().map(|x| x * x).sum::<f64>().sqrt();
-            if norm_a < 1e-12 || norm_theory < 1e-12 {
-                0.0f32
-            } else {
-                (dot / (norm_a * norm_theory)).clamp(0.0, 1.0) as f32
-            }
-        };
-        scores.spectral[col] = spec_score;
+        // Spectral pattern match: Bhattacharyya coefficient of the observed
+        // isotope abundances vs the theoretical averagine pattern (penalises
+        // expected-but-missing peaks). This is the ONLY observed-vs-theory
+        // metric — a redundant observed-vs-theory cosine was removed; the
+        // cosine that matters is the inter-isotope co-elution term above.
+        for (r, v) in obs[..n_rows].iter_mut().enumerate() {
+            *v = grid.intensities[r][col] as f64;
+        }
+        let bhattacharyya = bhattacharyya_score(&obs[..n_rows], &bc_template) as f32;
+        scores.bhattacharyya[col] = bhattacharyya;
 
-        // Hybrid / mode-selected score.
+        // Hybrid = geometric mean of the four quality signals:
+        //   rt × intensity × bhattacharyya(pattern) × coelution(inter-isotope cosine).
         let hybrid = match config.score_mode {
             ScoreMode::Hybrid => {
-                let base = rt_score as f64 * int_score as f64 * spec_score as f64;
-                if config.spectral_coelution {
-                    (base * coelution).powf(0.25) as f32
-                } else {
-                    base.cbrt() as f32
-                }
+                let base = rt_score as f64 * int_score as f64 * bhattacharyya as f64 * coelution;
+                base.powf(0.25) as f32
             }
             ScoreMode::Rt => rt_score,
             ScoreMode::Intensity => int_score,
-            ScoreMode::Spectral => spec_score,
+            ScoreMode::Spectral => bhattacharyya,
         };
         scores.hybrid[col] = hybrid;
     }
@@ -234,7 +222,7 @@ mod spectral_tests {
     fn bhattacharyya_penalises_lone_monoisotope_decoy() {
         let grid = lone_mono_grid();
         let neutral_mass = 1500.0; // averagine predicts substantial M+1/M+2 here
-        let theory = vec![0.5, 0.3, 0.2]; // consumed only by the cosine path
+        let theory = vec![0.5, 0.3, 0.2];
         let mut scores = ColumnScores::new(3);
         let mut col_totals = vec![0.0f32; 3];
         let mut obs = vec![0.0f64; 3];
@@ -242,18 +230,11 @@ mod spectral_tests {
         let mut cfg = LfqConfig::default();
         cfg.score_mode = ScoreMode::Spectral;
 
-        cfg.spectral_bhattacharyya = false;
-        score_grid(&grid, &theory, neutral_mass, &cfg, &mut scores, &mut col_totals, &mut obs);
-        let cosine_center = scores.spectral[1];
+        score_grid(&grid, &theory, neutral_mass, &cfg, &mut scores, &mut col_totals, &mut obs, None);
+        let bc_center = scores.bhattacharyya[1];
 
-        cfg.spectral_bhattacharyya = true;
-        score_grid(&grid, &theory, neutral_mass, &cfg, &mut scores, &mut col_totals, &mut obs);
-        let bc_center = scores.spectral[1];
-
-        assert!(
-            (cosine_center - 1.0).abs() < 1e-6,
-            "cosine freebie should score a lone monoisotope 1.0, got {cosine_center}"
-        );
+        // The pattern match must penalise a lone monoisotope for the absent
+        // M+1/M+2 that averagine predicts — no free perfect score.
         assert!(
             bc_center > 0.0 && bc_center < 0.85,
             "bhattacharyya should penalise a lone monoisotope (0 < s < 0.85), got {bc_center}"

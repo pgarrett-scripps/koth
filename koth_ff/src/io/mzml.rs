@@ -18,7 +18,11 @@ pub fn read_mzml(path: &Path) -> Result<Vec<Spectrum>, KothError> {
         return Err(KothError::NoSpectra);
     }
 
-    spectra.sort_by(|a, b| a.retention_time.partial_cmp(&b.retention_time).unwrap());
+    spectra.sort_by(|a, b| {
+        a.retention_time
+            .partial_cmp(&b.retention_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     for (i, s) in spectra.iter_mut().enumerate() {
         s.scan_index = i;
     }
@@ -229,7 +233,7 @@ fn extract_peaks(spectrum: &mut MultiLayerSpectrum) -> Vec<Peak> {
                     ion_mobility: 0.0,
                 })
                 .collect();
-            result.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap());
+            result.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(std::cmp::Ordering::Equal));
             return result;
         }
         return Vec::new();
@@ -249,7 +253,7 @@ fn extract_peaks(spectrum: &mut MultiLayerSpectrum) -> Vec<Peak> {
                         ion_mobility: 0.0,
                     })
                     .collect();
-                peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap());
+                peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(std::cmp::Ordering::Equal));
                 return peaks;
             }
         }

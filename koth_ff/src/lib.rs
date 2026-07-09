@@ -249,6 +249,30 @@ fn calibrate_streaming(
 
 /// Stage 2: Detect isotope features from hills.
 pub fn run_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Result<Vec<Feature>, KothError> {
+    if file.mz_recalibration {
+        if file.decoy_mode {
+            log::info!(
+                "Decoy mode active — skipping m/z recalibration (shuffled spectra would skew the surface)"
+            );
+        } else {
+            match features::learn_recal_model(hills, config, file) {
+                Some(model) => {
+                    log::info!(
+                        "m/z recalibration: learned isotope-consistency surface from {} spacing samples (global offset {:.3} ppm, σ {:.3} ppm) — applying in pass 2",
+                        model.n_samples,
+                        model.global_offset(),
+                        model.global_sigma,
+                    );
+                    return Ok(features::detect_features_with_recal(hills, config, file, Some(&model)));
+                }
+                None => {
+                    log::warn!(
+                        "m/z recalibration enabled but too few isotope-spacing samples to build a surface — using uncorrected features"
+                    );
+                }
+            }
+        }
+    }
     Ok(features::detect_features(hills, config, file))
 }
 
