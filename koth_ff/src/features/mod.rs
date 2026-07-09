@@ -268,9 +268,15 @@ fn generate_best_candidate(
     // feature span only a few Da, so a single σ read at the seed applies to
     // the whole chain. No-op for Dalton tolerances or when `recal` is `None`.
     let effective_tol_ppm = match (use_ppm_tol, file.mz_recalibration_adaptive_tol, recal) {
-        (true, true, Some(m)) => (file.mz_recalibration_tol_sigma_mult
-            * m.predict_sigma(seed_mz, seed_rt))
-        .clamp(file.mz_recalibration_tol_floor_ppm, file.mz_tolerance),
+        (true, true, Some(m)) => {
+            // `f64::clamp` panics if min > max; a user-configured floor above
+            // mz_tolerance would otherwise crash every feature-detection task.
+            // Capping the floor at the ceiling makes mz_tolerance the true
+            // upper bound regardless of how the floor is set.
+            let floor = file.mz_recalibration_tol_floor_ppm.min(file.mz_tolerance);
+            (file.mz_recalibration_tol_sigma_mult * m.predict_sigma(seed_mz, seed_rt))
+                .clamp(floor, file.mz_tolerance)
+        }
         _ => file.mz_tolerance,
     };
     let mz_tol = if use_ppm_tol {

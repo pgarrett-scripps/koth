@@ -144,14 +144,17 @@ fn main() -> anyhow::Result<()> {
     let t = Instant::now();
     let matrix = quantify(&runs, &alignment, &config.lfq, |i| {
         // Stream this run's hills on demand; dropped inside quantify() before
-        // the next run loads. Discovery already verified the file exists.
+        // the next run loads. Discovery already verified the file exists, so
+        // a failure here means it vanished or was corrupted mid-run — fail
+        // loudly rather than silently zero that run's signal, which would
+        // otherwise let a corrupted intermediate silently skew the intensity
+        // matrix and every downstream statistic computed from it.
         read_hills(&run_paths[i].hills_path).unwrap_or_else(|e| {
-            log::error!(
-                "Failed to read hills from {}: {} — run contributes no signal",
-                run_paths[i].hills_path.display(),
-                e
-            );
-            Vec::new()
+            panic!(
+                "Failed to read hills from {}: {e} — aborting rather than silently \
+                 contributing zero signal for this run",
+                run_paths[i].hills_path.display()
+            )
         })
     });
     let lfq_elapsed = t.elapsed();

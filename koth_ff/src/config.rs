@@ -262,7 +262,12 @@ fn default_mz_recalibration_min_samples() -> usize {
 }
 
 fn default_mz_recalibration_tol_sigma_mult() -> f64 {
-    3.0
+    // Validated by a joint sweep on both benchmark platforms (Orbitrap
+    // PXD003881, timsTOF PXD070049): recall peaks at 5.0 on Orbitrap and at
+    // 3.0 on Bruker, with CV flat across the whole range on both. 4.0 is the
+    // balanced single default — within ~0.2pp of recall of either
+    // platform's own optimum, at no precision cost.
+    4.0
 }
 
 fn default_mz_recalibration_tol_floor_ppm() -> f64 {

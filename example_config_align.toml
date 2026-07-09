@@ -85,8 +85,10 @@ run_tdc = true
 # How MBR q-values are computed:
 #   "qda"    = semi-supervised QDA rescorer (default) over {|ppm|, |RT diff|,
 #              Bhattacharyya, coelution}; Percolator-style loop + 3-fold CV.
-#              Detected cells are kept unconditionally (q = 0); q estimates the
-#              match-between-runs transfer FDR.
+#              Every cell with signal — detected or match-between-runs —
+#              competes against the decoys; detected cells are NOT given a
+#              free pass, so a background-contaminated detected cell in a
+#              depleted well is still gatable.
 #   "hybrid" = legacy: rank all cells by hybrid_score, monotone running FDR.
 tdc_method = "qda"
 

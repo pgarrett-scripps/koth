@@ -128,7 +128,7 @@ ms2_hills_enabled = true
 # either platform. Requires mz_recalibration = true. Only honoured for ppm
 # tolerances.
 # mz_recalibration_adaptive_tol = false
-# mz_recalibration_tol_sigma_mult = 3.0
+# mz_recalibration_tol_sigma_mult = 4.0
 # mz_recalibration_tol_floor_ppm = 1.0
 
 [hills]
