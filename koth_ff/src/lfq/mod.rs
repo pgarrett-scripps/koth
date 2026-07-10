@@ -38,6 +38,7 @@ fn peak_rt_stats(grid: &XicGrid, n_cols: usize, peak: &PeakResult) -> (f64, f64)
 
 /// Configuration for LFQ grid extraction and peak integration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LfqConfig {
     /// m/z tolerance for hill lookup (ppm)
     pub mz_ppm: f64,
@@ -52,8 +53,9 @@ pub struct LfqConfig {
     pub grid_cols: usize,
     /// Minimum spectral **Bhattacharyya** score for a grid column to keep
     /// extending the integration peak (peak-expansion gate). Named for the
-    /// metric it actually uses — it is NOT a cosine threshold. Defaulted so
-    /// configs using the old `spectral_cosine_min` name don't hard-fail.
+    /// metric it actually uses — it is NOT a cosine threshold. Optional
+    /// (defaults to 0.1 when omitted); the config was previously named
+    /// `spectral_cosine_min`, which now errors (see `deny_unknown_fields`).
     #[serde(default = "default_min_spectral_bhattacharyya")]
     pub min_spectral_bhattacharyya: f64,
     /// Scoring mode used to find the best integration window
@@ -64,8 +66,8 @@ pub struct LfqConfig {
     //   * co-elution cosine       — cosine between the matched isotopes' XIC
     //                               traces across RT (do they co-elute?).
     // hybrid = (rt · intensity · bhattacharyya · coelution)^¼. The old
-    // `spectral_bhattacharyya` and `spectral_coelution` flags are gone; any
-    // leftover values in an existing TOML are harmlessly ignored.
+    // `spectral_bhattacharyya` and `spectral_coelution` flags are gone;
+    // leftover values in an existing TOML now error (see `deny_unknown_fields`).
     /// Whether to run target-decoy competition and compute q-values
     pub run_tdc: bool,
     /// Decoy m/z shift in Da, added to the target m/z and divided by charge
@@ -450,6 +452,14 @@ pub fn quantify(
         n_features, n_runs
     );
 
+    // Full-length averagine Bhattacharyya templates, one per consensus feature.
+    // Each depends only on `cf.neutral_mass`, so precompute here instead of
+    // rebuilding inside every (run × feature × target/decoy) score_grid call.
+    let bc_templates: Vec<_> = consensus
+        .iter()
+        .map(|cf| crate::scoring::averagine::lookup_template(cf.neutral_mass))
+        .collect();
+
     // Precompute each run's RT range once (from features — no hills needed).
     // `RunInput::rt_range` falls back to a full sweep of `run.features` when
     // `scan_times` is empty (it always is for the align pipeline), so calling it
@@ -547,7 +557,7 @@ pub fn quantify(
                 let tgt_obs_mz = grid.winner_mz[0];
                 let tgt_obs_im = grid.winner_im[0];
                 let t_s = Instant::now();
-                score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(corr_rt));
+                score_grid(&grid, &cf.theoretical_pattern, &bc_templates[feat_idx], config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(corr_rt));
                 ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 let t_i = Instant::now();
                 let tgt_peak = integrate(&grid, &scores, &col_totals, config);
@@ -626,7 +636,7 @@ pub fn quantify(
                     let dec_obs_mz = grid.winner_mz[0];
                     let dec_obs_im = grid.winner_im[0];
                     let t_s = Instant::now();
-                    score_grid(&grid, &cf.theoretical_pattern, cf.neutral_mass, config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(dec_rt));
+                    score_grid(&grid, &cf.theoretical_pattern, &bc_templates[feat_idx], config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(dec_rt));
                     ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     let t_i = Instant::now();
                     let dec_peak = integrate(&grid, &scores, &col_totals, config);

@@ -42,6 +42,7 @@ fn default_ransac_thresh() -> f64 {
 
 /// Configuration for multi-run alignment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AlignmentConfig {
     /// PPM tolerance for finding anchor feature pairs
     pub anchor_mass_ppm: f64,
@@ -61,8 +62,9 @@ pub struct AlignmentConfig {
     pub rt_warp_sigma_clip: f64,
     /// Number of sigma-clip iterations
     pub rt_warp_clip_iters: usize,
-    /// Which warp model to fit. Defaults to `linear` for low-noise global
-    /// drift correction; switch to `piecewise` to recover the historical
+    /// Which warp model to fit. Defaults to `ransac` (RANSAC-inlier piecewise
+    /// warp) for robustness to contaminated anchors; set `linear` for a single
+    /// affine global drift correction, or `piecewise` for the historical
     /// sliding-median behaviour.
     #[serde(default = "default_warp_kind")]
     pub rt_warp_kind: WarpKind,

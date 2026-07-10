@@ -10,6 +10,7 @@ use crate::lfq::LfqConfig;
 /// Tolerances (m/z ppm, RT window, IM) are shared with the LFQ config to avoid
 /// redundant settings — see `[lfq]` for those values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsensusConfig {
     /// Pre-grouping filter: a feature's `combined_score` must clear this to
     /// be eligible as a group member or seed. Features below are excluded

@@ -212,7 +212,7 @@ impl MzRecalBuilder {
             }
         }
 
-        let global = median(&mut all.clone());
+        let global = median(&mut all);
         let global_sigma = mad_sigma(&mut all, global);
 
         Some(MzRecalModel {

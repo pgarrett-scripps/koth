@@ -1,5 +1,5 @@
 use super::{grid::XicGrid, LfqConfig, ScoreMode};
-use crate::scoring::averagine::{bhattacharyya_score, lookup_template};
+use crate::scoring::averagine::bhattacharyya_score;
 use crate::scoring::elements::K_PATTERN;
 
 /// Per-column scores for an XIC grid.
@@ -48,7 +48,11 @@ impl ColumnScores {
 pub fn score_grid(
     grid: &XicGrid,
     theoretical_pattern: &[f64],
-    neutral_mass: f64,
+    // Full-length averagine template (sums ~1 over all K_PATTERN positions) for
+    // the Bhattacharyya score. Depends only on the consensus feature's neutral
+    // mass, so it is precomputed once per feature by the caller rather than
+    // rebuilt on every (run, target/decoy) invocation of this hot function.
+    bc_template: &[f64; K_PATTERN],
     config: &LfqConfig,
     scores: &mut ColumnScores,
     col_totals: &mut [f32],
@@ -89,12 +93,10 @@ pub fn score_grid(
             }
         }
     }
-    // Full-length averagine template (sums ~1 over all K_PATTERN positions) for
-    // the Bhattacharyya score. Unlike `theory` above — trimmed to n_rows and
-    // re-normalised — this keeps the full distribution so `bhattacharyya_score`
-    // can penalise a column for expected isotope peaks beyond n_rows that are
-    // absent. Always computed: both spectral metrics are produced every call.
-    let bc_template: [f64; K_PATTERN] = lookup_template(neutral_mass);
+    // `bc_template` (passed in) keeps the full averagine distribution, unlike
+    // `theory` above which is trimmed to n_rows and re-normalised, so
+    // `bhattacharyya_score` can penalise a column for expected isotope peaks
+    // beyond n_rows that are absent.
 
     // Co-elution cosine (always computed, grid-level scalar): the theory-weighted
     // mean cosine of the monoisotope XIC trace against each higher isotope's XIC
@@ -138,7 +140,7 @@ pub fn score_grid(
         for (r, v) in obs[..n_rows].iter_mut().enumerate() {
             *v = grid.intensities[r][col] as f64;
         }
-        let bhattacharyya = bhattacharyya_score(&obs[..n_rows], &bc_template) as f32;
+        let bhattacharyya = bhattacharyya_score(&obs[..n_rows], bc_template) as f32;
         scores.bhattacharyya[col] = bhattacharyya;
 
         // Hybrid = geometric mean of the four quality signals:
@@ -222,6 +224,7 @@ mod spectral_tests {
     fn bhattacharyya_penalises_lone_monoisotope_decoy() {
         let grid = lone_mono_grid();
         let neutral_mass = 1500.0; // averagine predicts substantial M+1/M+2 here
+        let bc_template = crate::scoring::averagine::lookup_template(neutral_mass);
         let theory = vec![0.5, 0.3, 0.2];
         let mut scores = ColumnScores::new(3);
         let mut col_totals = vec![0.0f32; 3];
@@ -230,7 +233,7 @@ mod spectral_tests {
         let mut cfg = LfqConfig::default();
         cfg.score_mode = ScoreMode::Spectral;
 
-        score_grid(&grid, &theory, neutral_mass, &cfg, &mut scores, &mut col_totals, &mut obs, None);
+        score_grid(&grid, &theory, &bc_template, &cfg, &mut scores, &mut col_totals, &mut obs, None);
         let bc_center = scores.bhattacharyya[1];
 
         // The pattern match must penalise a lone monoisotope for the absent

@@ -40,6 +40,7 @@ pub enum MzUncertaintyMode {
 ///
 /// Tolerances defined here are used by both hill detection and feature finding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileConfig {
     /// m/z tolerance (shared by hills and features stages)
     pub mz_tolerance: f64,
@@ -197,7 +198,7 @@ pub struct FileConfig {
     /// where it is noisy. Only honoured for ppm tolerances. Default off.
     #[serde(default)]
     pub mz_recalibration_adaptive_tol: bool,
-    /// `N` in the region-adaptive tolerance `N × σ`. Default 3.0.
+    /// `N` in the region-adaptive tolerance `N × σ`. Default 4.0.
     #[serde(default = "default_mz_recalibration_tol_sigma_mult")]
     pub mz_recalibration_tol_sigma_mult: f64,
     /// Lower bound (ppm) on the region-adaptive tolerance, so a spuriously
@@ -287,6 +288,7 @@ fn default_mz_uncertainty_sigma_mult() -> f64 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HillsConfig {
     pub min_scans: usize,
     pub max_gap: usize,
@@ -509,6 +511,7 @@ impl Default for HillsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {
     pub min_charge: u8,
     pub max_charge: u8,
@@ -568,6 +571,7 @@ impl Default for FeaturesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScoringConfig {
     /// Range of neutron offsets to test: [min, max] inclusive
     pub isotope_offset_min: i8,
@@ -603,6 +607,7 @@ pub enum OutputFormat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputConfig {
     /// Output format for hills and features files: "tsv" or "parquet"
     pub format: OutputFormat,
@@ -617,6 +622,7 @@ impl Default for OutputConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct KothConfig {
     pub file: FileConfig,
     pub hills: HillsConfig,
@@ -627,6 +633,7 @@ pub struct KothConfig {
 
 /// Output settings for the alignment + LFQ stage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AlignOutputConfig {
     /// "tsv" or "parquet"
     pub format: OutputFormat,
@@ -663,6 +670,7 @@ impl Default for AlignOutputConfig {
 
 /// Top-level configuration for the `koth_align` binary.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AlignConfig {
     pub alignment: AlignmentConfig,
     pub lfq: LfqConfig,
@@ -688,5 +696,45 @@ impl KothConfig {
 
     pub fn to_toml_string(&self) -> Result<String, crate::error::KothError> {
         toml::to_string(self).map_err(|e| crate::error::KothError::ConfigError(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod config_parse_tests {
+    use super::{AlignConfig, KothConfig};
+
+    /// Every shipped config must parse under `deny_unknown_fields`. If a field
+    /// is renamed or removed in the code, the stale key in one of these files
+    /// makes this test fail — which is the point: config drift is now caught at
+    /// build time rather than silently ignored at runtime.
+    fn parse_koth(name: &str, toml_src: &str) {
+        if let Err(e) = toml::from_str::<KothConfig>(toml_src) {
+            panic!("shipped koth_ff config `{name}` failed to parse: {e}");
+        }
+    }
+
+    fn parse_align(name: &str, toml_src: &str) {
+        if let Err(e) = toml::from_str::<AlignConfig>(toml_src) {
+            panic!("shipped koth_align config `{name}` failed to parse: {e}");
+        }
+    }
+
+    #[test]
+    fn shipped_koth_configs_parse() {
+        parse_koth("example_config.toml", include_str!("../../example_config.toml"));
+        parse_koth("koth_ff.toml", include_str!("../../benchmark/config/koth_ff.toml"));
+        parse_koth("koth_ff_bruker.toml", include_str!("../../benchmark/config/koth_ff_bruker.toml"));
+        parse_koth("koth_ff_persist.toml", include_str!("../../benchmark/config/koth_ff_persist.toml"));
+        parse_koth("koth_ff_relaxed.toml", include_str!("../../benchmark/config/koth_ff_relaxed.toml"));
+        parse_koth("koth_ff_sulfur_on.toml", include_str!("../../benchmark/config/koth_ff_sulfur_on.toml"));
+        parse_koth("koth_ff_sulfur_off.toml", include_str!("../../benchmark/config/koth_ff_sulfur_off.toml"));
+        parse_koth("koth_ff_alphapept_like.toml", include_str!("../../benchmark/config/koth_ff_alphapept_like.toml"));
+    }
+
+    #[test]
+    fn shipped_align_configs_parse() {
+        parse_align("example_config_align.toml", include_str!("../../example_config_align.toml"));
+        parse_align("koth_align.toml", include_str!("../../benchmark/config/koth_align.toml"));
+        parse_align("koth_align_bruker.toml", include_str!("../../benchmark/config/koth_align_bruker.toml"));
     }
 }

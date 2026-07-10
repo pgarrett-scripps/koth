@@ -129,19 +129,10 @@ where
 /// all spectra in memory.
 pub fn detect_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) -> Vec<Hill> {
     log::info!("Starting hill detection on {} spectra", spectra.len());
-    if config.tic_norm_window > 0 {
-        let mut owned: Vec<Spectrum> = spectra.to_vec();
-        tic_norm::normalize_tic_in_place(
-            &mut owned,
-            config.tic_norm_window,
-            config.tic_norm_min_scale,
-            config.tic_norm_max_scale,
-            tic_norm::RefMode::parse(&config.tic_norm_mode),
-        );
-        detect_hills_from_iter(owned.into_iter(), config, file)
-    } else {
-        detect_hills_from_iter(spectra.iter().cloned(), config, file)
-    }
+    // `detect_hills_from_iter` performs TIC normalization itself when
+    // `tic_norm_window > 0`; delegate directly so the spectra are normalized
+    // exactly once (normalizing here too would double-scale every intensity).
+    detect_hills_from_iter(spectra.iter().cloned(), config, file)
 }
 
 /// Detect chromatographic hills from MS2 spectra, grouping spectra by their
