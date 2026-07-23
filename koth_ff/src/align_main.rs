@@ -227,6 +227,76 @@ fn main() -> anyhow::Result<()> {
 
 // ── Output writers ────────────────────────────────────────────────────────────
 
+/// `{:.6}` of the feature's ion mobility, or an empty string when it is exactly
+/// zero (absent — e.g. Orbitrap runs carry no IM). Shared by every writer that
+/// emits the `im` metadata column so the blank-cell rule can't drift.
+fn feature_im_str(matrix: &IntensityMatrix, feat: usize) -> String {
+    if matrix.feature_im[feat] != 0.0 {
+        format!("{:.6}", matrix.feature_im[feat])
+    } else {
+        String::new()
+    }
+}
+
+/// Write the 8 shared per-feature metadata columns (no leading or trailing tab).
+/// The caller writes the header and appends the per-run cells; this keeps the
+/// column set/format identical across the intensity/q-value/decoy matrices.
+fn write_feature_metadata_cols(
+    f: &mut BufWriter<std::fs::File>,
+    matrix: &IntensityMatrix,
+    feat: usize,
+) -> std::io::Result<()> {
+    write!(
+        f,
+        "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}",
+        matrix.feature_mass[feat],
+        matrix.feature_mz[feat],
+        matrix.feature_charge[feat],
+        matrix.feature_rt[feat],
+        feature_im_str(matrix, feat),
+        matrix.feature_combined_score[feat],
+        matrix.feature_seed_run[feat],
+        matrix.feature_n_contributing_runs[feat],
+    )
+}
+
+/// Write a features × runs matrix TSV: the shared metadata header + per-feature
+/// metadata columns, then one cell per run rendered by `cell`. Used by the
+/// intensity, q-value and decoy-intensity matrix writers, which differ only in
+/// the per-cell value/format and the log label.
+fn write_cell_matrix<F>(
+    matrix: &IntensityMatrix,
+    out_dir: &PathBuf,
+    filename: &str,
+    log_label: &str,
+    mut cell: F,
+) -> anyhow::Result<()>
+where
+    F: FnMut(&mut BufWriter<std::fs::File>, &IntensityMatrix, usize, usize) -> std::io::Result<()>,
+{
+    let path = out_dir.join(filename);
+    let file = std::fs::File::create(&path)?;
+    let mut f = BufWriter::with_capacity(1 << 20, file);
+
+    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
+    for name in &matrix.run_names {
+        write!(f, "\t{}", name)?;
+    }
+    writeln!(f)?;
+
+    for feat in 0..matrix.n_features {
+        write_feature_metadata_cols(&mut f, matrix, feat)?;
+        for run in 0..matrix.n_runs {
+            cell(&mut f, matrix, feat, run)?;
+        }
+        writeln!(f)?;
+    }
+
+    f.flush()?;
+    log::info!("Wrote {} to {}", log_label, path.display());
+    Ok(())
+}
+
 /// Write `consensus_features.tsv` — one row per consensus feature.
 fn write_consensus_tsv(
     matrix: &IntensityMatrix,
@@ -257,11 +327,7 @@ fn write_consensus_tsv(
             matrix.feature_mz[feat],
             matrix.feature_charge[feat],
             matrix.feature_rt[feat],
-            if matrix.feature_im[feat] != 0.0 {
-                format!("{:.6}", matrix.feature_im[feat])
-            } else {
-                String::new()
-            },
+            feature_im_str(matrix, feat),
             matrix.feature_combined_score[feat],
             matrix.feature_seed_run[feat],
             matrix.feature_n_contributing_runs[feat],
@@ -277,138 +343,52 @@ fn write_consensus_tsv(
 /// Write `intensity_matrix.tsv` — features × runs, all intensities unfiltered.
 /// Use `qvalue_matrix.tsv` to apply an FDR threshold downstream.
 fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
-    let path = out_dir.join("intensity_matrix.tsv");
-    let file = std::fs::File::create(&path)?;
-    let mut f = BufWriter::with_capacity(1 << 20, file);
-
-    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
-    for name in &matrix.run_names {
-        write!(f, "\t{}", name)?;
-    }
-    writeln!(f)?;
-
-    for feat in 0..matrix.n_features {
-        write!(
-            f,
-            "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}",
-            matrix.feature_mass[feat],
-            matrix.feature_mz[feat],
-            matrix.feature_charge[feat],
-            matrix.feature_rt[feat],
-            if matrix.feature_im[feat] != 0.0 {
-                format!("{:.6}", matrix.feature_im[feat])
-            } else {
-                String::new()
-            },
-            matrix.feature_combined_score[feat],
-            matrix.feature_seed_run[feat],
-            matrix.feature_n_contributing_runs[feat],
-        )?;
-
-        for run in 0..matrix.n_runs {
+    write_cell_matrix(
+        matrix,
+        out_dir,
+        "intensity_matrix.tsv",
+        "intensity matrix",
+        |f, matrix, feat, run| {
             let v = matrix.intensity(feat, run);
             if v > 0.0 {
-                write!(f, "\t{:.5e}", v)?;
+                write!(f, "\t{:.5e}", v)
             } else {
-                write!(f, "\t0")?;
+                write!(f, "\t0")
             }
-        }
-        writeln!(f)?;
-    }
-
-    f.flush()?;
-    log::info!("Wrote intensity matrix to {}", path.display());
-    Ok(())
+        },
+    )
 }
 
 /// Write `qvalue_matrix.tsv` — same layout as intensity_matrix but cells are
 /// TDC q-values (1.0 = no signal / TDC not run, 0.0 = perfect score).
 /// Use this file to apply an FDR threshold to intensity_matrix.tsv downstream.
 fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
-    let path = out_dir.join("qvalue_matrix.tsv");
-    let file = std::fs::File::create(&path)?;
-    let mut f = BufWriter::with_capacity(1 << 20, file);
-
-    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
-    for name in &matrix.run_names {
-        write!(f, "\t{}", name)?;
-    }
-    writeln!(f)?;
-
-    for feat in 0..matrix.n_features {
-        write!(
-            f,
-            "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}",
-            matrix.feature_mass[feat],
-            matrix.feature_mz[feat],
-            matrix.feature_charge[feat],
-            matrix.feature_rt[feat],
-            if matrix.feature_im[feat] != 0.0 {
-                format!("{:.6}", matrix.feature_im[feat])
-            } else {
-                String::new()
-            },
-            matrix.feature_combined_score[feat],
-            matrix.feature_seed_run[feat],
-            matrix.feature_n_contributing_runs[feat],
-        )?;
-
-        for run in 0..matrix.n_runs {
-            write!(f, "\t{:.4}", matrix.q_value(feat, run))?;
-        }
-        writeln!(f)?;
-    }
-
-    f.flush()?;
-    log::info!("Wrote q-value matrix to {}", path.display());
-    Ok(())
+    write_cell_matrix(
+        matrix,
+        out_dir,
+        "qvalue_matrix.tsv",
+        "q-value matrix",
+        |f, matrix, feat, run| write!(f, "\t{:.4}", matrix.q_value(feat, run)),
+    )
 }
 
 /// Write `decoy_intensity_matrix.tsv` — mirrors `intensity_matrix.tsv` but
 /// each cell holds the decoy-pass intensity for that (feature, run).
 fn write_decoy_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
-    let path = out_dir.join("decoy_intensity_matrix.tsv");
-    let file = std::fs::File::create(&path)?;
-    let mut f = BufWriter::with_capacity(1 << 20, file);
-
-    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
-    for name in &matrix.run_names {
-        write!(f, "\t{}", name)?;
-    }
-    writeln!(f)?;
-
-    for feat in 0..matrix.n_features {
-        write!(
-            f,
-            "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}",
-            matrix.feature_mass[feat],
-            matrix.feature_mz[feat],
-            matrix.feature_charge[feat],
-            matrix.feature_rt[feat],
-            if matrix.feature_im[feat] != 0.0 {
-                format!("{:.6}", matrix.feature_im[feat])
-            } else {
-                String::new()
-            },
-            matrix.feature_combined_score[feat],
-            matrix.feature_seed_run[feat],
-            matrix.feature_n_contributing_runs[feat],
-        )?;
-
-        for run in 0..matrix.n_runs {
+    write_cell_matrix(
+        matrix,
+        out_dir,
+        "decoy_intensity_matrix.tsv",
+        "decoy intensity matrix",
+        |f, matrix, feat, run| {
             let v = matrix.decoy_intensity(feat, run);
             if v > 0.0 {
-                write!(f, "\t{:.5e}", v)?;
+                write!(f, "\t{:.5e}", v)
             } else {
-                write!(f, "\t0")?;
+                write!(f, "\t0")
             }
-        }
-        writeln!(f)?;
-    }
-
-    f.flush()?;
-    log::info!("Wrote decoy intensity matrix to {}", path.display());
-    Ok(())
+        },
+    )
 }
 
 /// Write `lfq_details.tsv` — long-format file with one row per
@@ -501,11 +481,7 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow:
             mz = matrix.feature_mz[feat],
             charge = matrix.feature_charge[feat],
             rt = matrix.feature_rt[feat],
-            im = if matrix.feature_im[feat] != 0.0 {
-                format!("{:.6}", matrix.feature_im[feat])
-            } else {
-                String::new()
-            },
+            im = feature_im_str(matrix, feat),
             seed_combined = matrix.feature_combined_score[feat],
             seed_run = matrix.feature_seed_run[feat],
             ncont = matrix.feature_n_contributing_runs[feat],

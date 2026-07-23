@@ -33,6 +33,7 @@ pub mod mem;
 pub mod models;
 pub mod output;
 pub mod scoring;
+pub mod stats;
 
 use std::path::Path;
 

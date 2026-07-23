@@ -52,19 +52,6 @@ fn percentile_sorted(sorted: &[f64], p: f64) -> f64 {
     sorted[idx]
 }
 
-fn std_dev(values: &[f64]) -> f64 {
-    if values.len() < 2 {
-        return f64::NAN;
-    }
-    let mean = values.iter().sum::<f64>() / values.len() as f64;
-    let var = values
-        .iter()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f64>()
-        / (values.len() - 1) as f64;
-    var.sqrt()
-}
-
 fn summary(values: &[f64]) -> ResidualSummary {
     if values.is_empty() {
         return ResidualSummary {
@@ -84,7 +71,7 @@ fn summary(values: &[f64]) -> ResidualSummary {
         n: sorted.len(),
         median: med,
         mad,
-        std: std_dev(&sorted),
+        std: crate::stats::std_dev(&sorted),
     }
 }
 

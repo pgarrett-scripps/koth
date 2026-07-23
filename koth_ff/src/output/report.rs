@@ -21,19 +21,10 @@ fn median(v: &mut Vec<f64>) -> f64 {
     }
 }
 
-fn std_dev(v: &[f64]) -> f64 {
-    if v.len() < 2 {
-        return f64::NAN;
-    }
-    let mean = v.iter().sum::<f64>() / v.len() as f64;
-    let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (v.len() - 1) as f64;
-    var.sqrt()
-}
-
 fn stats(values: &mut Vec<f64>) -> StatSummary {
     StatSummary {
         median: median(values),
-        std: std_dev(values),
+        std: crate::stats::std_dev(values),
     }
 }
 

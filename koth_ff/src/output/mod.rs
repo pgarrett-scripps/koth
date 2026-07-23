@@ -8,6 +8,64 @@ use std::path::Path;
 use crate::error::KothError;
 use crate::models::{Hill, ScoredFeature};
 
+/// Hill output columns, in emission order. Shared by the TSV header and the
+/// Parquet schema so the two backends can't drift apart. The Parquet element
+/// types are supplied alongside at the schema-construction site (all base
+/// columns are non-nullable).
+const HILL_COLUMNS: &[&str] = &[
+    "hill_id",
+    "mz",
+    "mz_std",
+    "mz_se",
+    "rt",
+    "rt_start",
+    "rt_end",
+    "rt_width",
+    "im",
+    "im_std",
+    "scan_start",
+    "scan_apex",
+    "scan_end",
+    "n_scans",
+    "skipped_scans",
+    "intensity_sum",
+    "intensity_max",
+    "hill_score",
+    "intensity_profile",
+];
+
+/// Extra hill columns appended when the isolation window is included (MS2).
+const HILL_ISO_COLUMNS: &[&str] = &["iso_target_mz", "iso_lower_mz", "iso_upper_mz"];
+
+/// Scored-feature output columns, in emission order. Shared by the TSV header
+/// and the Parquet schema. `massCalib` is nullable in Parquet; the remaining
+/// columns are non-nullable (types/nullability supplied at the schema site).
+const FEATURE_COLUMNS: &[&str] = &[
+    "massCalib",
+    "mz",
+    "rtApex",
+    "rtStart",
+    "rtEnd",
+    "intensityApex",
+    "intensitySum",
+    "charge",
+    "nIsotopes",
+    "nScans",
+    "im",
+    "cosine_score",
+    "ppm_error",
+    "neutron_offset",
+    "isotope_score",
+    "combined_score",
+    "theoretical_pattern",
+    "isotope_profile",
+    "elution_profile",
+    "hill_ids",
+    "intensityApexParab",
+    "intensityScattered5",
+    "intensityConsec5",
+];
+
 /// Alternative quant estimators derived from a feature's per-scan elution
 /// profile (the total-across-isotopes intensity at each scan — the same source
 /// as `intensityApex` = max and `intensitySum` = sum). Returns
@@ -105,29 +163,9 @@ fn write_hills_tsv_inner(
         .from_path(path)?;
 
     // Header
-    let mut header: Vec<&str> = vec![
-        "hill_id",
-        "mz",
-        "mz_std",
-        "mz_se",
-        "rt",
-        "rt_start",
-        "rt_end",
-        "rt_width",
-        "im",
-        "im_std",
-        "scan_start",
-        "scan_apex",
-        "scan_end",
-        "n_scans",
-        "skipped_scans",
-        "intensity_sum",
-        "intensity_max",
-        "hill_score",
-        "intensity_profile",
-    ];
+    let mut header: Vec<&str> = HILL_COLUMNS.to_vec();
     if include_isolation_window {
-        header.extend_from_slice(&["iso_target_mz", "iso_lower_mz", "iso_upper_mz"]);
+        header.extend_from_slice(HILL_ISO_COLUMNS);
     }
     wtr.write_record(&header)?;
 
@@ -199,31 +237,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
         .from_path(path)?;
 
     // Header
-    wtr.write_record([
-        "massCalib",
-        "mz",
-        "rtApex",
-        "rtStart",
-        "rtEnd",
-        "intensityApex",
-        "intensitySum",
-        "charge",
-        "nIsotopes",
-        "nScans",
-        "im",
-        "cosine_score",
-        "ppm_error",
-        "neutron_offset",
-        "isotope_score",
-        "combined_score",
-        "theoretical_pattern",
-        "isotope_profile",
-        "elution_profile",
-        "hill_ids",
-        "intensityApexParab",
-        "intensityScattered5",
-        "intensityConsec5",
-    ])?;
+    wtr.write_record(FEATURE_COLUMNS)?;
 
     for sf in &scored {
         let f = &sf.feature;
@@ -324,31 +338,39 @@ fn write_hills_parquet_inner(
         hills[b].intensity_sum.partial_cmp(&hills[a].intensity_sum).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut fields: Vec<Field> = vec![
-        Field::new("hill_id",         DataType::UInt64,  false),
-        Field::new("mz",              DataType::Float64, false),
-        Field::new("mz_std",          DataType::Float64, false),
-        Field::new("mz_se",           DataType::Float64, false),
-        Field::new("rt",              DataType::Float64, false),
-        Field::new("rt_start",        DataType::Float64, false),
-        Field::new("rt_end",          DataType::Float64, false),
-        Field::new("rt_width",        DataType::Float64, false),
-        Field::new("im",              DataType::Float64, false),
-        Field::new("im_std",          DataType::Float64, false),
-        Field::new("scan_start",      DataType::Int64,   false),
-        Field::new("scan_apex",       DataType::Int64,   false),
-        Field::new("scan_end",        DataType::Int64,   false),
-        Field::new("n_scans",         DataType::Int64,   false),
-        Field::new("skipped_scans",   DataType::Int64,   false),
-        Field::new("intensity_sum",   DataType::Float64, false),
-        Field::new("intensity_max",   DataType::Float64, false),
-        Field::new("hill_score",      DataType::Float64, false),
-        Field::new("intensity_profile", DataType::Utf8,  false),
+    // Parquet element types, one per `HILL_COLUMNS` entry (same order). Names
+    // come from the shared const so the TSV header and Parquet schema stay in
+    // lock-step; all base columns are non-nullable.
+    let hill_types: [DataType; 19] = [
+        DataType::UInt64,  // hill_id
+        DataType::Float64, // mz
+        DataType::Float64, // mz_std
+        DataType::Float64, // mz_se
+        DataType::Float64, // rt
+        DataType::Float64, // rt_start
+        DataType::Float64, // rt_end
+        DataType::Float64, // rt_width
+        DataType::Float64, // im
+        DataType::Float64, // im_std
+        DataType::Int64,   // scan_start
+        DataType::Int64,   // scan_apex
+        DataType::Int64,   // scan_end
+        DataType::Int64,   // n_scans
+        DataType::Int64,   // skipped_scans
+        DataType::Float64, // intensity_sum
+        DataType::Float64, // intensity_max
+        DataType::Float64, // hill_score
+        DataType::Utf8,    // intensity_profile
     ];
+    let mut fields: Vec<Field> = HILL_COLUMNS
+        .iter()
+        .zip(hill_types)
+        .map(|(name, dt)| Field::new(*name, dt, false))
+        .collect();
     if include_isolation_window {
-        fields.push(Field::new("iso_target_mz", DataType::Float64, true));
-        fields.push(Field::new("iso_lower_mz",  DataType::Float64, true));
-        fields.push(Field::new("iso_upper_mz",  DataType::Float64, true));
+        for name in HILL_ISO_COLUMNS {
+            fields.push(Field::new(*name, DataType::Float64, true));
+        }
     }
     let schema = Arc::new(Schema::new(fields));
 
@@ -427,31 +449,41 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         b.feature.total_intensity().partial_cmp(&a.feature.total_intensity()).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("massCalib",                DataType::Float64, true),
-        Field::new("mz",                       DataType::Float64, false),
-        Field::new("rtApex",                   DataType::Float64, false),
-        Field::new("rtStart",                  DataType::Float64, false),
-        Field::new("rtEnd",                    DataType::Float64, false),
-        Field::new("intensityApex",            DataType::Float64, false),
-        Field::new("intensitySum",             DataType::Float64, false),
-        Field::new("charge",                   DataType::UInt8,   false),
-        Field::new("nIsotopes",                DataType::Int64,   false),
-        Field::new("nScans",                   DataType::Int64,   false),
-        Field::new("im",                       DataType::Float64, false),
-        Field::new("cosine_score",             DataType::Float64, false),
-        Field::new("ppm_error",                DataType::Float64, false),
-        Field::new("neutron_offset",           DataType::Int8,    false),
-        Field::new("isotope_score",            DataType::Float64, false),
-        Field::new("combined_score",           DataType::Float64, false),
-        Field::new("theoretical_pattern",      DataType::Utf8,    false),
-        Field::new("isotope_profile",          DataType::Utf8,    false),
-        Field::new("elution_profile",          DataType::Utf8,    false),
-        Field::new("hill_ids",                 DataType::Utf8,    false),
-        Field::new("intensityApexParab",       DataType::Float64, false),
-        Field::new("intensityScattered5",      DataType::Float64, false),
-        Field::new("intensityConsec5",         DataType::Float64, false),
-    ]));
+    // Parquet element type + nullability, one per `FEATURE_COLUMNS` entry (same
+    // order). Names come from the shared const so the TSV header and Parquet
+    // schema stay in lock-step.
+    let feature_types: [(DataType, bool); 23] = [
+        (DataType::Float64, true),  // massCalib
+        (DataType::Float64, false), // mz
+        (DataType::Float64, false), // rtApex
+        (DataType::Float64, false), // rtStart
+        (DataType::Float64, false), // rtEnd
+        (DataType::Float64, false), // intensityApex
+        (DataType::Float64, false), // intensitySum
+        (DataType::UInt8, false),   // charge
+        (DataType::Int64, false),   // nIsotopes
+        (DataType::Int64, false),   // nScans
+        (DataType::Float64, false), // im
+        (DataType::Float64, false), // cosine_score
+        (DataType::Float64, false), // ppm_error
+        (DataType::Int8, false),    // neutron_offset
+        (DataType::Float64, false), // isotope_score
+        (DataType::Float64, false), // combined_score
+        (DataType::Utf8, false),    // theoretical_pattern
+        (DataType::Utf8, false),    // isotope_profile
+        (DataType::Utf8, false),    // elution_profile
+        (DataType::Utf8, false),    // hill_ids
+        (DataType::Float64, false), // intensityApexParab
+        (DataType::Float64, false), // intensityScattered5
+        (DataType::Float64, false), // intensityConsec5
+    ];
+    let schema = Arc::new(Schema::new(
+        FEATURE_COLUMNS
+            .iter()
+            .zip(feature_types)
+            .map(|(name, (dt, nullable))| Field::new(*name, dt, nullable))
+            .collect::<Vec<Field>>(),
+    ));
 
     let n = scored.len();
     let mut mass_calib       = Vec::<Option<f64>>::with_capacity(n);

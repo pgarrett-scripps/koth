@@ -19,6 +19,9 @@ use grid::{build_grid, SortedHills, XicGrid};
 use integrate::{integrate, PeakResult};
 use score::{score_grid, ColumnScores};
 
+use crate::models::Hill;
+use crate::scoring::elements::K_PATTERN;
+
 /// Convert peak apex/start/end bins into native-space RT statistics.
 /// Returns `(apex_rt, peak_width_rt)`; both NaN/0.0 when no peak was found.
 fn peak_rt_stats(grid: &XicGrid, n_cols: usize, peak: &PeakResult) -> (f64, f64) {
@@ -246,18 +249,13 @@ fn apply_median_ratio_normalization(
             ratios_per_run[run].push(v.log2() - mean_log);
         }
     }
-    let median = |v: &mut Vec<f64>| -> f64 {
-        if v.is_empty() {
-            return 0.0;
-        }
-        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let m = v.len();
-        if m % 2 == 1 { v[m / 2] } else { 0.5 * (v[m / 2 - 1] + v[m / 2]) }
-    };
-    let mut size_factors: Vec<f64> = ratios_per_run.iter_mut().map(median).collect();
+    let mut size_factors: Vec<f64> = ratios_per_run
+        .iter_mut()
+        .map(|v| crate::stats::median(v))
+        .collect();
     // Centre so the median run is unscaled.
     let mut sf_copy = size_factors.clone();
-    let center = median(&mut sf_copy);
+    let center = crate::stats::median(&mut sf_copy);
     for s in &mut size_factors {
         *s -= center;
     }
@@ -396,8 +394,238 @@ impl IntensityMatrix {
 ///   3. Scores each column and integrates the best peak.
 ///   4. Optionally repeats with a decoy feature for target-decoy q-values.
 /// `runs` carry only features (their `hills` may be empty); the full hills for
-/// run `i` are fetched on demand via `load_hills(i)` and dropped before the next
-/// run, so peak memory is O(one run's hills) rather than O(all runs' hills).
+/// CPU-nanosecond accumulators for the three hot-loop phases, summed across all
+/// rayon tasks. Kept as a small struct so `quantify_cell` can be handed one
+/// reference instead of three loose atomics.
+struct PhaseTimers {
+    build: AtomicU64,
+    score: AtomicU64,
+    integrate: AtomicU64,
+}
+
+impl PhaseTimers {
+    fn new() -> Self {
+        Self {
+            build: AtomicU64::new(0),
+            score: AtomicU64::new(0),
+            integrate: AtomicU64::new(0),
+        }
+    }
+
+    fn add_build(&self, d: std::time::Duration) {
+        self.build.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+    }
+    fn add_score(&self, d: std::time::Duration) {
+        self.score.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+    }
+    fn add_integrate(&self, d: std::time::Duration) {
+        self.integrate.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+    }
+}
+
+/// Quantify a single (feature, run) cell — target OR decoy — by the shared
+/// build_grid → score_grid → integrate → peak_rt_stats → `LfqEntry` sequence.
+/// The scratch buffers (`grid`, `scores`, `col_totals`, `obs`) are reused across
+/// the target and decoy calls for one feature. `intensity_override` supplies the
+/// per-run detected-feature intensity for detected target cells; when `None` the
+/// grid re-integration intensity (apex or summed, per `quant_estimator`) is used.
+#[allow(clippy::too_many_arguments)]
+fn quantify_cell(
+    grid: &mut XicGrid,
+    scores: &mut ColumnScores,
+    col_totals: &mut Vec<f32>,
+    obs: &mut Vec<f64>,
+    hills_vec: &[Hill],
+    sorted: &SortedHills,
+    scan_times: &[f64],
+    theoretical_pattern: &[f64],
+    bc_template: &[f64; K_PATTERN],
+    config: &LfqConfig,
+    timers: &PhaseTimers,
+    feat_idx: usize,
+    run_idx: usize,
+    charge: u8,
+    mz: f64,
+    rt: f64,
+    im: f64,
+    half_window: f64,
+    rt_sigma: Option<f32>,
+    is_decoy: bool,
+    is_mbr: bool,
+    intensity_override: Option<f64>,
+) -> LfqEntry {
+    let t_b = Instant::now();
+    build_grid(
+        grid, hills_vec, sorted, scan_times, mz, charge, rt, im, half_window, config,
+    );
+    timers.add_build(t_b.elapsed());
+    let slots = grid.n_slots_filled;
+    let obs_mz = grid.winner_mz[0];
+    let obs_im = grid.winner_im[0];
+
+    let t_s = Instant::now();
+    score_grid(
+        grid,
+        theoretical_pattern,
+        bc_template,
+        config,
+        scores,
+        col_totals,
+        obs,
+        rt_sigma,
+    );
+    timers.add_score(t_s.elapsed());
+
+    let t_i = Instant::now();
+    let peak = integrate(grid, scores, col_totals, config);
+    timers.add_integrate(t_i.elapsed());
+    let (apex_rt, peak_width) = peak_rt_stats(grid, config.grid_cols, &peak);
+
+    let use_apex = config.quant_estimator.eq_ignore_ascii_case("apex");
+    let grid_intensity = if use_apex { peak.apex_intensity } else { peak.intensity };
+    let intensity = intensity_override.unwrap_or(grid_intensity);
+
+    LfqEntry {
+        feature_idx: feat_idx,
+        run_idx,
+        intensity,
+        hybrid_score: peak.hybrid_score,
+        spectral_bhattacharyya: peak.bhattacharyya_at_apex,
+        n_isotopes_found: slots,
+        rt_score: peak.rt_score_at_apex,
+        int_score: peak.int_score_at_apex,
+        coelution: peak.coelution,
+        is_decoy,
+        is_mbr,
+        expected_rt: rt,
+        apex_rt,
+        peak_width_rt: peak_width,
+        expected_mz: mz,
+        observed_mz: obs_mz,
+        expected_im: im,
+        observed_im: obs_im,
+    }
+}
+
+/// Log the per-run detection summary (target/decoy counts, or plain detected
+/// counts when TDC is off). Pure logging — no effect on the output matrix.
+fn log_detection_summary(
+    all_entries: &[LfqEntry],
+    runs: &[RunInput],
+    n_features: usize,
+    n_runs: usize,
+    run_tdc: bool,
+) {
+    for run_idx in 0..n_runs {
+        let n_detected = all_entries
+            .iter()
+            .filter(|e| !e.is_decoy && e.run_idx == run_idx && e.intensity > 0.0)
+            .count();
+        let n_decoy = all_entries
+            .iter()
+            .filter(|e| e.is_decoy && e.run_idx == run_idx && e.intensity > 0.0)
+            .count();
+        if run_tdc {
+            log::info!(
+                "LFQ: run '{}': {}/{} target detected ({:.1}%), {} decoy",
+                runs[run_idx].name,
+                n_detected,
+                n_features,
+                100.0 * n_detected as f64 / n_features as f64,
+                n_decoy,
+            );
+        } else {
+            log::info!(
+                "LFQ: run '{}': {}/{} features detected ({:.1}%)",
+                runs[run_idx].name,
+                n_detected,
+                n_features,
+                100.0 * n_detected as f64 / n_features as f64,
+            );
+        }
+    }
+}
+
+/// Fold the per-(feature, run) target/decoy `entries` into the flat intensity /
+/// q-value / decoy-intensity matrices, apply optional median-of-ratios
+/// normalization, and build the final `IntensityMatrix`. Takes `all_entries` by
+/// value — it is stored in the returned matrix.
+#[allow(clippy::too_many_arguments)]
+fn assemble_matrix(
+    consensus: &[ConsensusFeature],
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+    all_entries: Vec<LfqEntry>,
+    q_map: &HashMap<(usize, usize), f64>,
+    hills_per_run: Vec<usize>,
+    n_features: usize,
+    n_runs: usize,
+) -> IntensityMatrix {
+    let t_assemble = Instant::now();
+    let mut intensities = vec![0.0f64; n_features * n_runs];
+    let mut q_values_out = vec![1.0f64; n_features * n_runs];
+    let mut decoy_intensities = vec![0.0f64; n_features * n_runs];
+
+    for entry in &all_entries {
+        let flat = entry.feature_idx * n_runs + entry.run_idx;
+        if entry.is_decoy {
+            decoy_intensities[flat] = entry.intensity;
+        } else {
+            intensities[flat] = entry.intensity;
+            if let Some(&qv) = q_map.get(&(entry.feature_idx, entry.run_idx)) {
+                q_values_out[flat] = qv;
+            }
+        }
+    }
+
+    log::info!("[timing] intensity matrix assemble: {:.2?}", t_assemble.elapsed());
+
+    if config.normalize.eq_ignore_ascii_case("median_ratios") {
+        let sf = apply_median_ratio_normalization(
+            &mut intensities,
+            &mut decoy_intensities,
+            n_features,
+            n_runs,
+        );
+        let lo = sf.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = sf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        log::info!(
+            "LFQ normalization: median-of-ratios size factors applied, \
+             per-run log2 range [{:.3}, {:.3}] (~{:.1}% max scale)",
+            lo,
+            hi,
+            (2f64.powf(hi - lo) - 1.0) * 100.0
+        );
+    }
+
+    IntensityMatrix {
+        n_features,
+        n_runs,
+        run_names: runs.iter().map(|r| r.name.clone()).collect(),
+        reference_run: alignment.reference_name.clone(),
+        feature_mz: consensus.iter().map(|f| f.ref_mz).collect(),
+        feature_mass: consensus.iter().map(|f| f.neutral_mass).collect(),
+        feature_charge: consensus.iter().map(|f| f.charge).collect(),
+        feature_rt: consensus.iter().map(|f| f.ref_rt).collect(),
+        feature_im: consensus.iter().map(|f| f.ref_im).collect(),
+        feature_combined_score: consensus.iter().map(|f| f.seed_combined_score).collect(),
+        feature_seed_run: consensus
+            .iter()
+            .map(|f| runs[f.seed_run_idx].name.clone())
+            .collect(),
+        feature_n_contributing_runs: consensus
+            .iter()
+            .map(|f| f.n_contributing_runs)
+            .collect(),
+        hills_per_run,
+        intensities,
+        q_values: q_values_out,
+        decoy_intensities,
+        entries: all_entries,
+    }
+}
+
 pub fn quantify(
     runs: &[RunInput],
     alignment: &AlignmentResult,
@@ -459,9 +687,7 @@ pub fn quantify(
     // O(one run's hills) instead of O(all runs' hills loaded at once).
     let t_quant = Instant::now();
     // Per-phase nanosecond accumulators across all rayon tasks.
-    let ns_build = AtomicU64::new(0);
-    let ns_score = AtomicU64::new(0);
-    let ns_integrate = AtomicU64::new(0);
+    let timers = PhaseTimers::new();
     let mut all_entries: Vec<LfqEntry> = Vec::new();
     let mut hills_per_run: Vec<usize> = vec![0; n_runs];
 
@@ -528,78 +754,42 @@ pub fn quantify(
                     })
                 };
 
-                // Target
-                let t_b = Instant::now();
-                build_grid(
-                    &mut grid, &hills_vec, &sorted, &run.scan_times, corr_mz, cf.charge,
-                    corr_rt, corr_im, half_window, config,
-                );
-                ns_build.fetch_add(t_b.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                let tgt_slots = grid.n_slots_filled;
-                let tgt_obs_mz = grid.winner_mz[0];
-                let tgt_obs_im = grid.winner_im[0];
-                let t_s = Instant::now();
-                score_grid(&grid, &cf.theoretical_pattern, &bc_templates[feat_idx], config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(corr_rt));
-                ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                let t_i = Instant::now();
-                let tgt_peak = integrate(&grid, &scores, &col_totals, config);
-                ns_integrate.fetch_add(t_i.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                let (tgt_apex_rt, tgt_peak_width) =
-                    peak_rt_stats(&grid, config.grid_cols, &tgt_peak);
-
-                // Override the XIC target intensity with the contributing
-                // per-run feature's `total_intensity()` whenever this run was
-                // a member of the consensus group. The feature finder's own
+                // Target. Override the XIC intensity with the contributing
+                // per-run feature's `total_intensity()` whenever this run was a
+                // member of the consensus group. The feature finder's own
                 // isotope-pattern + peak-shape match is more reliable than a
                 // closest-RT hill lookup; using the feature intensity here
                 // restores Sage-style MBR semantics ("detected ⇒ trust the
                 // feature; otherwise re-integrate at the predicted RT").
+                //
+                // `detected_use_grid` instead quantifies EVERY cell (detected +
+                // MBR) by the same grid re-integration so the whole replicate row
+                // is commensurate — detected cells otherwise sit on a different
+                // SCALE than MBR cells, inflating CV on timsTOF (the feature
+                // integrates the IM dimension; the 2-D grid does not).
                 let contributed = cf.per_run_feature.get(run_idx).and_then(|x| *x);
                 let use_apex = config.quant_estimator.eq_ignore_ascii_case("apex");
-                let grid_intensity = if use_apex { tgt_peak.apex_intensity } else { tgt_peak.intensity };
-                // For detected cells we normally trust the per-run feature's own
-                // intensity. But that puts detected cells on a different SCALE
-                // than MBR cells (grid re-integration), and mixing the two within
-                // a feature's replicate group inflates CV badly on timsTOF (the
-                // feature integrates the IM dimension; the 2-D grid does not).
-                // `detected_use_grid` quantifies EVERY cell (detected + MBR) by
-                // the same grid re-integration so the whole row is commensurate.
-                let target_intensity = if config.detected_use_grid {
-                    grid_intensity
+                let intensity_override = if config.detected_use_grid {
+                    None
                 } else {
-                    match contributed {
-                        Some(fi) => {
-                            let feat = &runs[run_idx].features[fi as usize].feature;
-                            if use_apex {
-                                feat.total_intensity_at_apex()
-                            } else {
-                                feat.total_intensity()
-                            }
+                    contributed.map(|fi| {
+                        let feat = &runs[run_idx].features[fi as usize].feature;
+                        if use_apex {
+                            feat.total_intensity_at_apex()
+                        } else {
+                            feat.total_intensity()
                         }
-                        None => grid_intensity,
-                    }
+                    })
                 };
-
-                entries.push(LfqEntry {
-                    feature_idx: feat_idx,
-                    run_idx,
-                    intensity: target_intensity,
-                    hybrid_score: tgt_peak.hybrid_score,
-                    spectral_bhattacharyya: tgt_peak.bhattacharyya_at_apex,
-                    n_isotopes_found: tgt_slots,
-                    rt_score: tgt_peak.rt_score_at_apex,
-                    int_score: tgt_peak.int_score_at_apex,
-                    coelution: tgt_peak.coelution,
-                    is_decoy: false,
-                    is_mbr: contributed.is_none(),
-                    expected_rt: corr_rt,
-                    apex_rt: tgt_apex_rt,
-                    peak_width_rt: tgt_peak_width,
-                    expected_mz: corr_mz,
-                    observed_mz: tgt_obs_mz,
-                    expected_im: corr_im,
-                    observed_im: tgt_obs_im,
-                });
+                entries.push(quantify_cell(
+                    &mut grid, &mut scores, &mut col_totals, &mut obs,
+                    &hills_vec, &sorted, &run.scan_times,
+                    &cf.theoretical_pattern, &bc_templates[feat_idx],
+                    config, &timers, feat_idx, run_idx, cf.charge,
+                    corr_mz, corr_rt, corr_im, half_window,
+                    rt_sigma_cols_at(corr_rt), false, contributed.is_none(),
+                    intensity_override,
+                ));
 
                 // Decoy grid: shifted by `decoy_mz_shift_da / charge` in m/z
                 // and by `−decoy_rt_shift_pct · rt_span` in RT.
@@ -608,44 +798,14 @@ pub fn quantify(
                     let dec_mz = corr_mz + config.decoy_mz_shift_da / cf.charge as f64;
                     let dec_rt = corr_rt
                         - config.decoy_rt_shift_pct * (run_rt_range.1 - run_rt_range.0);
-                    let t_b = Instant::now();
-                    build_grid(
-                        &mut grid, &hills_vec, &sorted, &run.scan_times, dec_mz, cf.charge,
-                        dec_rt, corr_im, half_window, config,
-                    );
-                    ns_build.fetch_add(t_b.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    let dec_slots = grid.n_slots_filled;
-                    let dec_obs_mz = grid.winner_mz[0];
-                    let dec_obs_im = grid.winner_im[0];
-                    let t_s = Instant::now();
-                    score_grid(&grid, &cf.theoretical_pattern, &bc_templates[feat_idx], config, &mut scores, &mut col_totals, &mut obs, rt_sigma_cols_at(dec_rt));
-                    ns_score.fetch_add(t_s.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    let t_i = Instant::now();
-                    let dec_peak = integrate(&grid, &scores, &col_totals, config);
-                    ns_integrate.fetch_add(t_i.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                    let (dec_apex_rt, dec_peak_width) =
-                        peak_rt_stats(&grid, config.grid_cols, &dec_peak);
-
-                    entries.push(LfqEntry {
-                        feature_idx: feat_idx,
-                        run_idx,
-                        intensity: if use_apex { dec_peak.apex_intensity } else { dec_peak.intensity },
-                        hybrid_score: dec_peak.hybrid_score,
-                        spectral_bhattacharyya: dec_peak.bhattacharyya_at_apex,
-                        n_isotopes_found: dec_slots,
-                        rt_score: dec_peak.rt_score_at_apex,
-                        int_score: dec_peak.int_score_at_apex,
-                        coelution: dec_peak.coelution,
-                        is_decoy: true,
-                        is_mbr: false,
-                        expected_rt: dec_rt,
-                        apex_rt: dec_apex_rt,
-                        peak_width_rt: dec_peak_width,
-                        expected_mz: dec_mz,
-                        observed_mz: dec_obs_mz,
-                        expected_im: corr_im,
-                        observed_im: dec_obs_im,
-                    });
+                    entries.push(quantify_cell(
+                        &mut grid, &mut scores, &mut col_totals, &mut obs,
+                        &hills_vec, &sorted, &run.scan_times,
+                        &cf.theoretical_pattern, &bc_templates[feat_idx],
+                        config, &timers, feat_idx, run_idx, cf.charge,
+                        dec_mz, dec_rt, corr_im, half_window,
+                        rt_sigma_cols_at(dec_rt), true, false, None,
+                    ));
                 }
 
                 entries
@@ -660,15 +820,13 @@ pub fn quantify(
         n_runs,
         t_quant.elapsed()
     );
-    let total_ns = ns_build.load(Ordering::Relaxed)
-        + ns_score.load(Ordering::Relaxed)
-        + ns_integrate.load(Ordering::Relaxed);
+    let ns_b = timers.build.load(Ordering::Relaxed);
+    let ns_s = timers.score.load(Ordering::Relaxed);
+    let ns_i = timers.integrate.load(Ordering::Relaxed);
+    let total_ns = ns_b + ns_s + ns_i;
     let pct = |ns: u64| {
         if total_ns == 0 { 0.0 } else { 100.0 * ns as f64 / total_ns as f64 }
     };
-    let ns_b = ns_build.load(Ordering::Relaxed);
-    let ns_s = ns_score.load(Ordering::Relaxed);
-    let ns_i = ns_integrate.load(Ordering::Relaxed);
     log::info!(
         "[timing] hot-loop breakdown (cpu-ns across all threads): \
          build_grid={:.2}s ({:.0}%), score_grid={:.2}s ({:.0}%), integrate={:.2}s ({:.0}%)",
@@ -692,98 +850,19 @@ pub fn quantify(
 
     // Per-run detection summary
     let t_summary = Instant::now();
-    for run_idx in 0..n_runs {
-        let n_detected = all_entries
-            .iter()
-            .filter(|e| !e.is_decoy && e.run_idx == run_idx && e.intensity > 0.0)
-            .count();
-        let n_decoy = all_entries
-            .iter()
-            .filter(|e| e.is_decoy && e.run_idx == run_idx && e.intensity > 0.0)
-            .count();
-        if config.run_tdc {
-            log::info!(
-                "LFQ: run '{}': {}/{} target detected ({:.1}%), {} decoy",
-                runs[run_idx].name,
-                n_detected,
-                n_features,
-                100.0 * n_detected as f64 / n_features as f64,
-                n_decoy,
-            );
-        } else {
-            log::info!(
-                "LFQ: run '{}': {}/{} features detected ({:.1}%)",
-                runs[run_idx].name,
-                n_detected,
-                n_features,
-                100.0 * n_detected as f64 / n_features as f64,
-            );
-        }
-    }
-
+    log_detection_summary(&all_entries, runs, n_features, n_runs, config.run_tdc);
     log::info!("[timing] per-run detection summary: {:.2?}", t_summary.elapsed());
 
     // Assemble output matrix
-    let t_assemble = Instant::now();
-    let mut intensities = vec![0.0f64; n_features * n_runs];
-    let mut q_values_out = vec![1.0f64; n_features * n_runs];
-    let mut decoy_intensities = vec![0.0f64; n_features * n_runs];
-
-    for entry in &all_entries {
-        let flat = entry.feature_idx * n_runs + entry.run_idx;
-        if entry.is_decoy {
-            decoy_intensities[flat] = entry.intensity;
-        } else {
-            intensities[flat] = entry.intensity;
-            if let Some(&qv) = q_map.get(&(entry.feature_idx, entry.run_idx)) {
-                q_values_out[flat] = qv;
-            }
-        }
-    }
-
-    log::info!("[timing] intensity matrix assemble: {:.2?}", t_assemble.elapsed());
-
-    if config.normalize.eq_ignore_ascii_case("median_ratios") {
-        let sf = apply_median_ratio_normalization(
-            &mut intensities,
-            &mut decoy_intensities,
-            n_features,
-            n_runs,
-        );
-        let lo = sf.iter().cloned().fold(f64::INFINITY, f64::min);
-        let hi = sf.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        log::info!(
-            "LFQ normalization: median-of-ratios size factors applied, \
-             per-run log2 range [{:.3}, {:.3}] (~{:.1}% max scale)",
-            lo,
-            hi,
-            (2f64.powf(hi - lo) - 1.0) * 100.0
-        );
-    }
-
-    IntensityMatrix {
+    assemble_matrix(
+        &consensus,
+        runs,
+        alignment,
+        config,
+        all_entries,
+        &q_map,
+        hills_per_run,
         n_features,
         n_runs,
-        run_names: runs.iter().map(|r| r.name.clone()).collect(),
-        reference_run: alignment.reference_name.clone(),
-        feature_mz: consensus.iter().map(|f| f.ref_mz).collect(),
-        feature_mass: consensus.iter().map(|f| f.neutral_mass).collect(),
-        feature_charge: consensus.iter().map(|f| f.charge).collect(),
-        feature_rt: consensus.iter().map(|f| f.ref_rt).collect(),
-        feature_im: consensus.iter().map(|f| f.ref_im).collect(),
-        feature_combined_score: consensus.iter().map(|f| f.seed_combined_score).collect(),
-        feature_seed_run: consensus
-            .iter()
-            .map(|f| runs[f.seed_run_idx].name.clone())
-            .collect(),
-        feature_n_contributing_runs: consensus
-            .iter()
-            .map(|f| f.n_contributing_runs)
-            .collect(),
-        hills_per_run,
-        intensities,
-        q_values: q_values_out,
-        decoy_intensities,
-        entries: all_entries,
-    }
+    )
 }
