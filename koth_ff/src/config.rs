@@ -331,10 +331,6 @@ fn default_cosine_anchor() -> String {
     "seed".to_string()
 }
 
-fn default_exhaustive_assembly() -> bool {
-    true
-}
-
 fn default_sulfur_aware_scoring() -> bool {
     true
 }
@@ -514,30 +510,15 @@ pub struct FeaturesConfig {
     /// short-overlap pairs are noisier.
     #[serde(default = "default_min_scan_overlap")]
     pub min_scan_overlap: usize,
-    /// Experimental non-destructive isotope assembler (biosaur2 / AlphaPept
-    /// style). When false (default) koth uses the legacy greedy resolver: one
-    /// best candidate per seed, claimed all-or-nothing (a seed whose isotope
-    /// hills are stolen collapses to charge 0). When true, every (seed, charge)
-    /// hypothesis enters an over-complete pool, contested hills are claimed
-    /// longest-envelope-first, and a candidate whose isotope hills are partly
-    /// claimed is TRUNCATED to its free prefix and re-queued rather than dropped
-    /// — recovering charge-2/3 features greedy loses to shorter, higher-cosine
-    /// competitors. Now the DEFAULT: validated paper-safe on PXD003881
-    /// (recall +0.7pp, cohort CV neutral) and a win for MS1-search depth
-    /// downstream (+38 proteins in uno). Set to `false` for the legacy greedy
-    /// assembler (byte-identical to the pre-2026-07 paper output).
-    #[serde(default = "default_exhaustive_assembly")]
-    pub exhaustive_assembly: bool,
-    /// (exhaustive_assembly only) Minimum isotope-pattern (Bhattacharyya) score a
-    /// candidate — original or truncated — must reach before it may *claim* its
-    /// hills; below-bar candidates are dropped so their hills stay free for a
-    /// better-fitting feature. Default 0.0 = no gate.
+    /// Minimum isotope-pattern (Bhattacharyya) score a candidate — original or
+    /// truncated — must reach before it may *claim* its hills; below-bar
+    /// candidates are dropped so their hills stay free for a better-fitting
+    /// feature. Default 0.0 = no gate.
     #[serde(default = "default_exhaustive_min_isotope_score")]
     pub exhaustive_min_isotope_score: f64,
-    /// (exhaustive_assembly only) When true, contested-hill claim priority is
-    /// ordered by envelope length, then isotope-pattern score, then composite —
-    /// so the best averagine fit wins a shared hill within a length class. Default
-    /// false.
+    /// When true, contested-hill claim priority is ordered by envelope length,
+    /// then isotope-pattern score, then composite — so the best averagine fit
+    /// wins a shared hill within a length class. Default false.
     #[serde(default)]
     pub exhaustive_isotope_priority: bool,
     /// Chromatographic-cosine **anchor** for isotope-chain extension: which hill
@@ -593,7 +574,6 @@ impl Default for FeaturesConfig {
             max_isotope_log2_ratio: 1.5,
             chain_predicted_intensity_gate: true,
             min_scan_overlap: 3,
-            exhaustive_assembly: default_exhaustive_assembly(),
             exhaustive_min_isotope_score: 0.0,
             exhaustive_isotope_priority: false,
             cosine_anchor: default_cosine_anchor(),

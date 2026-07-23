@@ -16,22 +16,19 @@ use recalibration::{MzRecalBuilder, MzRecalModel};
 struct Candidate {
     hill_indices: Vec<usize>, // indices into sorted_hills, lowest mz first
     charge: u8,
-    composite_score: f64,
 }
 
 /// Detect isotope features from a list of chromatographic hills.
 ///
-/// 1. Build mz-sorted index.
-/// 2. Every hill is tried as a seed; for each charge state the best isotope
-///    chain is built via chromatographic-cosine filtering against the seed
-///    (gated by `FeaturesConfig.min_chain_cosine`). Each (seed, charge) pair
-///    is scored as `isotope_score × cosine_score` (Bhattacharyya isotope-pattern
-///    times mean chromatographic cosine) and the charge with the highest
-///    combined score is kept as that seed's candidate.
-/// 3. All candidates are sorted by composite_score (desc); greedy conflict
-///    resolution accepts the highest-scoring candidate whose hills are
-///    unclaimed.
-/// 4. Feature structs are built from accepted candidates.
+/// 1. Build an m/z-sorted index of the hills.
+/// 2. Every `(seed hill, charge)` pair builds an isotope chain by extending
+///    left/right with chromatographic-cosine filtering (gated by
+///    `FeaturesConfig.min_chain_cosine`) — see `build_charge_candidate`.
+/// 3. The over-complete candidate pool is resolved non-destructively by
+///    `resolve_exhaustive`: contested hills are claimed longest-envelope-first
+///    and a partly-claimed candidate is truncated to its free prefix and
+///    re-queued rather than dropped.
+/// 4. Feature structs are built from the accepted candidates.
 pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Vec<Feature> {
     detect_features_with_recal(hills, config, file, None)
 }
@@ -74,72 +71,23 @@ pub fn detect_features_with_recal(
         }
     };
 
-    let accepted: Vec<Candidate> = if config.exhaustive_assembly {
-        // Experimental non-destructive assembler (biosaur2 / AlphaPept style):
-        // over-complete (seed, charge) pool, confidence-ordered claiming, and
-        // truncation instead of all-or-nothing drop. Chains are built by the
-        // SAME `build_charge_candidate` the greedy path uses, so ON vs OFF
-        // differ only in conflict resolution, not chain construction.
-        resolve_exhaustive(
-            &sorted_hills,
-            &mz_array,
-            &im_array,
-            &scan_starts,
-            &scan_ends,
-            config,
-            file,
-            use_im,
-            min_intensity,
-            recal,
-        )
-    } else {
-        // Legacy greedy path (default). Phase 1+2: generate and score one
-        // candidate per seed. Each seed's candidate is computed independently
-        // from read-only shared arrays, so this is embarrassingly parallel.
-        // `into_par_iter().collect()` is order-preserving (rayon's indexed
-        // collect), so the downstream sort + greedy claim stay deterministic.
-        let candidates: Vec<Candidate> = (0..sorted_hills.len())
-            .into_par_iter()
-            .map(|seed_idx| {
-                generate_best_candidate(
-                    seed_idx,
-                    &sorted_hills,
-                    &mz_array,
-                    &im_array,
-                    &scan_starts,
-                    &scan_ends,
-                    config,
-                    file,
-                    use_im,
-                    min_intensity,
-                    recal,
-                )
-            })
-            .collect();
-
-        // Phase 3: sort by composite_score desc, greedy conflict resolution.
-        let mut candidates = candidates;
-        candidates.sort_by(|a, b| {
-            b.composite_score
-                .partial_cmp(&a.composite_score)
-                .unwrap_or(Ordering::Equal)
-        });
-
-        let mut claimed = vec![false; sorted_hills.len()];
-        candidates
-            .into_iter()
-            .filter(|c| {
-                if c.hill_indices.iter().all(|&i| !claimed[i]) {
-                    for &i in &c.hill_indices {
-                        claimed[i] = true;
-                    }
-                    true
-                } else {
-                    false
-                }
-            })
-            .collect()
-    };
+    // Non-destructive assembler (biosaur2 / AlphaPept style): an over-complete
+    // (seed, charge) hypothesis pool, generated in parallel and resolved by
+    // claiming contested hills longest-envelope-first, truncating a
+    // partly-claimed candidate to its free monoisotope-anchored prefix rather
+    // than dropping it. See `resolve_exhaustive`.
+    let accepted: Vec<Candidate> = resolve_exhaustive(
+        &sorted_hills,
+        &mz_array,
+        &im_array,
+        &scan_starts,
+        &scan_ends,
+        config,
+        file,
+        use_im,
+        min_intensity,
+        recal,
+    );
 
     // Phase 4: build Feature structs.
     let features: Vec<Feature> = accepted
@@ -246,64 +194,10 @@ pub fn learn_recal_model(
     )
 }
 
-/// Build the best candidate for `seed_idx` across all charge states.
-///
-/// For each charge, extends isotope chains left and right using chromatographic
-/// cosine filtering against the seed (gated by `min_chain_cosine`). Scores each
-/// complete chain as `isotope_score × cosine_score` (Bhattacharyya isotope-pattern
-/// × mean chromatographic cosine) and keeps the charge that maximises this.
-fn generate_best_candidate(
-    seed_idx: usize,
-    sorted_hills: &[&Hill],
-    mz_array: &[f64],
-    im_array: &[f64],
-    scan_starts: &[usize],
-    scan_ends: &[usize],
-    config: &FeaturesConfig,
-    file: &FileConfig,
-    use_im: bool,
-    min_intensity: f64,
-    recal: Option<&MzRecalModel>,
-) -> Candidate {
-    // Legacy behaviour: keep the single highest-composite candidate across all
-    // charges (iterating high→low so ties favour the higher charge, matching the
-    // original `for charge in (..).rev()` loop). The per-charge chain build is
-    // factored into `build_charge_candidate`, shared with the exhaustive resolver
-    // so both paths build chains identically — greedy vs exhaustive differ only
-    // in the conflict-resolution step.
-    let mut best = Candidate {
-        hill_indices: vec![seed_idx],
-        charge: 0,
-        composite_score: 0.0,
-    };
-    for charge in (config.min_charge..=config.max_charge).rev() {
-        if let Some(c) = build_charge_candidate(
-            seed_idx,
-            charge,
-            sorted_hills,
-            mz_array,
-            im_array,
-            scan_starts,
-            scan_ends,
-            config,
-            file,
-            use_im,
-            min_intensity,
-            recal,
-        ) {
-            if c.composite_score > best.composite_score {
-                best = c;
-            }
-        }
-    }
-    best
-}
-
 /// Build the best isotope-chain candidate for one `(seed, charge)` pair, using
-/// the left/right chromatographic-cosine chain extension shared by both the
-/// greedy (`generate_best_candidate`) and exhaustive (`resolve_exhaustive`)
-/// assemblers. Returns `None` when no isotope partner is found in either
-/// direction (a lone seed — charge 0).
+/// the left/right chromatographic-cosine chain extension driven by the
+/// exhaustive resolver (`resolve_exhaustive`). Returns `None` when no isotope
+/// partner is found in either direction (a lone seed — charge 0).
 #[allow(clippy::too_many_arguments)]
 fn build_charge_candidate(
     seed_idx: usize,
@@ -378,7 +272,6 @@ fn build_charge_candidate(
 
         // Right chain: M+1, M+2, ...
         let mut right_chain: Vec<usize> = Vec::new();
-        let mut right_cosines: Vec<f64> = Vec::new();
         for iso in 1..=config.max_isotopes {
             // Early-stop: bail when theory predicts a peak below noise. Stops
             // the chain from absorbing column-bleed / random hills that happen
@@ -490,12 +383,10 @@ fn build_charge_candidate(
             }
 
             right_chain.push(best_c);
-            right_cosines.push(best_cos);
         }
 
         // Left chain: M-1, M-2, ...
         let mut left_chain: Vec<usize> = Vec::new();
-        let mut left_cosines: Vec<f64> = Vec::new();
         for iso in 1..=config.max_isotopes {
             let target_mz = recal_mz(seed_mz - step * iso as f64);
             let ref_hill = left_chain
@@ -577,14 +468,16 @@ fn build_charge_candidate(
             }
 
             left_chain.push(best_c);
-            left_cosines.push(best_cos);
         }
 
         if left_chain.is_empty() && right_chain.is_empty() {
             return None; // no partners found — single-hill fallback stays charge=0
         }
 
-        // Assemble chain: left reversed (low→high mz) + seed + right.
+        // Assemble chain: left reversed (low→high mz) + seed + right. The
+        // exhaustive resolver rescores every (possibly-truncated) chain itself
+        // (see `rescore_chain`), so this function only needs to return the chain
+        // and its charge — no per-chain scoring here.
         let chain: Vec<usize> = left_chain
             .iter()
             .rev()
@@ -593,22 +486,9 @@ fn build_charge_candidate(
             .chain(right_chain.iter().copied())
             .collect();
 
-        let all_cosines: Vec<f64> = left_cosines
-            .iter()
-            .rev()
-            .copied()
-            .chain(right_cosines.iter().copied())
-            .collect();
-        let mean_cosine = all_cosines.iter().sum::<f64>() / all_cosines.len() as f64;
-
-        let chain_hills: Vec<&Hill> = chain.iter().map(|&i| sorted_hills[i]).collect();
-        let isotope_score = score_chain(&chain_hills, charge, config.sulfur_aware_scoring);
-        let composite = isotope_score * mean_cosine.max(0.0);
-
         Some(Candidate {
             hill_indices: chain,
             charge,
-            composite_score: composite,
         })
     }
 }
@@ -616,8 +496,7 @@ fn build_charge_candidate(
 /// Bhattacharyya score for an isotope chain.  Returns 0.0 for single-peak
 /// or charge=0 chains.
 // ---------------------------------------------------------------------------
-// Experimental exhaustive / non-destructive assembler (behind
-// `features.exhaustive_assembly`). See `FeaturesConfig::exhaustive_assembly`.
+// Exhaustive / non-destructive isotope assembler.
 // ---------------------------------------------------------------------------
 
 /// Recompute `(composite, mean_cosine, isotope_score)` of a (possibly truncated)
@@ -731,9 +610,9 @@ fn resolve_exhaustive(
     use std::collections::BinaryHeap;
 
     // Phase 1+2: over-complete hypothesis pool — one candidate per (seed, charge),
-    // built by the SAME `build_charge_candidate` the greedy path uses. Every
+    // built by the SAME `build_charge_candidate` used throughout. Every
     // (seed, charge) is independent and reads only shared immutable arrays, so
-    // generation runs in PARALLEL over seeds (mirroring the greedy path's
+    // generation runs in PARALLEL over seeds (like the main detection loop's
     // `into_par_iter`), then the results are heapified once via an O(n)
     // `BinaryHeap::from`. The heap's `Ord` is a total order (envelope length,
     // isotope/composite score, then monoisotope-index and charge tie-breaks), so
@@ -788,12 +667,9 @@ fn resolve_exhaustive(
             for &i in &item.chain {
                 claimed[i] = true;
             }
-            let (composite, _mc, _iso) =
-                rescore_chain(&item.chain, item.charge, sorted_hills, config);
             accepted.push(Candidate {
                 hill_indices: item.chain,
                 charge: item.charge,
-                composite_score: composite,
             });
         } else if k >= 2 {
             // Truncate to the free prefix, re-score, re-queue at reduced
@@ -813,7 +689,7 @@ fn resolve_exhaustive(
             }
         }
         // k == 1: only the monoisotope survives — drop (a lone hill is not a
-        // charged feature; the greedy path emits charge-0, which output filters).
+        // charged feature; a lone monoisotope is emitted as charge-0, which output filters).
     }
 
     accepted
@@ -951,16 +827,14 @@ mod exhaustive_tests {
         FeaturesConfig {
             min_charge: 2,
             max_charge: 2,
-            exhaustive_assembly: true,
             ..Default::default()
         }
     }
 
-    /// A clean, un-contested 3-hill charge-2 envelope must be assembled
-    /// identically (same charge, same hill set) by the greedy and the
-    /// exhaustive resolvers.
+    /// A clean, un-contested 3-hill charge-2 envelope is assembled into a single
+    /// charge-2 feature spanning all three hills.
     #[test]
-    fn uncontested_envelope_matches_greedy() {
+    fn uncontested_envelope_assembled() {
         let step = FeaturesConfig::default().neutron_mass / 2.0;
         let base = 600.0;
         let prof = vec![2.0f32, 6.0, 10.0, 6.0, 2.0];
@@ -971,19 +845,11 @@ mod exhaustive_tests {
         ];
         let file = FileConfig::default();
 
-        let mut cfg_off = z2_config();
-        cfg_off.exhaustive_assembly = false;
-        let greedy = detect_features(&hills, &cfg_off, &file);
+        let features = detect_features(&hills, &z2_config(), &file);
 
-        let cfg_on = z2_config();
-        let exhaustive = detect_features(&hills, &cfg_on, &file);
-
-        assert_eq!(greedy.len(), 1, "greedy should find one feature");
-        assert_eq!(exhaustive.len(), 1, "exhaustive should find one feature");
-        assert_eq!(greedy[0].charge, 2);
-        assert_eq!(exhaustive[0].charge, 2);
-        assert_eq!(exhaustive[0].hills.len(), 3);
-        assert_eq!(greedy[0].hills.len(), exhaustive[0].hills.len());
+        assert_eq!(features.len(), 1, "should find one feature");
+        assert_eq!(features[0].charge, 2);
+        assert_eq!(features[0].hills.len(), 3);
     }
 
     /// The exhaustive resolver must be deterministic: repeated runs (and a
@@ -1117,7 +983,7 @@ mod exhaustive_tests {
         let file = FileConfig::default();
 
         // Hills are already m/z-ascending, so the mono seed is index 0. Drive
-        // build_charge_candidate directly from that seed so the greedy
+        // build_charge_candidate directly from that seed so the resolver's
         // re-seeding (which could pick M+1 as a fresh mono) can't mask the
         // anchor difference.
         let sorted: Vec<&Hill> = hills.iter().collect();
