@@ -97,7 +97,11 @@ fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_aware: bool) -> S
         }
     };
 
-    for o in config.isotope_offset_min..=config.isotope_offset_max {
+    // `isotope_offset_enabled` = search neutron offsets [-1, +1]; disabled =
+    // test only offset 0 (no monoisotopic reassignment).
+    let (offset_min, offset_max): (i8, i8) =
+        if config.isotope_offset_enabled { (-1, 1) } else { (0, 0) };
+    for o in offset_min..=offset_max {
         // Shift obs: obs_aligned[j] = obs[j + o] (shift left by o)
         let mut obs_aligned = vec![0.0f64; k];
         for j in 0..k {

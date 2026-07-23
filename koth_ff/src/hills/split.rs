@@ -105,47 +105,9 @@ fn valleys_between(prof: &[f32], peaks: &[usize], min_scans: usize) -> Vec<usize
     split_points
 }
 
-/// Split a hill containing multiple co-eluting peaks (ORIGINAL "prominence"
-/// algorithm).
-///
-/// 1. Find local maxima above `min_peak_height` with `min_peak_distance` spacing.
-/// 2. Discard peaks whose prominence is below `min_prominence * max_intensity`.
-/// 3. Split at the valley between adjacent surviving peaks, provided both
-///    segments have >= `min_scans` valid data points.
-///
-/// Returns the original hill unchanged if no split passes all criteria.
-pub fn split_hill(
-    hill: &Hill,
-    min_peak_distance: usize,
-    min_peak_height: f64,
-    min_scans: usize,
-    min_prominence: f64,
-) -> Vec<Hill> {
-    let profile = &hill.intensity_profile;
-    if profile.len() < min_scans * 2 {
-        return vec![hill.clone()];
-    }
-
-    let max_intensity = profile.iter().cloned().fold(0.0f32, f32::max);
-    if max_intensity == 0.0 {
-        return vec![hill.clone()];
-    }
-
-    let min_height = max_intensity * min_peak_height as f32;
-    let prom_threshold = max_intensity * min_prominence as f32;
-
-    let peaks = find_prominent_peaks(profile, min_height, min_peak_distance, prom_threshold);
-    if peaks.len() <= 1 {
-        return vec![hill.clone()];
-    }
-
-    let split_points = valleys_between(profile, &peaks, min_scans);
-    build_sub_hills(hill, &split_points, min_scans)
-}
-
-/// Split a hill containing multiple co-eluting peaks (NEW "persistence"
-/// algorithm). Designed to be robust to noisy scans where the prominence
-/// splitter fails to separate visually-obvious dual peaks.
+/// Split a hill containing multiple co-eluting peaks (the "persistence"
+/// algorithm). Designed to be robust to noisy scans while separating
+/// visually-obvious dual peaks.
 ///
 /// 1. Despike (median-3) and smooth (moving average) a WORKING COPY — all peak
 ///    finding runs on this; sub-hill intensities still come from the raw trace.
@@ -226,97 +188,6 @@ pub fn split_hill_persistence(
     build_sub_hills(hill, &split_points, min_scans)
 }
 
-/// Compute the prominence of a peak at `peak_idx`.
-///
-/// Walks left and right from the peak until a taller value is encountered (or
-/// the array boundary), recording the minimum along each path.  Prominence is
-/// the peak height minus the higher of the two path minima.
-///
-/// A noise wiggle on the flank of a large peak will have a high path-minimum on
-/// the side facing the large peak (because it never descends far before hitting
-/// taller terrain), so its prominence is near zero.
-fn compute_prominence(profile: &[f32], peak_idx: usize) -> f32 {
-    let h = profile[peak_idx];
-
-    let mut left_min = h;
-    for i in (0..peak_idx).rev() {
-        if profile[i] > h {
-            break;
-        }
-        if profile[i] < left_min {
-            left_min = profile[i];
-        }
-    }
-
-    let mut right_min = h;
-    for i in (peak_idx + 1)..profile.len() {
-        if profile[i] > h {
-            break;
-        }
-        if profile[i] < right_min {
-            right_min = profile[i];
-        }
-    }
-
-    h - left_min.max(right_min)
-}
-
-/// Find local maxima above `min_height` with `min_distance` spacing, then
-/// filter to those whose prominence is >= `min_prominence`.
-fn find_prominent_peaks(
-    profile: &[f32],
-    min_height: f32,
-    min_distance: usize,
-    min_prominence: f32,
-) -> Vec<usize> {
-    let n = profile.len();
-    if n < 3 {
-        return Vec::new();
-    }
-
-    // Candidate local maxima: >= both neighbours, above min_height.
-    let mut candidates: Vec<(usize, f32)> = Vec::new();
-    for i in 0..n {
-        let left_ok  = i == 0     || profile[i] >= profile[i - 1];
-        let right_ok = i == n - 1 || profile[i] >= profile[i + 1];
-        if profile[i] >= min_height && left_ok && right_ok {
-            candidates.push((i, profile[i]));
-        }
-    }
-
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-
-    // Enforce min_distance: within each window keep the tallest.
-    let mut spaced: Vec<usize> = Vec::new();
-    'outer: for &(idx, height) in &candidates {
-        let mut to_remove: Option<usize> = None;
-        for (ri, &existing) in spaced.iter().enumerate() {
-            let dist = idx.abs_diff(existing);
-            if dist < min_distance {
-                if height <= profile[existing] {
-                    continue 'outer;
-                } else {
-                    to_remove = Some(ri);
-                    break;
-                }
-            }
-        }
-        if let Some(ri) = to_remove {
-            spaced.remove(ri);
-        }
-        spaced.push(idx);
-    }
-    spaced.sort_unstable();
-
-    // Prominence filter.
-    spaced
-        .into_iter()
-        .filter(|&idx| compute_prominence(profile, idx) >= min_prominence)
-        .collect()
-}
-
 // ---- Persistence-splitter primitives ----
 
 /// Width-3 median filter (nonlinear despike). Removes lone 1-sample spikes
@@ -380,31 +251,20 @@ fn valley_min(p: &[f32], a: usize, b: usize) -> f32 {
     p[a..=b].iter().cloned().fold(f32::INFINITY, f32::min)
 }
 
-/// Apply co-elution splitting to a list of hills, dispatching on
-/// `config.split_algo` ("prominence" = original, "persistence" = new).
+/// Apply co-elution splitting to a list of hills using the persistence
+/// splitter (despike + smooth + robust-max threshold + valley merge).
 pub fn split_coeluting(hills: Vec<Hill>, config: &HillsConfig) -> Vec<Hill> {
-    let persistence = config.split_algo.eq_ignore_ascii_case("persistence");
     let mut result = Vec::with_capacity(hills.len());
     let mut split_count = 0usize;
 
     for hill in &hills {
-        let parts = if persistence {
-            split_hill_persistence(
-                hill,
-                config.split_height_frac,
-                config.split_valley_ratio,
-                config.split_sigma_mult,
-                config.min_scans,
-            )
-        } else {
-            split_hill(
-                hill,
-                config.min_peak_distance,
-                config.min_peak_height,
-                config.min_scans,
-                config.min_prominence,
-            )
-        };
+        let parts = split_hill_persistence(
+            hill,
+            config.split_height_frac,
+            config.split_valley_ratio,
+            config.split_sigma_mult,
+            config.min_scans,
+        );
         if parts.len() > 1 {
             split_count += 1;
         }
@@ -412,9 +272,8 @@ pub fn split_coeluting(hills: Vec<Hill>, config: &HillsConfig) -> Vec<Hill> {
     }
 
     log::debug!(
-        "Split {} co-eluting hills ({} algo); total hills now: {}",
+        "Split {} co-eluting hills (persistence algo); total hills now: {}",
         split_count,
-        if persistence { "persistence" } else { "prominence" },
         result.len()
     );
     result
@@ -449,38 +308,6 @@ mod tests {
             intensity_profile: Arc::from(profile.as_slice()),
             isolation_window: None,
         }
-    }
-
-    #[test]
-    fn prominence_isolated_peak() {
-        // A lone peak rising from zero: prominence = peak height.
-        let p = vec![0.0f32, 0.0, 100.0, 0.0, 0.0];
-        assert!((compute_prominence(&p, 2) - 100.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn prominence_shoulder_peak() {
-        // Small bump on the flank of a large peak: path toward the large peak
-        // never descends below the bump, so prominence is small.
-        // Profile: [0, 50, 80, 60, 100, 0]  — bump at 2, large peak at 4.
-        let p = vec![0.0f32, 50.0, 80.0, 60.0, 100.0, 0.0];
-        let prom = compute_prominence(&p, 2); // peak=80, right path min=60 before hitting 100
-        // left_min = 0 (walks to edge), right_min = 60 (stops at 100 > 80)
-        // reference = max(0, 60) = 60, prominence = 80 - 60 = 20
-        assert!((prom - 20.0).abs() < 1e-4, "got {prom}");
-    }
-
-    #[test]
-    fn prominence_two_equal_peaks() {
-        // Two equal peaks with a deep valley: both should have high prominence.
-        let p = vec![0.0f32, 100.0, 0.0, 20.0, 0.0, 100.0, 0.0];
-        let p0 = compute_prominence(&p, 1); // left path min=0, right path min=0 (stops at equal peak)
-        let p1 = compute_prominence(&p, 5);
-        // For peak at 1: walks right, hits 100 at idx 5 (equal, not strictly greater — keeps walking)
-        // Actually profile[5]=100 is NOT > profile[1]=100, so we keep walking to edge. right_min=0.
-        // prominence = 100 - max(0, 0) = 100
-        assert!(p0 > 50.0, "p0={p0}");
-        assert!(p1 > 50.0, "p1={p1}");
     }
 
     fn gaussian(n: usize, center: f32, sigma: f32, amp: f32) -> Vec<f32> {

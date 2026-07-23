@@ -17,25 +17,6 @@ pub enum ImToleranceType {
     Absolute,
 }
 
-/// Per-hill mass-uncertainty model used during isotope-chain extension.
-///
-/// - `Off` (default): legacy behaviour. Chain extension uses the flat
-///   `mz_tolerance` window regardless of per-hill confidence.
-/// - `Kish`: each hill carries a `mz_se` (intensity-weighted-mean standard
-///   error via Kish's effective sample size). Chain extension combines the
-///   instrument tolerance with both endpoints' SEs in quadrature:
-///   `tol² = mz_tolerance² + (σ_mult × se_ref)² + (σ_mult × se_cand)²`.
-///   Hills with confident m/z get the legacy-tight window; hills with
-///   sparse / skewed intensity get a wider window, recovering low-S/N
-///   peptides that the flat tolerance would have excluded.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MzUncertaintyMode {
-    #[default]
-    Off,
-    Kish,
-}
-
 /// File-reading and shared tolerance settings.
 ///
 /// Tolerances defined here are used by both hill detection and feature finding.
@@ -124,11 +105,6 @@ pub struct FileConfig {
     /// noise floor are discarded before hill detection.
     /// `None` (default) disables the filter; a typical starting value is 3.0.
     pub noise_filter_sigma: Option<f64>,
-    /// Keep only the `N` most intense peaks per MS1 scan before hill detection
-    /// (AlphaPept's `n_most_abundant`). `None` (default) keeps every peak.
-    /// Used for fairness experiments against tools that pre-prune the peak list.
-    #[serde(default)]
-    pub n_most_abundant: Option<usize>,
     /// Decoy mode: shuffle MS1 spectra into a random order before hill and
     /// feature finding. Destroys the chromatographic structure while preserving
     /// the per-scan peak distributions, producing a null (decoy) feature set.
@@ -139,34 +115,6 @@ pub struct FileConfig {
     /// Bruker .d MS2 frames are not yet supported.
     #[serde(default)]
     pub ms2_hills_enabled: bool,
-    /// Enable two-pass empirical m/z tolerance calibration. Pass 1 runs hill
-    /// detection at a widened tolerance (`mz_tolerance × pass1_multiplier`),
-    /// records the absolute ppm-delta of every accepted peak-to-hill match,
-    /// then sets the pass-2 tolerance to `median + sigma_mult × σ`, capped
-    /// by the pass-1 ceiling. Only honoured when `mz_tolerance_type = Ppm`;
-    /// silently skipped for Dalton tolerances.
-    #[serde(default)]
-    pub adaptive_mz_tolerance: bool,
-    /// Multiplier applied to `mz_tolerance` for the pass-1 calibration
-    /// sweep. The calibrated pass-2 tolerance is hard-capped at this same
-    /// `mz_tolerance × pass1_multiplier` value, so it's also the upper
-    /// safety bound. Default 2.0.
-    #[serde(default = "default_adaptive_mz_tolerance_pass1_multiplier")]
-    pub adaptive_mz_tolerance_pass1_multiplier: f64,
-    /// `N` in `median + N × σ` when deriving the calibrated pass-2 ppm.
-    /// Default 3.0 (matches AlphaPept).
-    #[serde(default = "default_adaptive_mz_tolerance_sigma_mult")]
-    pub adaptive_mz_tolerance_sigma_mult: f64,
-    /// Per-hill mass-uncertainty model for isotope-chain extension. See
-    /// `MzUncertaintyMode` for details. Default `Off` (legacy behaviour).
-    #[serde(default)]
-    pub mz_uncertainty_mode: MzUncertaintyMode,
-    /// `σ_mult` in the combined-tolerance formula
-    /// `tol² = mz_tolerance² + (σ_mult × se_ref)² + (σ_mult × se_cand)²`.
-    /// Default 3.0 — wraps each hill's standard error in a 3σ envelope.
-    /// Ignored when `mz_uncertainty_mode = Off`.
-    #[serde(default = "default_mz_uncertainty_sigma_mult")]
-    pub mz_uncertainty_sigma_mult: f64,
     /// Enable ID-free isotope-consistency m/z recalibration. A pass-1 feature
     /// detection collects the signed ppm deviation of every adjacent
     /// isotope-hill spacing from its theoretical `neutron_mass / z` step and
@@ -175,6 +123,14 @@ pub struct FileConfig {
     /// median offset, so isotope hills are searched for at their recalibrated
     /// location. Skipped in decoy mode (shuffled spectra carry no real signal)
     /// and when too few isotope-spacing samples are collected. Default off.
+    ///
+    /// When enabled, the fixed isotope-match tolerance is additionally replaced
+    /// with a region-adaptive one derived from the recalibration surface's
+    /// per-region residual spread σ:
+    /// `tol_ppm = clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm, mz_tolerance)`.
+    /// Tightens the search window where the instrument is precise (rejecting
+    /// false isotope matches) and relaxes it — never beyond `mz_tolerance` —
+    /// where it is noisy. Only honoured for ppm tolerances.
     #[serde(default)]
     pub mz_recalibration: bool,
     /// Number of m/z bins in the recalibration surface. Bin extents are
@@ -189,15 +145,6 @@ pub struct FileConfig {
     /// then the global median. Default 50.
     #[serde(default = "default_mz_recalibration_min_samples")]
     pub mz_recalibration_min_samples: usize,
-    /// When `mz_recalibration` is on, also replace the fixed isotope-match
-    /// tolerance with a region-adaptive one derived from the recalibration
-    /// surface's per-region residual spread σ:
-    /// `tol_ppm = clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm, mz_tolerance)`.
-    /// Tightens the search window where the instrument is precise (rejecting
-    /// false isotope matches) and relaxes it — never beyond `mz_tolerance` —
-    /// where it is noisy. Only honoured for ppm tolerances. Default off.
-    #[serde(default)]
-    pub mz_recalibration_adaptive_tol: bool,
     /// `N` in the region-adaptive tolerance `N × σ`. Default 4.0.
     #[serde(default = "default_mz_recalibration_tol_sigma_mult")]
     pub mz_recalibration_tol_sigma_mult: f64,
@@ -231,19 +178,12 @@ impl Default for FileConfig {
             bruker_watershed_max_tof_offset: default_bruker_watershed_max_tof_offset(),
             bruker_noise_sigma: None,
             noise_filter_sigma: None,
-            n_most_abundant: None,
             decoy_mode: false,
             ms2_hills_enabled: false,
-            adaptive_mz_tolerance: false,
-            adaptive_mz_tolerance_pass1_multiplier: default_adaptive_mz_tolerance_pass1_multiplier(),
-            adaptive_mz_tolerance_sigma_mult: default_adaptive_mz_tolerance_sigma_mult(),
-            mz_uncertainty_mode: MzUncertaintyMode::Off,
-            mz_uncertainty_sigma_mult: default_mz_uncertainty_sigma_mult(),
             mz_recalibration: false,
             mz_recalibration_mz_bins: default_mz_recalibration_mz_bins(),
             mz_recalibration_rt_bins: default_mz_recalibration_rt_bins(),
             mz_recalibration_min_samples: default_mz_recalibration_min_samples(),
-            mz_recalibration_adaptive_tol: false,
             mz_recalibration_tol_sigma_mult: default_mz_recalibration_tol_sigma_mult(),
             mz_recalibration_tol_floor_ppm: default_mz_recalibration_tol_floor_ppm(),
         }
@@ -275,41 +215,12 @@ fn default_mz_recalibration_tol_floor_ppm() -> f64 {
     1.0
 }
 
-fn default_adaptive_mz_tolerance_pass1_multiplier() -> f64 {
-    2.0
-}
-
-fn default_adaptive_mz_tolerance_sigma_mult() -> f64 {
-    3.0
-}
-
-fn default_mz_uncertainty_sigma_mult() -> f64 {
-    3.0
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HillsConfig {
     pub min_scans: usize,
     pub max_gap: usize,
     pub split_hills: bool,
-    pub min_peak_distance: usize,
-    pub min_peak_height: f64,
-    /// Minimum prominence for a peak to trigger a split, as a fraction of the
-    /// hill's maximum intensity (0.0–1.0).  Prominence = peak height minus the
-    /// highest valley between the peak and any taller neighbour.  A noise wiggle
-    /// sitting on the flank of a larger peak has near-zero prominence even if it
-    /// passes the local-maxima check; a genuine co-eluting compound has high
-    /// prominence because the valley between the two peaks is deep.
-    #[serde(default = "default_min_prominence")]
-    pub min_prominence: f64,
-    /// Splitting algorithm. "prominence" = original fraction-of-max prominence
-    /// filter (uses `min_peak_distance` / `min_peak_height` / `min_prominence`).
-    /// "persistence" = despike + smooth + robust-max threshold + valley merge;
-    /// far more robust to noise and resolves close / unequal co-eluting peaks
-    /// (uses the `split_*` knobs below). Default "prominence" for back-compat.
-    #[serde(default = "default_split_algo")]
-    pub split_algo: String,
     /// [persistence] A split between two adjacent peaks is kept only if the
     /// valley between them drops to <= this fraction of the SMALLER peak.
     /// Scale-free and immune to spike inflation. Default 0.70.
@@ -402,10 +313,6 @@ fn default_chain_predicted_intensity_gate() -> bool {
     true
 }
 
-fn default_cosine_intersection() -> bool {
-    false
-}
-
 fn default_min_scan_overlap() -> usize {
     3
 }
@@ -422,10 +329,6 @@ fn default_cosine_anchor() -> String {
     // quant regression (median CV, MV rate, and HUMAN FPR all flat-to-better).
     // Set to `adjacent` to reproduce the pre-2026-07 paper feature output.
     "seed".to_string()
-}
-
-fn default_cosine_hybrid_depth() -> usize {
-    3
 }
 
 fn default_exhaustive_assembly() -> bool {
@@ -496,14 +399,6 @@ fn default_bruker_watershed_max_tof_offset() -> u32 {
     10
 }
 
-fn default_min_prominence() -> f64 {
-    0.2
-}
-
-fn default_split_algo() -> String {
-    "prominence".to_string()
-}
-
 fn default_split_valley_ratio() -> f64 {
     0.70
 }
@@ -522,10 +417,6 @@ impl Default for HillsConfig {
             min_scans: 3,
             max_gap: 0,
             split_hills: true,
-            min_peak_distance: 10,
-            min_peak_height: 0.2,
-            min_prominence: 0.2,
-            split_algo: default_split_algo(),
             split_valley_ratio: default_split_valley_ratio(),
             split_sigma_mult: default_split_sigma_mult(),
             split_height_frac: default_split_height_frac(),
@@ -553,9 +444,6 @@ pub enum CosineAnchor {
     Adjacent,
     /// Anchor every isotope to the monoisotope seed hill.
     Seed,
-    /// Anchor to the seed for the first `cosine_hybrid_depth` isotopes, then
-    /// fall back to the adjacent predecessor.
-    Hybrid,
 }
 
 impl CosineAnchor {
@@ -565,9 +453,8 @@ impl CosineAnchor {
         match s.to_ascii_lowercase().as_str() {
             "adjacent" => Ok(CosineAnchor::Adjacent),
             "seed" => Ok(CosineAnchor::Seed),
-            "hybrid" => Ok(CosineAnchor::Hybrid),
             other => Err(crate::error::KothError::ConfigError(format!(
-                "invalid features.cosine_anchor `{other}`: expected \"adjacent\", \"seed\", or \"hybrid\""
+                "invalid features.cosine_anchor `{other}`: expected \"adjacent\" or \"seed\""
             ))),
         }
     }
@@ -612,26 +499,6 @@ pub struct FeaturesConfig {
     /// feature depth. Re-benchmark FDR/quant when flipping.
     #[serde(default = "default_chain_predicted_intensity_gate")]
     pub chain_predicted_intensity_gate: bool,
-    /// Chromatographic-cosine normalisation mode for isotope-chain building.
-    ///
-    /// `false` (default): **union-padded** cosine — each hill's L2 norm is taken
-    /// over its *full* profile while the dot product covers only the scan
-    /// overlap, so a bright long monoisotopic hill paired with a short dim
-    /// isotope is penalised for its non-overlapping tails. This mismatched-length
-    /// penalty acts as an implicit noise filter and is what the PXD003881 quant
-    /// tuning was validated against — keep it for that benchmark.
-    ///
-    /// `true`: **intersection-only** cosine — both norms and the dot product are
-    /// computed over the scan-overlap window alone, measuring pure shape
-    /// agreement where both hills actually have signal. On fast-gradient data
-    /// (short 3–5 scan hills) real isotope pairs whose union cosine is dragged
-    /// below the `min_chain_cosine` gate by length-padding score correctly here
-    /// (measured intersection cosine median ≈0.94 on pairs the union form
-    /// rejected). The `MIN_MUTUAL_OVERLAP_SCANS` overlap gate still applies in
-    /// both modes. Recommended for MS1-search feature depth; re-benchmark quant
-    /// (CV/MV) before adopting it for LFQ.
-    #[serde(default = "default_cosine_intersection")]
-    pub cosine_intersection: bool,
     /// Minimum number of mutually-overlapping scans two hills must share
     /// before a chromatographic cosine is computed between them; below it the
     /// cosine is 0 and the isotope chain will not extend across that pair.
@@ -688,22 +555,12 @@ pub struct FeaturesConfig {
     /// predecessor — only the cosine reference changes. Rejects a far isotope
     /// that co-elutes with its neighbour but not with the mono.
     ///
-    /// `"hybrid"`: anchor to the seed for the first `cosine_hybrid_depth`
-    /// isotopes (where the seed still has strong S/N), then fall back to the
-    /// adjacent predecessor for farther isotopes.
-    ///
     /// The per-extension cosine that feeds the composite `mean_cosine` is
     /// computed against whichever reference this selects (so the composite is
     /// consistent with the gate). The reported `cosine_score` field and the
     /// exhaustive-resolver rescoring remain adjacent-style regardless.
     #[serde(default = "default_cosine_anchor")]
     pub cosine_anchor: String,
-    /// (`cosine_anchor = "hybrid"` only) Isotope index (1-based, counting out
-    /// from the seed) up to and including which the cosine is anchored to the
-    /// seed; beyond it the anchor falls back to the adjacent predecessor.
-    /// Default 3. Ignored for `"adjacent"` / `"seed"`.
-    #[serde(default = "default_cosine_hybrid_depth")]
-    pub cosine_hybrid_depth: usize,
     /// Score isotope chains against multiple averagine templates that vary
     /// the sulfur atom count `{0, avg, avg+2, avg+4}` and keep the best fit.
     /// Corrects the systematic Bhattacharyya penalty on Cys/Met-rich
@@ -735,13 +592,11 @@ impl Default for FeaturesConfig {
             max_isotopes: 6,
             max_isotope_log2_ratio: 1.5,
             chain_predicted_intensity_gate: true,
-            cosine_intersection: false,
             min_scan_overlap: 3,
             exhaustive_assembly: default_exhaustive_assembly(),
             exhaustive_min_isotope_score: 0.0,
             exhaustive_isotope_priority: false,
             cosine_anchor: default_cosine_anchor(),
-            cosine_hybrid_depth: default_cosine_hybrid_depth(),
             sulfur_aware_scoring: true,
             neutron_mass: 1.003_354_835,
             min_isotope_score: 0.0,
@@ -771,9 +626,10 @@ impl FeaturesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScoringConfig {
-    /// Range of neutron offsets to test: [min, max] inclusive
-    pub isotope_offset_min: i8,
-    pub isotope_offset_max: i8,
+    /// Whether to test the ±1 neutron-offset monoisotope reassignment during
+    /// scoring. `false` (default) tests only offset 0 (no reassignment);
+    /// `true` searches offsets [-1, +1] inclusive.
+    pub isotope_offset_enabled: bool,
     /// Bonus added to the Bhattacharyya score when offset == 0, to prefer
     /// the no-reassignment hypothesis when scores are close. Internal only —
     /// never stored on the feature.
@@ -788,8 +644,7 @@ pub struct ScoringConfig {
 impl Default for ScoringConfig {
     fn default() -> Self {
         Self {
-            isotope_offset_min: -1,
-            isotope_offset_max: 1,
+            isotope_offset_enabled: false,
             offset_zero_bonus: 0.15,
             min_isotope_score_for_offset: 0.5,
         }
@@ -925,7 +780,6 @@ mod config_parse_tests {
         parse_koth("example_config.toml", include_str!("../../example_config.toml"));
         parse_koth("koth_ff.toml", include_str!("../../benchmark/config/koth_ff.toml"));
         parse_koth("koth_ff_bruker.toml", include_str!("../../benchmark/config/koth_ff_bruker.toml"));
-        parse_koth("koth_ff_persist.toml", include_str!("../../benchmark/config/koth_ff_persist.toml"));
         parse_koth("koth_ff_relaxed.toml", include_str!("../../benchmark/config/koth_ff_relaxed.toml"));
         parse_koth("koth_ff_sulfur_on.toml", include_str!("../../benchmark/config/koth_ff_sulfur_on.toml"));
         parse_koth("koth_ff_sulfur_off.toml", include_str!("../../benchmark/config/koth_ff_sulfur_off.toml"));

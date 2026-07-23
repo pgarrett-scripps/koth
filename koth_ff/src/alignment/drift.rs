@@ -1,6 +1,13 @@
 use serde::Serialize;
 
-use super::{anchors::AnchorPair, AlignmentConfig};
+use super::anchors::AnchorPair;
+
+/// Sigma-clip schedule for the mass / IM drift fits. Formerly shared the RT
+/// warp's `rt_warp_clip_iters` / `rt_warp_sigma_clip` config knobs; those were
+/// removed with the legacy piecewise/linear warps (the shipped configs and the
+/// old defaults all used these exact values), so the schedule is now fixed.
+const DRIFT_CLIP_ITERS: usize = 5;
+const DRIFT_SIGMA_CLIP: f64 = 3.0;
 
 /// A simple linear drift model: y = intercept + slope * x.
 #[derive(Debug, Clone, Serialize)]
@@ -24,12 +31,12 @@ impl DriftFit {
 ///
 /// Returns the fit plus a per-anchor active mask (true = used by the final fit,
 /// false = sigma-clipped). The mask is aligned 1:1 with the input `anchors` slice.
-pub fn fit_mass_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> (DriftFit, Vec<bool>) {
+pub fn fit_mass_drift(anchors: &[AnchorPair]) -> (DriftFit, Vec<bool>) {
     let pairs: Vec<(f64, f64)> = anchors
         .iter()
         .map(|a| (a.ref_rt_norm, a.ppm_error()))
         .collect();
-    fit_with_sigma_clip(&pairs, config)
+    fit_with_sigma_clip(&pairs)
 }
 
 /// Fit ion-mobility drift as a linear function of normalised reference RT.
@@ -37,7 +44,7 @@ pub fn fit_mass_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> (Drif
 ///
 /// The returned mask is aligned 1:1 with the input `anchors` slice: an entry is
 /// `true` only if the anchor had IM on both sides AND survived sigma-clipping.
-pub fn fit_im_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> (DriftFit, Vec<bool>) {
+pub fn fit_im_drift(anchors: &[AnchorPair]) -> (DriftFit, Vec<bool>) {
     let mut full_active = vec![false; anchors.len()];
 
     let mut idx_map: Vec<usize> = Vec::with_capacity(anchors.len());
@@ -53,14 +60,14 @@ pub fn fit_im_drift(anchors: &[AnchorPair], config: &AlignmentConfig) -> (DriftF
         return (DriftFit::zero(), full_active);
     }
 
-    let (fit, sub_active) = fit_with_sigma_clip(&pairs, config);
+    let (fit, sub_active) = fit_with_sigma_clip(&pairs);
     for (j, &full_idx) in idx_map.iter().enumerate() {
         full_active[full_idx] = sub_active[j];
     }
     (fit, full_active)
 }
 
-fn fit_with_sigma_clip(pairs: &[(f64, f64)], config: &AlignmentConfig) -> (DriftFit, Vec<bool>) {
+fn fit_with_sigma_clip(pairs: &[(f64, f64)]) -> (DriftFit, Vec<bool>) {
     if pairs.len() < 2 {
         return (DriftFit::zero(), vec![false; pairs.len()]);
     }
@@ -68,7 +75,7 @@ fn fit_with_sigma_clip(pairs: &[(f64, f64)], config: &AlignmentConfig) -> (Drift
     let mut active = vec![true; pairs.len()];
     let mut fit = ols_active(pairs, &active);
 
-    for _ in 0..config.rt_warp_clip_iters {
+    for _ in 0..DRIFT_CLIP_ITERS {
         let residuals: Vec<f64> = pairs
             .iter()
             .zip(active.iter())
@@ -88,7 +95,7 @@ fn fit_with_sigma_clip(pairs: &[(f64, f64)], config: &AlignmentConfig) -> (Drift
         if std < 1e-9 {
             break;
         }
-        let threshold = config.rt_warp_sigma_clip * std;
+        let threshold = DRIFT_SIGMA_CLIP * std;
 
         let mut res_iter = residuals.iter();
         for ((x, y), ok) in pairs.iter().zip(active.iter_mut()) {

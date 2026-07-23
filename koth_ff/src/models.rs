@@ -76,9 +76,8 @@ pub struct Hill {
     pub mz: f64,
     pub mz_std: f64,
     /// Standard error of the intensity-weighted m/z estimate (Kish-effective
-    /// sample size). Zero for hills with <2 real peaks. Used by isotope chain
-    /// extension when `FileConfig.mz_uncertainty_mode = Kish` to widen the
-    /// per-hill mass tolerance for hills whose m/z estimate is uncertain.
+    /// sample size). Zero for hills with <2 real peaks. Written to the hills
+    /// output as a per-hill m/z-confidence diagnostic.
     pub mz_se: f64,
     pub rt: f64,
     pub rt_start: f64,

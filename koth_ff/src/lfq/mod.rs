@@ -82,10 +82,6 @@ pub struct LfqConfig {
     /// `rt_window_pct` if you want some overlap, or larger to fully separate.
     #[serde(default = "default_decoy_rt_shift_pct")]
     pub decoy_rt_shift_pct: f64,
-    /// How MBR q-values are computed: `qda` (semi-supervised QDA rescorer,
-    /// default) or `hybrid` (legacy rank-by-hybrid_score TDC).
-    #[serde(default)]
-    pub tdc_method: TdcMethod,
     /// Tolerances for building the multi-run consensus feature list.
     #[serde(default)]
     pub consensus: ConsensusConfig,
@@ -157,19 +153,6 @@ pub enum ScoreMode {
     Spectral,
 }
 
-/// How MBR target-decoy q-values are computed.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TdcMethod {
-    /// Semi-supervised QDA rescorer over {|ppm|, |RT diff|, Bhattacharyya,
-    /// coelution, |IM delta|} with 3-fold CV; all cells (detected + MBR)
-    /// compete against decoys (see `rescore`). Default.
-    #[default]
-    Qda,
-    /// Legacy: rank all cells by `hybrid_score` and run plain TDC (`tdc`).
-    Hybrid,
-}
-
 impl Default for LfqConfig {
     fn default() -> Self {
         Self {
@@ -183,7 +166,6 @@ impl Default for LfqConfig {
             run_tdc: true,
             decoy_mz_shift_da: default_decoy_mz_shift_da(),
             decoy_rt_shift_pct: default_decoy_rt_shift_pct(),
-            tdc_method: TdcMethod::Qda,
             consensus: ConsensusConfig::default(),
             normalize: default_normalize(),
             quant_estimator: default_quant_estimator(),
@@ -698,10 +680,7 @@ pub fn quantify(
     // Target-decoy q-values
     let t_tdc = Instant::now();
     let q_map: HashMap<(usize, usize), f64> = if config.run_tdc {
-        match config.tdc_method {
-            TdcMethod::Qda => rescore::compute_qvalues_qda(&all_entries),
-            TdcMethod::Hybrid => tdc::compute_qvalues(&all_entries),
-        }
+        rescore::compute_qvalues_qda(&all_entries)
     } else {
         all_entries
             .iter()

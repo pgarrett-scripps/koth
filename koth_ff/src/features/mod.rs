@@ -6,19 +6,12 @@ use std::cmp::Ordering;
 use rayon::prelude::*;
 
 use crate::config::{
-    CosineAnchor, FeaturesConfig, FileConfig, ImToleranceType, MzUncertaintyMode, ToleranceType,
+    CosineAnchor, FeaturesConfig, FileConfig, ImToleranceType, ToleranceType,
 };
 use crate::models::{Feature, Hill};
 use crate::scoring::averagine;
 use cosine::cosine_similarity;
 use recalibration::{MzRecalBuilder, MzRecalModel};
-
-/// When `mz_uncertainty_mode = Kish`, the binary-search window is widened
-/// by this factor so candidates with high `mz_se` that pass the exact
-/// combined-tolerance check below aren't pre-filtered out. The exact
-/// check inside `find_neighbors` then rejects anything outside the
-/// per-candidate Kish-combined window.
-const KISH_SEARCH_EXPANSION: f64 = 4.0;
 
 struct Candidate {
     hill_indices: Vec<usize>, // indices into sorted_hills, lowest mz first
@@ -161,7 +154,6 @@ pub fn detect_features_with_recal(
                     cosine_similarity(
                         &chain_hills[k],
                         &chain_hills[k + 1],
-                        config.cosine_intersection,
                         config.min_scan_overlap,
                     )
                 })
@@ -341,14 +333,14 @@ fn build_charge_candidate(
         }
     };
     let use_ppm_tol = matches!(file.mz_tolerance_type, ToleranceType::Ppm);
-    // Region-adaptive isotope-match tolerance (#2): when recalibration is on
-    // and `mz_recalibration_adaptive_tol` is set, derive the ppm window from
-    // the surface's per-region residual spread σ instead of the fixed
-    // `mz_tolerance`, clamped to [tol_floor_ppm, mz_tolerance]. Isotopes of one
-    // feature span only a few Da, so a single σ read at the seed applies to
-    // the whole chain. No-op for Dalton tolerances or when `recal` is `None`.
-    let effective_tol_ppm = match (use_ppm_tol, file.mz_recalibration_adaptive_tol, recal) {
-        (true, true, Some(m)) => {
+    // Region-adaptive isotope-match tolerance: when recalibration is on, derive
+    // the ppm window from the surface's per-region residual spread σ instead of
+    // the fixed `mz_tolerance`, clamped to [tol_floor_ppm, mz_tolerance].
+    // Isotopes of one feature span only a few Da, so a single σ read at the seed
+    // applies to the whole chain. No-op for Dalton tolerances or when `recal` is
+    // `None` (recalibration disabled).
+    let effective_tol_ppm = match (use_ppm_tol, recal) {
+        (true, Some(m)) => {
             // `f64::clamp` panics if min > max; a user-configured floor above
             // mz_tolerance would otherwise crash every feature-detection task.
             // Capping the floor at the ceiling makes mz_tolerance the true
@@ -364,13 +356,10 @@ fn build_charge_candidate(
     } else {
         file.mz_tolerance
     };
-    let kish_on = matches!(file.mz_uncertainty_mode, MzUncertaintyMode::Kish);
-    let sigma_mult = file.mz_uncertainty_sigma_mult;
     // Which hill the chromatographic-cosine gate is anchored to. `Adjacent`
-    // (default) reproduces legacy koth exactly; `Seed` / `Hybrid` only change
-    // the cosine *reference* hill — the m/z step target, `find_neighbors`
-    // predecessor, and the intensity-ratio predecessor all stay the immediate
-    // chain predecessor in every mode.
+    // (default) reproduces legacy koth exactly; `Seed` only changes the cosine
+    // *reference* hill — the m/z step target, `find_neighbors` predecessor, and
+    // the intensity-ratio predecessor all stay the immediate chain predecessor.
     let cosine_anchor = config.cosine_anchor_mode();
 
     const PROTON_MASS: f64 = 1.007_276_466_621;
@@ -438,8 +427,6 @@ fn build_charge_candidate(
                 &exclude,
                 file,
                 use_im,
-                kish_on,
-                sigma_mult,
             );
             if cands.is_empty() {
                 break;
@@ -456,20 +443,11 @@ fn build_charge_candidate(
             // the recall gain is entirely in the M+2/M+3 isotopes (M+1's
             // predecessor IS the seed, so it is unaffected). `Adjacent` anchors
             // to the immediate predecessor (former default, byte-identical to
-            // the pre-2026-07 paper output); `Hybrid` uses the seed for the
-            // first `cosine_hybrid_depth` isotopes then falls back to adjacent.
-            // Only the cosine reference changes — the m/z step and
-            // intensity-ratio predecessor stay `ref_hill`.
+            // the pre-2026-07 paper output). Only the cosine reference changes —
+            // the m/z step and intensity-ratio predecessor stay `ref_hill`.
             let cos_ref_hill = match cosine_anchor {
                 CosineAnchor::Adjacent => ref_hill,
                 CosineAnchor::Seed => seed_hill,
-                CosineAnchor::Hybrid => {
-                    if iso <= config.cosine_hybrid_depth {
-                        seed_hill
-                    } else {
-                        ref_hill
-                    }
-                }
             };
             let (best_c, best_cos) = cands
                 .iter()
@@ -479,7 +457,6 @@ fn build_charge_candidate(
                         cosine_similarity(
                             cos_ref_hill,
                             sorted_hills[c],
-                            config.cosine_intersection,
                             config.min_scan_overlap,
                         ),
                     )
@@ -545,8 +522,6 @@ fn build_charge_candidate(
                 &exclude,
                 file,
                 use_im,
-                kish_on,
-                sigma_mult,
             );
             if cands.is_empty() {
                 break;
@@ -555,18 +530,10 @@ fn build_charge_candidate(
             // Cosine reference hill (left direction). Same anchor semantics as
             // the right chain: `Adjacent` = the immediate predecessor
             // (`ref_hill`, legacy, byte-identical), `Seed` = the mono seed for
-            // every isotope, `Hybrid` = seed for the first `cosine_hybrid_depth`
-            // then adjacent. Only the cosine reference changes.
+            // every isotope. Only the cosine reference changes.
             let cos_ref_hill = match cosine_anchor {
                 CosineAnchor::Adjacent => ref_hill,
                 CosineAnchor::Seed => seed_hill,
-                CosineAnchor::Hybrid => {
-                    if iso <= config.cosine_hybrid_depth {
-                        seed_hill
-                    } else {
-                        ref_hill
-                    }
-                }
             };
             let (best_c, best_cos) = cands
                 .iter()
@@ -576,7 +543,6 @@ fn build_charge_candidate(
                         cosine_similarity(
                             cos_ref_hill,
                             sorted_hills[c],
-                            config.cosine_intersection,
                             config.min_scan_overlap,
                         ),
                     )
@@ -672,7 +638,6 @@ fn rescore_chain(
         cos_sum += cosine_similarity(
             hills[k],
             hills[k + 1],
-            config.cosine_intersection,
             config.min_scan_overlap,
         );
     }
@@ -917,31 +882,15 @@ fn find_neighbors(
     exclude_indices: &[usize],
     file: &FileConfig,
     use_im: bool,
-    kish_on: bool,
-    sigma_mult: f64,
 ) -> Vec<usize> {
-    // Binary-search window: the flat tolerance by default; widened by
-    // KISH_SEARCH_EXPANSION when Kish is on so candidates whose own SE
-    // pushes the combined window beyond `mz_tol` aren't pre-filtered out.
-    // The exact Kish check inside the loop still rejects anything outside
-    // the per-candidate combined tolerance.
-    let search_window = if kish_on {
-        mz_tol * KISH_SEARCH_EXPANSION
-    } else {
-        mz_tol
-    };
-
-    let lo = mz_array.partition_point(|&x| x < target_mz - search_window);
-    let hi = mz_array.partition_point(|&x| x <= target_mz + search_window);
+    let lo = mz_array.partition_point(|&x| x < target_mz - mz_tol);
+    let hi = mz_array.partition_point(|&x| x <= target_mz + mz_tol);
 
     if lo >= hi {
         return Vec::new();
     }
 
     let min_intensity = ref_hill.intensity_max * max_decrease;
-    let ref_se_term = if kish_on { sigma_mult * ref_hill.mz_se } else { 0.0 };
-    let base_tol_sq = mz_tol * mz_tol;
-    let ref_se_sq = ref_se_term * ref_se_term;
 
     (lo..hi)
         .filter(|&i| {
@@ -957,16 +906,6 @@ fn find_neighbors(
                     ImToleranceType::Relative => ref_hill.im.max(im_array[i]) * file.im_tolerance,
                 };
                 if (im_array[i] - ref_hill.im).abs() > im_tol {
-                    return false;
-                }
-            }
-            if kish_on {
-                // Combined-quadrature tolerance:
-                //   tol² = mz_tol² + (σ·se_ref)² + (σ·se_cand)²
-                let cand_se_term = sigma_mult * sorted_hills[i].mz_se;
-                let tol_sq = base_tol_sq + ref_se_sq + cand_se_term * cand_se_term;
-                let delta = mz_array[i] - target_mz;
-                if delta * delta > tol_sq {
                     return false;
                 }
             }
@@ -1222,7 +1161,11 @@ mod exhaustive_tests {
             anchor_config("banana").validate().is_err(),
             "unknown cosine_anchor must be a config error"
         );
-        for v in ["adjacent", "seed", "hybrid", "SEED", "Hybrid"] {
+        assert!(
+            anchor_config("hybrid").validate().is_err(),
+            "removed `hybrid` cosine_anchor must now be a config error"
+        );
+        for v in ["adjacent", "seed", "SEED", "Seed"] {
             assert!(
                 anchor_config(v).validate().is_ok(),
                 "`{v}` should be an accepted cosine_anchor"

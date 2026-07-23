@@ -76,31 +76,6 @@ bruker_watershed_max_tof_offset = 10
 # Can also be enabled at the command line with --ms2.
 ms2_hills_enabled = true
 
-# Two-pass empirical m/z tolerance calibration (inspired by AlphaPept). When
-# enabled, koth_ff runs hill detection twice: pass 1 uses a widened tolerance
-# (mz_tolerance × pass1_multiplier) and records the absolute ppm-delta of
-# every accepted peak-to-hill match; pass 2 then uses
-# `min(median + sigma_mult × σ, mz_tolerance × pass1_multiplier)` as the
-# calibrated tolerance. Removes the "what's the right ppm?" tuning question
-# at the cost of a roughly 2× hill-detection wall-clock. Only honoured when
-# mz_tolerance_type = "ppm" and decoy_mode = false.
-# adaptive_mz_tolerance = false
-# adaptive_mz_tolerance_pass1_multiplier = 2.0
-# adaptive_mz_tolerance_sigma_mult = 3.0
-
-# Per-hill mass-uncertainty model for isotope-chain extension. Inspired by
-# AlphaPept's bootstrap mass uncertainty, replaced with the closed-form
-# Kish-effective standard error (essentially free; equivalent for unimodal
-# distributions). Each hill stores `mz_se` = `mz_weighted_std / √neff`, where
-# `neff = (Σintensity)² / Σintensity²`. Chain extension then combines the
-# instrument tolerance with both endpoints' SEs in quadrature:
-#   tol² = mz_tolerance² + (σ_mult × se_ref)² + (σ_mult × se_cand)²
-# Hills with confident m/z get the legacy-tight window; sparse / skewed hills
-# get a wider window, recovering low-S/N peptides that flat tolerance excluded.
-# Modes: "off" (default, legacy behaviour) or "kish".
-# mz_uncertainty_mode = "off"
-# mz_uncertainty_sigma_mult = 3.0
-
 # ID-free isotope-consistency m/z recalibration (Biosaur-style). A pass-1
 # feature detection collects the signed ppm deviation of every adjacent
 # isotope-hill spacing from its theoretical neutron/z step and bins the
@@ -116,18 +91,17 @@ ms2_hills_enabled = true
 # mz_recalibration_rt_bins = 8
 # mz_recalibration_min_samples = 50
 
-# Region-adaptive isotope-match tolerance, built on the surface above: instead
-# of a fixed ppm window, use clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm,
-# mz_tolerance), where σ is the surface's per-region residual spread. This is
-# the part that actually moves numbers — position-only recalibration alone was
-# a no-op on both benchmark platforms, but sizing the isotope-match window to
-# the instrument's real local precision was a win on both: PXD003881 (Orbitrap,
-# fixed 8 ppm vs learned σ≈0.9 ppm) drops -5.8% spurious features at flat
-# recall with better CV/MV; a 15-min timsTOF cohort (fixed 15 ppm vs learned
-# σ≈2.8 ppm) gains +1.06 pp PSM recall AND better CV/MV. No regression found on
-# either platform. Requires mz_recalibration = true. Only honoured for ppm
-# tolerances.
-# mz_recalibration_adaptive_tol = false
+# When mz_recalibration is enabled it also makes the isotope-match tolerance
+# region-adaptive, built on the surface above: instead of a fixed ppm window,
+# use clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm, mz_tolerance), where σ is
+# the surface's per-region residual spread. This is the part that actually moves
+# numbers — position-only recalibration alone was a no-op on both benchmark
+# platforms, but sizing the isotope-match window to the instrument's real local
+# precision was a win on both: PXD003881 (Orbitrap, fixed 8 ppm vs learned
+# σ≈0.9 ppm) drops -5.8% spurious features at flat recall with better CV/MV; a
+# 15-min timsTOF cohort (fixed 15 ppm vs learned σ≈2.8 ppm) gains +1.06 pp PSM
+# recall AND better CV/MV. No regression found on either platform. Only honoured
+# for ppm tolerances.
 # mz_recalibration_tol_sigma_mult = 4.0
 # mz_recalibration_tol_floor_ppm = 1.0
 
@@ -137,17 +111,13 @@ min_scans = 3
 # Maximum gap (in scans) allowed within a hill
 max_gap = 0
 
-# Whether to split hills at local minima
+# Whether to split hills at co-eluting local minima (persistence splitter:
+# despike + smooth + robust-max threshold + valley merge). The `split_*` knobs
+# below tune it; all have defaults, so they may be omitted.
 split_hills = true
-# Minimum scan distance between peaks when splitting
-min_peak_distance = 10
-# Minimum peak height relative to the tallest peak (0.0–1.0)
-min_peak_height = 0.2
-# Minimum peak prominence required to trigger a split (fraction of the hill's
-# maximum intensity, 0.0–1.0). Prominence measures how much a peak stands above
-# the highest valley between it and any taller neighbour. Noise wiggles on a
-# peak's flank have near-zero prominence and will not cause spurious splits.
-min_prominence = 0.2
+# split_valley_ratio = 0.70   # valley must drop to <= this fraction of the smaller peak
+# split_sigma_mult   = 4.0    # absolute notch depth floor, in noise sigma
+# split_height_frac  = 0.10   # min peak height as a fraction of the robust (95th-pct) max
 
 # Weight for the intensity log₂-fold-change term in the hill-candidate distance
 # score. When multiple peaks fall within the m/z tolerance window, this biases
@@ -222,9 +192,9 @@ min_cosine_score  = 0.0
 min_combined_score = 0.0
 
 [scoring]
-# Range of neutron offsets to evaluate for monoisotopic peak reassignment
-isotope_offset_min = -1
-isotope_offset_max = 1
+# Whether to evaluate the ±1 neutron-offset monoisotopic peak reassignment.
+# false = test only offset 0 (no reassignment); true = search offsets [-1, +1].
+isotope_offset_enabled = true
 
 # Score bonus added to the Bhattacharyya score when offset == 0, to prefer
 # the no-reassignment hypothesis when scores are close. Internal only.

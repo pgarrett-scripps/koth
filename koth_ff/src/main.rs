@@ -43,28 +43,12 @@ struct Args {
     #[arg(long)]
     ms2: bool,
 
-    /// Enable two-pass empirical m/z tolerance calibration. Overrides the
-    /// `file.adaptive_mz_tolerance` config setting when set. See
-    /// `example_config.toml` for the full algorithm.
-    #[arg(long)]
-    adaptive: bool,
-
-    /// Enable Kish per-hill mass-uncertainty for isotope-chain extension.
-    /// Overrides `file.mz_uncertainty_mode` to `Kish` when set.
-    #[arg(long)]
-    kish: bool,
-
     /// Enable ID-free isotope-consistency m/z recalibration (a pass-1 feature
-    /// pass learns a per-region m/z-offset surface applied in pass 2).
-    /// Overrides `file.mz_recalibration` when set.
+    /// pass learns a per-region m/z-offset surface applied in pass 2, and the
+    /// isotope-match tolerance becomes region-adaptive). Overrides
+    /// `file.mz_recalibration` when set.
     #[arg(long)]
     recalibrate: bool,
-
-    /// Additionally use a region-adaptive isotope-match tolerance derived from
-    /// the recalibration surface's per-region σ. Implies `--recalibrate`.
-    /// Overrides `file.mz_recalibration_adaptive_tol` when set.
-    #[arg(long)]
-    adaptive_tol: bool,
 
     /// Drop large baseline-like hills (≥40 scans without a clear apex).
     /// Overrides `hills.filter_large_baseline_hills` when set. Targets
@@ -93,18 +77,8 @@ fn main() -> anyhow::Result<()> {
     if args.ms2 {
         config.file.ms2_hills_enabled = true;
     }
-    if args.adaptive {
-        config.file.adaptive_mz_tolerance = true;
-    }
-    if args.kish {
-        config.file.mz_uncertainty_mode = koth_ff::config::MzUncertaintyMode::Kish;
-    }
     if args.recalibrate {
         config.file.mz_recalibration = true;
-    }
-    if args.adaptive_tol {
-        config.file.mz_recalibration = true;
-        config.file.mz_recalibration_adaptive_tol = true;
     }
     if args.filter_baseline_hills {
         config.hills.filter_large_baseline_hills = true;

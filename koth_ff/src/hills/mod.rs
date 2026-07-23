@@ -75,9 +75,6 @@ where
         if let Some(sigma) = file.noise_filter_sigma {
             noise::filter_spectrum(&mut spectrum, sigma);
         }
-        if let Some(n) = file.n_most_abundant {
-            noise::keep_most_abundant(&mut spectrum, n);
-        }
         total_peaks += spectrum.peaks.len();
         det.process_scan(&spectrum);
         detect_ns += t1.elapsed();

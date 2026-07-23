@@ -44,107 +44,6 @@ pub fn identity_warp() -> RtWarp {
     }
 }
 
-/// Fit a *linear* RT warp by least squares on anchor pairs.
-///
-/// Models `ref_norm = a · run_norm + b` and returns the equivalent
-/// `RtWarp` (delta = ref_norm − run_norm), expressed as two knots at
-/// run_norm = 0 and run_norm = 1.
-///
-/// Compared to the piecewise-local-median warp, this is the lowest-noise
-/// warp that still corrects for global RT drift between runs — useful when
-/// the local-median warp over-fits anchor density and scatters projected
-/// features beyond the consensus grouping tolerance. Iterative
-/// sigma-clipping (same schedule as `fit_rt_warp`) removes outlier anchors
-/// before the final fit.
-pub fn fit_linear_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> (RtWarp, Vec<bool>) {
-    let mut active = vec![true; anchors.len()];
-
-    for _ in 0..config.rt_warp_clip_iters {
-        let (a, b) = lstsq(anchors, &active);
-
-        let residuals: Vec<f64> = anchors
-            .iter()
-            .zip(active.iter())
-            .filter_map(|(ap, &ok)| {
-                if !ok {
-                    return None;
-                }
-                Some(ap.ref_rt_norm - (a * ap.run_rt_norm + b))
-            })
-            .collect();
-
-        if residuals.is_empty() {
-            break;
-        }
-        let std = std_dev(&residuals);
-        if std < 1e-9 {
-            break;
-        }
-        let threshold = config.rt_warp_sigma_clip * std;
-
-        let mut res_iter = residuals.iter();
-        for (_, ok) in anchors.iter().zip(active.iter_mut()) {
-            if !*ok {
-                continue;
-            }
-            if res_iter.next().unwrap().abs() > threshold {
-                *ok = false;
-            }
-        }
-
-        let n_active = active.iter().filter(|&&ok| ok).count();
-        if n_active < config.min_anchor_count {
-            active.iter_mut().for_each(|ok| *ok = true);
-            break;
-        }
-    }
-
-    let (a, b) = lstsq(anchors, &active);
-    // Express ref_norm = a · run_norm + b as the delta(run_norm) form used by `apply`:
-    //   delta(x) = ref_norm(x) − x = (a − 1) · x + b
-    let delta_at_0 = b;
-    let delta_at_1 = a - 1.0 + b;
-    (
-        RtWarp {
-            knot_x: vec![0.0, 1.0],
-            knot_y: vec![delta_at_0, delta_at_1],
-        },
-        active,
-    )
-}
-
-/// Ordinary least squares `ref = a · run + b` over the active anchor mask.
-/// Falls back to identity (`a=1, b=0`) on degenerate cases.
-fn lstsq(anchors: &[AnchorPair], active: &[bool]) -> (f64, f64) {
-    let n: usize = active.iter().filter(|&&ok| ok).count();
-    if n < 2 {
-        return (1.0, 0.0);
-    }
-    let mut sx = 0.0;
-    let mut sy = 0.0;
-    let mut sxx = 0.0;
-    let mut sxy = 0.0;
-    for (ap, &ok) in anchors.iter().zip(active.iter()) {
-        if !ok {
-            continue;
-        }
-        let x = ap.run_rt_norm;
-        let y = ap.ref_rt_norm;
-        sx += x;
-        sy += y;
-        sxx += x * x;
-        sxy += x * y;
-    }
-    let n_f = n as f64;
-    let denom = n_f * sxx - sx * sx;
-    if denom.abs() < 1e-12 {
-        return (1.0, 0.0);
-    }
-    let a = (n_f * sxy - sx * sy) / denom;
-    let b = (sy - a * sx) / n_f;
-    (a, b)
-}
-
 /// Number of random 2-point line samples drawn during RANSAC consensus search.
 /// Fixed (not a config knob) — 4000 is far above saturation for the anchor
 /// counts seen here, and keeping it internal is part of the point of this mode:
@@ -237,59 +136,6 @@ pub fn fit_ransac_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> (RtW
     // fall back to the robust median fit over all anchors (still monotone).
     if active.iter().filter(|&&a| a).count() < config.min_anchor_count {
         active = vec![true; n];
-    }
-
-    let (kx, ky) = build_knots(anchors, &active, config.rt_warp_bandwidth);
-    (RtWarp { knot_x: kx, knot_y: ky }, active)
-}
-
-/// Fit a RT warp from anchor pairs using sliding-window medians + sigma-clipping.
-///
-/// Returns the warp plus a per-anchor active mask (true = used by the final fit).
-pub fn fit_rt_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> (RtWarp, Vec<bool>) {
-    let mut active = vec![true; anchors.len()];
-
-    for _ in 0..config.rt_warp_clip_iters {
-        let (kx, ky) = build_knots(anchors, &active, config.rt_warp_bandwidth);
-
-        let residuals: Vec<f64> = anchors
-            .iter()
-            .zip(active.iter())
-            .filter_map(|(a, &ok)| {
-                if !ok {
-                    return None;
-                }
-                let predicted = piecewise_linear(&kx, &ky, a.run_rt_norm);
-                let actual = a.ref_rt_norm - a.run_rt_norm;
-                Some(actual - predicted)
-            })
-            .collect();
-
-        if residuals.is_empty() {
-            break;
-        }
-        let std = std_dev(&residuals);
-        if std < 1e-9 {
-            break;
-        }
-        let threshold = config.rt_warp_sigma_clip * std;
-
-        let mut res_iter = residuals.iter();
-        for (_, ok) in anchors.iter().zip(active.iter_mut()) {
-            if !*ok {
-                continue;
-            }
-            if res_iter.next().unwrap().abs() > threshold {
-                *ok = false;
-            }
-        }
-
-        let n_active = active.iter().filter(|&&ok| ok).count();
-        if n_active < config.min_anchor_count {
-            // Clipping too aggressive — restore and stop
-            active.iter_mut().for_each(|ok| *ok = true);
-            break;
-        }
     }
 
     let (kx, ky) = build_knots(anchors, &active, config.rt_warp_bandwidth);
@@ -441,15 +287,6 @@ fn median(v: &[f64]) -> f64 {
     }
 }
 
-fn std_dev(v: &[f64]) -> f64 {
-    if v.len() < 2 {
-        return 0.0;
-    }
-    let mean = v.iter().sum::<f64>() / v.len() as f64;
-    let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (v.len() - 1) as f64;
-    var.sqrt()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,7 +391,9 @@ mod tests {
 
     #[test]
     fn warp_is_monotone_on_inverting_anchors() {
-        let config = AlignmentConfig::default();
+        let mut config = AlignmentConfig::default();
+        config.rt_warp_kind = WarpKind::Ransac;
+        config.rt_warp_ransac_thresh = 0.05;
         let mut anchors = Vec::new();
         // Clusters of 4 anchors per run-RT center. Reference RT rises, then
         // sharply inverts in the middle, then rises again.
@@ -568,7 +407,7 @@ mod tests {
                 anchors.push(anchor(run + jitter, refn + jitter));
             }
         }
-        let (warp, _) = fit_rt_warp(&anchors, &config);
+        let (warp, _) = fit_ransac_warp(&anchors, &config);
         assert_warp_monotone(&warp);
     }
 }
