@@ -9,6 +9,25 @@ and this project uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Feature detection now defaults to the exhaustive non-destructive assembler
+  with a seed-anchored isotope cosine** (previously a greedy resolver with an
+  adjacent-anchored cosine). The exhaustive pool claims contested hills
+  longest-envelope-first and truncates a partly-claimed candidate to its free
+  prefix rather than dropping it; anchoring each isotope's chromatographic
+  cosine to the monoisotope seed (as biosaur2/AlphaPept/Dinosaur do) recovers
+  M+2/M+3 isotopes. On the 20-run PXD003881 Orbitrap cohort this lifts PSM
+  recall 79.3 → 79.9 % with no quant regression (median CV/MV/FPR
+  flat-to-better); on the 18-run timsTOF cohort it is a small regression (recall
+  79.4 → 79.0 %, median CV 10.7 → 11.1 %) — accepted to keep a single shipped
+  code path.
+- **Exhaustive-assembler candidate generation is parallelized** over seeds (like
+  the former greedy path), removing the ~2.5× slowdown of the initial serial
+  implementation: **37.0 → 14.9 s per PXD003881 run** at
+  `RAYON_NUM_THREADS = 4`, matching the former greedy speed. Output byte-identical.
+- **Config surface slimmed (breaking for existing TOMLs).** Many dead or
+  superseded experimental flags were removed. Because configs are parsed with
+  `deny_unknown_fields`, a TOML that still sets a removed key will now error —
+  see *Removed / renamed*. Feature output for the shipped configs is unchanged.
 - **`koth_align` now streams hills one run at a time during LFQ** instead of
   loading every run's hills into memory up front. Peak memory is O(one run's
   hills) rather than O(all runs' hills), removing the main memory bottleneck on
@@ -19,8 +38,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
   on demand; `build_grid`/`SortedHills` now take hills directly rather than a
   `RunInput`.
 
-- **`koth_align` MBR FDR now uses a semi-supervised QDA rescorer by default**
-  (`[lfq] tdc_method = "qda"`). Instead of ranking every cell by `hybrid_score`,
+- **`koth_align` MBR FDR uses a semi-supervised QDA rescorer.** Instead of ranking every cell by `hybrid_score`,
   it learns a quadratic discriminant over five symmetric per-cell features —
   `|ppm error|`, `|RT diff|`, spectral Bhattacharyya, isotope co-elution, and
   `|IM delta|` (inert on Orbitrap, active on timsTOF) — via a Percolator-style
@@ -30,7 +48,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
   depleted well is gatable regardless of how it was populated (required for
   fold-change rescue on large-dynamic-range designs). Improves target/decoy
   separation over the raw hybrid (MBR-vs-decoy AUROC 0.84 → 0.86). Fully
-  deterministic. The legacy behaviour is available as `tdc_method = "hybrid"`.
+  deterministic; it is now the only MBR rescorer.
   NOTE: absolute q-value calibration is not yet independently validated.
 - **Isotope scoring is no longer a config choice.** A cosine and a Bhattacharyya
   were historically conflated under one flag; the two *orthogonal* isotope
@@ -48,6 +66,14 @@ and this project uses [Semantic Versioning](https://semver.org/).
   broke target/decoy comparability for downstream rescorers.
 
 ### Added
+- **Native Thermo Fisher `.raw` input** behind the opt-in `thermo` cargo
+  feature (`cargo build -p koth_ff --features thermo`). Wraps Thermo's
+  `RawFileReader` via a self-hosted .NET 8 runtime (required at build and run
+  time; auto-detects `DOTNET_ROOT` under `~/.dotnet`, `/usr/share/dotnet`, …),
+  so a `.raw` file can be fed to `koth_ff` directly with no mzML conversion.
+  Off by default; `.raw` scans are read as MS1 centroids, matching the mzML
+  path. A default (non-`thermo`) build gives a clear "rebuild with
+  `--features thermo`" error for `.raw` input.
 - **ID-free isotope-consistency m/z recalibration** (`[file] mz_recalibration`,
   default off; CLI `--recalibrate`). A pass-1 feature detection collects the
   signed ppm deviation of every adjacent isotope-hill spacing from its
@@ -64,11 +90,14 @@ and this project uses [Semantic Versioning](https://semver.org/).
   Inspired by Biosaur's per-isotope "smart" calibration and AlphaPept's
   multi-dimensional recalibration, adapted to koth_ff's ID-free feature stage.
   Benchmarked as a no-op on its own — well-calibrated instruments have little
-  proportional error left to correct — but it's the necessary scaffolding for
-  the region-adaptive tolerance below, which *is* a win.
-- **Region-adaptive isotope-match tolerance** (`[file]
-  mz_recalibration_adaptive_tol`, default off; CLI `--adaptive-tol`, implies
-  `--recalibrate`). Replaces the fixed isotope-match ppm window with
+  proportional error left to correct — but it is the scaffolding for the
+  region-adaptive tolerance below, which *is* a win and is now applied together
+  with it.
+- **Region-adaptive isotope-match tolerance** — enabled automatically whenever
+  `[file] mz_recalibration` is on (the former separate
+  `mz_recalibration_adaptive_tol` flag and the `--adaptive-tol` / `--kish` CLI
+  flags have been removed; see *Removed / renamed*). Replaces the fixed
+  isotope-match ppm window with
   `clamp(tol_sigma_mult × σ(m/z, RT), tol_floor_ppm, mz_tolerance)`, where σ
   comes from the recalibration surface's per-region residual spread —
   tightening the search where the instrument is precise (rejecting false
@@ -85,7 +114,6 @@ and this project uses [Semantic Versioning](https://semver.org/).
   No regression found on either platform or metric. Tunable via
   `mz_recalibration_tol_sigma_mult` (3.0) and `mz_recalibration_tol_floor_ppm`
   (1.0).
-- `[lfq] tdc_method` — `"qda"` (default) or `"hybrid"`.
 - `[lfq] rt_spread_scoring` (default `false`, experimental) — replaces the raw
   RT-closeness term with a σ-normalised Gaussian likelihood using the per-run
   post-warp RT-residual spread (region-aware RT scoring).
@@ -110,6 +138,34 @@ and this project uses [Semantic Versioning](https://semver.org/).
   behind `--log-level debug`.
 
 ### Removed / renamed
+- **The greedy feature assembler** and the `[features] exhaustive_assembly`
+  flag. The exhaustive non-destructive assembler (now the default, see
+  *Changed*) is the only feature-detection path.
+- **Two superseded m/z-calibration mechanisms**, both fully replaced by
+  `mz_recalibration`: the Kish mass-uncertainty model (`[file]
+  mz_uncertainty_mode` + `mz_uncertainty_sigma_mult`) and the empirical
+  adaptive-tolerance pass (`[file] adaptive_mz_tolerance` +
+  `adaptive_mz_tolerance_pass1_multiplier` + `_sigma_mult`, CLI `--adaptive`).
+  `mz_recalibration_adaptive_tol` is folded into `mz_recalibration` — a single
+  `mz_recalibration = true` now enables recalibration *with* region-adaptive
+  isotope-match tolerance (CLI `--adaptive-tol` / `--kish` removed).
+- **The prominence hill splitter**: `[hills] split_algo`, `min_peak_distance`,
+  `min_peak_height`, `min_prominence`. The persistence splitter is now the only
+  splitter. The `benchmark/config/koth_ff_persist.toml` preset (which only
+  selected persistence) is removed.
+- **The legacy piecewise / linear RT-warp models** and their sigma-clip knobs
+  (`[alignment] rt_warp_sigma_clip`, `rt_warp_clip_iters`). RANSAC is the only
+  warp.
+- `[features] cosine_intersection` (a documented no-op), `[features]
+  cosine_hybrid_depth` + the `hybrid` cosine-anchor mode, `[file]
+  n_most_abundant`, and the `[lfq] tdc_method` toggle (the QDA MBR rescorer is
+  the only path; there is no `hybrid` fallback).
+- `[scoring] isotope_offset_min` / `isotope_offset_max` collapsed to a single
+  `[scoring] isotope_offset_enabled` bool (default `false`; `true` searches
+  ±1 neutron offsets).
+- Internal: the unreachable low-level adaptive-tolerance calibration primitives
+  (`hills::calibration::MzDeltaHistogram` and the `HillDetector` calibration
+  recording hooks), left over from the removed `adaptive_mz_tolerance` pass.
 - `[lfq] spectral_cosine` output column removed (it held a Bhattacharyya value —
   the source of much confusion); replaced by the correctly named
   `spectral_bhattacharyya` and `coelution` columns.
