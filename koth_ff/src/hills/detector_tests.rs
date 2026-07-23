@@ -79,45 +79,6 @@
         assert_eq!(hills[0].skipped_scans, 1);
     }
 
-    /// Calibration recording: when `with_calibration_recording` is set,
-    /// every accepted peak-to-hill match contributes one |ppm| delta to
-    /// the histogram. A clean signal (same m/z every scan) lands at 0 ppm
-    /// so the calibrated tolerance approaches 0 — the calibration loop
-    /// has nothing to widen against.
-    #[test]
-    fn calibration_records_zero_ppm_for_constant_signal() {
-        let (h, f) = default_cfgs(0);
-        let mut det = HillDetector::new(&h, &f).with_calibration_recording();
-        for i in 0..10 {
-            det.process_scan(&spec(i, i as f64 * 0.1, &[500.0]));
-        }
-        // 9 accepted matches (peak in scans 1..9 each match the hill
-        // started in scan 0). All are at exactly 500.0 m/z so |ppm|=0.
-        assert_eq!(det.calibration_sample_count(), 9);
-        let cal = det.calibrated_tolerance_ppm(3.0).unwrap();
-        assert!(cal < 0.1, "expected calibrated ~0, got {cal}");
-    }
-
-    /// Calibration with a drift: m/z walks up by ~1 ppm per scan. The
-    /// histogram median + 3σ should land somewhere comfortably above 0
-    /// (the drift magnitude × sigma_mult).
-    #[test]
-    fn calibration_widens_for_drifting_signal() {
-        let (h, f) = default_cfgs(0);
-        let mut det = HillDetector::new(&h, &f).with_calibration_recording();
-        // 1 ppm/scan walk on a 500 Da peak = +0.0005 Da/scan.
-        for i in 0..20 {
-            let mz = 500.0 + (i as f32) * 5e-4;
-            det.process_scan(&spec(i, i as f64 * 0.1, &[mz]));
-        }
-        assert!(det.calibration_sample_count() > 0);
-        let cal = det.calibrated_tolerance_ppm(3.0).unwrap();
-        assert!(
-            cal > 0.5,
-            "expected calibrated > 0.5 ppm for drifting signal, got {cal}"
-        );
-    }
-
     /// With `max_gap = 1`, two consecutive missed scans must split the hill.
     #[test]
     fn max_gap_one_splits_at_two_misses() {

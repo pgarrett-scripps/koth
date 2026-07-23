@@ -1,5 +1,4 @@
 pub mod active;
-pub mod calibration;
 pub mod detector;
 pub mod filter;
 pub mod noise;
