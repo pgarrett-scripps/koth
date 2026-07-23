@@ -25,6 +25,11 @@ mzdata     = { workspace = true }
 flate2     = "1"
 timsrust   = { workspace = true, optional = true }
 dnoise     = { path = "../../d_noise", default-features = false, optional = true }
+# Native Thermo .raw reading (opt-in). Wraps Thermo's RawFileReader assemblies via
+# a self-hosted .NET runtime, so a `.raw` file can be fed to koth_ff directly with
+# no prior mzML conversion. Requires a .NET 8 runtime at build and run time; kept
+# out of the default feature set for that reason. Build with `--features thermo`.
+thermorawfilereader = { version = "0.7", optional = true }
 rayon      = { workspace = true }
 csv        = { workspace = true }
 serde      = { workspace = true }
@@ -43,3 +48,6 @@ rustc-hash = "1"
 [features]
 default = ["tdf"]
 tdf = ["dep:timsrust", "dep:dnoise"]
+# Native Thermo Fisher .raw input (no mzML conversion). Off by default: enabling it
+# requires a .NET 8 runtime at build and run time. `cargo build -p koth_ff --features thermo`.
+thermo = ["dep:thermorawfilereader"]

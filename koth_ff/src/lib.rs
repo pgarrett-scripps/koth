@@ -114,6 +114,23 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
         }
     }
 
+    // Thermo .raw: no streaming API, so batch-load all MS1 spectra (mirrors the
+    // Bruker path above). `read_spectra` routes `.raw` to the native reader when
+    // built with `--features thermo`, or returns a clear "rebuild with
+    // --features thermo" error otherwise — handled here (rather than the mzML
+    // fall-through below) so the message is actionable in both builds.
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("raw")) {
+        let mut spectra = io::read_spectra(path, file)?;
+        if file.decoy_mode {
+            log::info!(
+                "Decoy mode: shuffling {} Thermo spectra before hill detection",
+                spectra.len()
+            );
+            spectra.shuffle(&mut rand::thread_rng());
+        }
+        return Ok(hills::detect_hills(&spectra, config, file));
+    }
+
     // mzML path — collect first if decoy mode so we can shuffle
     let iter = io::mzml::stream_mzml(path)?;
     if file.decoy_mode {
@@ -233,6 +250,20 @@ fn calibrate_streaming(
             let n = det.calibration_sample_count();
             return Ok(det.calibrated_tolerance_ppm(sigma_mult).map(|p| (p, n)));
         }
+    }
+
+    // Thermo .raw: no streaming API, so batch-load (mirrors the Bruker branch).
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("raw")) {
+        let spectra = io::read_spectra(path, file)?;
+        let mut det = HillDetector::new(config, file).with_calibration_recording();
+        for mut spec in spectra {
+            if let Some(sigma) = noise_sigma {
+                hills::noise::filter_spectrum(&mut spec, sigma);
+            }
+            det.process_scan(&spec);
+        }
+        let n = det.calibration_sample_count();
+        return Ok(det.calibrated_tolerance_ppm(sigma_mult).map(|p| (p, n)));
     }
 
     let iter = io::mzml::stream_mzml(path)?;

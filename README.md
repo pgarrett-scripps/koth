@@ -1,7 +1,7 @@
 # koth_ff
 
-High-performance LC-MS feature finder and label-free quantifier for mzML and Bruker timsTOF (.d)
-data, written in Rust.
+High-performance LC-MS feature finder and label-free quantifier for mzML, Bruker timsTOF (.d),
+and (optionally) native Thermo Fisher (.raw) data, written in Rust.
 
 Takes centroided MS1 data and produces two outputs: `hills.tsv` (chromatographic traces) and
 `features.tsv` (isotope envelopes with charge states and averagine scores). The pipeline is
@@ -26,6 +26,19 @@ default (requires `timsrust`). To build without it:
 cargo build --release --no-default-features
 ```
 
+### Native Thermo `.raw` input (optional)
+
+Reading Thermo Fisher `.raw` files directly — no prior mzML conversion — is available behind the
+`thermo` feature. It wraps Thermo's `RawFileReader` assemblies via a self-hosted **.NET 8 runtime**,
+which must be installed at build and run time, so it is **off by default**:
+
+```bash
+cargo build --release -p koth_ff --features thermo
+```
+
+koth_ff auto-detects a .NET runtime in the usual locations (`~/.dotnet`, `/usr/share/dotnet`, …);
+set `DOTNET_ROOT` explicitly if yours lives elsewhere. `.raw` reading is local-file only.
+
 ## Quick start
 
 ### Single-run feature finding (koth_ff)
@@ -36,6 +49,9 @@ koth_ff data.mzML --output ./out
 
 # Bruker .d directory
 koth_ff data.d --output ./out
+
+# Thermo .raw (requires a build with --features thermo)
+koth_ff data.raw --output ./out
 
 # With a custom config
 koth_ff data.mzML --config my_config.toml --output ./out
