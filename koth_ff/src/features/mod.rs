@@ -786,26 +786,38 @@ fn resolve_exhaustive(
     use std::collections::BinaryHeap;
 
     // Phase 1+2: over-complete hypothesis pool — one candidate per (seed, charge),
-    // built by the SAME `build_charge_candidate` the greedy path uses.
-    let mut heap: BinaryHeap<HeapItem> = BinaryHeap::new();
-    for seed_idx in 0..sorted_hills.len() {
-        for charge in config.min_charge..=config.max_charge {
-            if let Some(c) = build_charge_candidate(
-                seed_idx, charge, sorted_hills, mz_array, im_array, scan_starts,
-                scan_ends, config, file, use_im, min_intensity, recal,
-            ) {
-                let (composite, _mc, isotope_score) =
-                    rescore_chain(&c.hill_indices, c.charge, sorted_hills, config);
-                heap.push(HeapItem {
-                    chain: c.hill_indices,
-                    charge: c.charge,
-                    composite,
-                    isotope_score,
-                    iso_priority: config.exhaustive_isotope_priority,
-                });
-            }
-        }
-    }
+    // built by the SAME `build_charge_candidate` the greedy path uses. Every
+    // (seed, charge) is independent and reads only shared immutable arrays, so
+    // generation runs in PARALLEL over seeds (mirroring the greedy path's
+    // `into_par_iter`), then the results are heapified once via an O(n)
+    // `BinaryHeap::from`. The heap's `Ord` is a total order (envelope length,
+    // isotope/composite score, then monoisotope-index and charge tie-breaks), so
+    // the pop sequence is independent of insertion order — this stays
+    // byte-identical to the former sequential push loop. `flat_map_iter` keeps
+    // the per-seed charge loop sequential inside each parallel task.
+    let items: Vec<HeapItem> = (0..sorted_hills.len())
+        .into_par_iter()
+        .flat_map_iter(|seed_idx| {
+            (config.min_charge..=config.max_charge).filter_map(move |charge| {
+                build_charge_candidate(
+                    seed_idx, charge, sorted_hills, mz_array, im_array, scan_starts,
+                    scan_ends, config, file, use_im, min_intensity, recal,
+                )
+                .map(|c| {
+                    let (composite, _mc, isotope_score) =
+                        rescore_chain(&c.hill_indices, c.charge, sorted_hills, config);
+                    HeapItem {
+                        chain: c.hill_indices,
+                        charge: c.charge,
+                        composite,
+                        isotope_score,
+                        iso_priority: config.exhaustive_isotope_priority,
+                    }
+                })
+            })
+        })
+        .collect();
+    let mut heap: BinaryHeap<HeapItem> = BinaryHeap::from(items);
 
     // Phase 3: non-destructive resolution.
     let mut claimed = vec![false; sorted_hills.len()];
