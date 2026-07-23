@@ -460,3 +460,56 @@ fn merge_consensus(
     });
     merged
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proj(run_idx: usize, feature_idx: u32, combined_score: f64, ref_mz: f64) -> ProjectedFeature {
+        ProjectedFeature {
+            run_idx,
+            feature_idx,
+            ref_mz,
+            ref_rt: 10.0,
+            ref_im: 0.0,
+            charge: 2,
+            neutral_mass: 1000.0,
+            combined_score,
+            theoretical_pattern: vec![0.6, 0.3, 0.1],
+        }
+    }
+
+    /// A run contributing two features (a split peak) to one group collapses to
+    /// its highest-combined-score feature; `n_contributing_runs` counts distinct
+    /// runs, not features.
+    #[test]
+    fn split_peak_dedup_counts_runs_not_features() {
+        let projected = vec![
+            proj(0, 10, 0.5, 500.00), // run 0, weaker
+            proj(0, 11, 0.9, 500.10), // run 0, stronger -> wins for run 0
+            proj(1, 20, 0.7, 500.20), // run 1
+        ];
+        let cf = emit_group(&projected, &[0, 1, 2], 2);
+        assert_eq!(cf.n_contributing_runs, 2, "two runs, not three features");
+        assert_eq!(cf.seed_run_idx, 0); // global best (0.9) is run 0
+        assert!((cf.ref_mz - 500.10).abs() < 1e-9);
+        assert_eq!(cf.per_run_feature[0], Some(11)); // run 0's best-scoring feature
+        assert_eq!(cf.per_run_feature[1], Some(20));
+    }
+
+    /// Seed selection is deterministic across repeated calls despite
+    /// `best_per_run` being a per-instance-randomly-seeded HashMap. Guards the
+    /// consensus non-determinism fix (deduped members sorted before `max_by`):
+    /// on a combined_score tie the HashMap iteration order would otherwise flip
+    /// the seed (and hence the group m/z/RT) run-to-run.
+    #[test]
+    fn seed_selection_is_deterministic_under_score_tie() {
+        let projected = vec![proj(0, 1, 0.8, 500.0), proj(1, 2, 0.8, 600.0)];
+        let first = emit_group(&projected, &[0, 1], 2);
+        for _ in 0..64 {
+            let cf = emit_group(&projected, &[0, 1], 2);
+            assert_eq!(cf.ref_mz, first.ref_mz, "seed m/z must be stable across calls");
+            assert_eq!(cf.seed_run_idx, first.seed_run_idx);
+        }
+    }
+}

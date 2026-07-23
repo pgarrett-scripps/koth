@@ -23,8 +23,6 @@ const KISH_SEARCH_EXPANSION: f64 = 4.0;
 struct Candidate {
     hill_indices: Vec<usize>, // indices into sorted_hills, lowest mz first
     charge: u8,
-    mean_cosine: f64,
-    mean_ppm: f64,
     composite_score: f64,
 }
 
@@ -284,8 +282,6 @@ fn generate_best_candidate(
     let mut best = Candidate {
         hill_indices: vec![seed_idx],
         charge: 0,
-        mean_cosine: 0.0,
-        mean_ppm: 0.0,
         composite_score: 0.0,
     };
     for charge in (config.min_charge..=config.max_charge).rev() {
@@ -643,25 +639,9 @@ fn build_charge_candidate(
         let isotope_score = score_chain(&chain_hills, charge, config.sulfur_aware_scoring);
         let composite = isotope_score * mean_cosine.max(0.0);
 
-        let step_da = config.neutron_mass / charge as f64;
-        let mean_ppm = if chain_hills.len() > 1 {
-            let s: f64 = (0..chain_hills.len() - 1)
-                .map(|k| {
-                    let theo = chain_hills[k].mz + step_da;
-                    let expt = chain_hills[k + 1].mz;
-                    (expt - theo) / theo * 1e6
-                })
-                .sum();
-            s / (chain_hills.len() - 1) as f64
-        } else {
-            0.0
-        };
-
         Some(Candidate {
             hill_indices: chain,
             charge,
-            mean_cosine,
-            mean_ppm,
             composite_score: composite,
         })
     }
@@ -843,13 +823,11 @@ fn resolve_exhaustive(
             for &i in &item.chain {
                 claimed[i] = true;
             }
-            let (composite, mean_cosine, _iso) =
+            let (composite, _mc, _iso) =
                 rescore_chain(&item.chain, item.charge, sorted_hills, config);
             accepted.push(Candidate {
                 hill_indices: item.chain,
                 charge: item.charge,
-                mean_cosine,
-                mean_ppm: 0.0,
                 composite_score: composite,
             });
         } else if k >= 2 {
