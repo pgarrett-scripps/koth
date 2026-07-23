@@ -414,6 +414,24 @@ fn default_exhaustive_min_isotope_score() -> f64 {
     0.0
 }
 
+fn default_cosine_anchor() -> String {
+    // `seed` is the default: anchoring every isotope's chromatographic cosine
+    // to the monoisotope seed (as biosaur2 / AlphaPept / Dinosaur all do) beat
+    // the former `adjacent` (predecessor) anchor on the full 20-run PXD003881
+    // cohort — recall 0.7933 -> 0.7964 (+0.31 pp, +1565 covered PSMs) with no
+    // quant regression (median CV, MV rate, and HUMAN FPR all flat-to-better).
+    // Set to `adjacent` to reproduce the pre-2026-07 paper feature output.
+    "seed".to_string()
+}
+
+fn default_cosine_hybrid_depth() -> usize {
+    3
+}
+
+fn default_exhaustive_assembly() -> bool {
+    true
+}
+
 fn default_sulfur_aware_scoring() -> bool {
     true
 }
@@ -526,6 +544,35 @@ impl Default for HillsConfig {
     }
 }
 
+/// Resolved form of `FeaturesConfig::cosine_anchor` — which hill the
+/// chromatographic-cosine gate is measured against during isotope-chain
+/// extension. Parsed (case-insensitively) from the config string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CosineAnchor {
+    /// Anchor to the immediate predecessor in the chain (legacy koth default).
+    Adjacent,
+    /// Anchor every isotope to the monoisotope seed hill.
+    Seed,
+    /// Anchor to the seed for the first `cosine_hybrid_depth` isotopes, then
+    /// fall back to the adjacent predecessor.
+    Hybrid,
+}
+
+impl CosineAnchor {
+    /// Parse a `cosine_anchor` string strictly: an unrecognised value is a
+    /// config error rather than a silent fallback.
+    pub fn parse(s: &str) -> Result<Self, crate::error::KothError> {
+        match s.to_ascii_lowercase().as_str() {
+            "adjacent" => Ok(CosineAnchor::Adjacent),
+            "seed" => Ok(CosineAnchor::Seed),
+            "hybrid" => Ok(CosineAnchor::Hybrid),
+            other => Err(crate::error::KothError::ConfigError(format!(
+                "invalid features.cosine_anchor `{other}`: expected \"adjacent\", \"seed\", or \"hybrid\""
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {
@@ -608,10 +655,11 @@ pub struct FeaturesConfig {
     /// longest-envelope-first, and a candidate whose isotope hills are partly
     /// claimed is TRUNCATED to its free prefix and re-queued rather than dropped
     /// — recovering charge-2/3 features greedy loses to shorter, higher-cosine
-    /// competitors. Default off = byte-identical to greedy. Validated
-    /// paper-neutral on PXD003881 (recall +0.7pp, cohort CV 15.33→15.30); a small
-    /// win for MS1-search depth downstream.
-    #[serde(default)]
+    /// competitors. Now the DEFAULT: validated paper-safe on PXD003881
+    /// (recall +0.7pp, cohort CV neutral) and a win for MS1-search depth
+    /// downstream (+38 proteins in uno). Set to `false` for the legacy greedy
+    /// assembler (byte-identical to the pre-2026-07 paper output).
+    #[serde(default = "default_exhaustive_assembly")]
     pub exhaustive_assembly: bool,
     /// (exhaustive_assembly only) Minimum isotope-pattern (Bhattacharyya) score a
     /// candidate — original or truncated — must reach before it may *claim* its
@@ -625,6 +673,37 @@ pub struct FeaturesConfig {
     /// false.
     #[serde(default)]
     pub exhaustive_isotope_priority: bool,
+    /// Chromatographic-cosine **anchor** for isotope-chain extension: which hill
+    /// each candidate isotope's cosine gate is measured against.
+    ///
+    /// `"adjacent"` (default, legacy): anchor to the immediate predecessor in
+    /// the chain — for M+1 that is the seed, for M+k≥2 the previously-claimed
+    /// isotope hill. This is koth's deliberate choice: chains drift in S/N as
+    /// they extend from the seed, so anchoring far isotopes to the seed
+    /// over-rejects them. Default = byte-identical to legacy koth.
+    ///
+    /// `"seed"`: anchor *every* isotope's cosine to the monoisotope seed hill
+    /// (the convention biosaur2 / AlphaPept / Dinosaur all use). The m/z step
+    /// target and the intensity-ratio predecessor still step from the immediate
+    /// predecessor — only the cosine reference changes. Rejects a far isotope
+    /// that co-elutes with its neighbour but not with the mono.
+    ///
+    /// `"hybrid"`: anchor to the seed for the first `cosine_hybrid_depth`
+    /// isotopes (where the seed still has strong S/N), then fall back to the
+    /// adjacent predecessor for farther isotopes.
+    ///
+    /// The per-extension cosine that feeds the composite `mean_cosine` is
+    /// computed against whichever reference this selects (so the composite is
+    /// consistent with the gate). The reported `cosine_score` field and the
+    /// exhaustive-resolver rescoring remain adjacent-style regardless.
+    #[serde(default = "default_cosine_anchor")]
+    pub cosine_anchor: String,
+    /// (`cosine_anchor = "hybrid"` only) Isotope index (1-based, counting out
+    /// from the seed) up to and including which the cosine is anchored to the
+    /// seed; beyond it the anchor falls back to the adjacent predecessor.
+    /// Default 3. Ignored for `"adjacent"` / `"seed"`.
+    #[serde(default = "default_cosine_hybrid_depth")]
+    pub cosine_hybrid_depth: usize,
     /// Score isotope chains against multiple averagine templates that vary
     /// the sulfur atom count `{0, avg, avg+2, avg+4}` and keep the best fit.
     /// Corrects the systematic Bhattacharyya penalty on Cys/Met-rich
@@ -658,15 +737,34 @@ impl Default for FeaturesConfig {
             chain_predicted_intensity_gate: true,
             cosine_intersection: false,
             min_scan_overlap: 3,
-            exhaustive_assembly: false,
+            exhaustive_assembly: default_exhaustive_assembly(),
             exhaustive_min_isotope_score: 0.0,
             exhaustive_isotope_priority: false,
+            cosine_anchor: default_cosine_anchor(),
+            cosine_hybrid_depth: default_cosine_hybrid_depth(),
             sulfur_aware_scoring: true,
             neutron_mass: 1.003_354_835,
             min_isotope_score: 0.0,
             min_cosine_score: 0.0,
             min_combined_score: 0.0,
         }
+    }
+}
+
+impl FeaturesConfig {
+    /// Validate string-valued knobs that serde alone cannot check. Called after
+    /// TOML deserialization so an unrecognised value is rejected at load time
+    /// rather than silently falling back at runtime.
+    pub fn validate(&self) -> Result<(), crate::error::KothError> {
+        CosineAnchor::parse(&self.cosine_anchor)?;
+        Ok(())
+    }
+
+    /// Resolve the chromatographic-cosine anchor. Infallible at runtime because
+    /// `validate()` has already rejected bad values at config load; the
+    /// defensive fallback preserves legacy behaviour if reached.
+    pub fn cosine_anchor_mode(&self) -> CosineAnchor {
+        CosineAnchor::parse(&self.cosine_anchor).unwrap_or(CosineAnchor::Adjacent)
     }
 }
 
@@ -791,7 +889,10 @@ impl AlignConfig {
 impl KothConfig {
     pub fn from_toml(path: &std::path::Path) -> Result<Self, crate::error::KothError> {
         let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content).map_err(|e| crate::error::KothError::ConfigError(e.to_string()))
+        let cfg: KothConfig = toml::from_str(&content)
+            .map_err(|e| crate::error::KothError::ConfigError(e.to_string()))?;
+        cfg.features.validate()?;
+        Ok(cfg)
     }
 
     pub fn to_toml_string(&self) -> Result<String, crate::error::KothError> {

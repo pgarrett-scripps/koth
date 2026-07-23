@@ -5,7 +5,9 @@ use std::cmp::Ordering;
 
 use rayon::prelude::*;
 
-use crate::config::{FeaturesConfig, FileConfig, ImToleranceType, MzUncertaintyMode, ToleranceType};
+use crate::config::{
+    CosineAnchor, FeaturesConfig, FileConfig, ImToleranceType, MzUncertaintyMode, ToleranceType,
+};
 use crate::models::{Feature, Hill};
 use crate::scoring::averagine;
 use cosine::cosine_similarity;
@@ -368,6 +370,12 @@ fn build_charge_candidate(
     };
     let kish_on = matches!(file.mz_uncertainty_mode, MzUncertaintyMode::Kish);
     let sigma_mult = file.mz_uncertainty_sigma_mult;
+    // Which hill the chromatographic-cosine gate is anchored to. `Adjacent`
+    // (default) reproduces legacy koth exactly; `Seed` / `Hybrid` only change
+    // the cosine *reference* hill — the m/z step target, `find_neighbors`
+    // predecessor, and the intensity-ratio predecessor all stay the immediate
+    // chain predecessor in every mode.
+    let cosine_anchor = config.cosine_anchor_mode();
 
     const PROTON_MASS: f64 = 1.007_276_466_621;
 
@@ -441,19 +449,39 @@ fn build_charge_candidate(
                 break;
             }
 
-            // Cosine vs the immediate predecessor in the chain (ref_hill),
-            // not vs the seed. For M+1 the predecessor IS the seed; for
-            // M+k≥2 it's the previously-claimed isotope hill. Verifies
-            // adjacent isotopes co-elute, which is the actual physical
-            // constraint — chains drift in S/N from the seed as you go
-            // out, so a seed-anchored cosine over-rejects far isotopes.
+            // Cosine reference hill. `Seed` (the default) anchors every
+            // isotope's chromatographic cosine to the mono seed, matching the
+            // biosaur2 / AlphaPept / Dinosaur convention. It was long assumed
+            // that seed-anchoring would over-reject far isotopes (chains drift
+            // in S/N from the seed as you go out), which is why koth originally
+            // anchored to the immediate predecessor (`Adjacent`). The full
+            // 20-run PXD003881 cohort refuted that: seed-anchoring recovered
+            // +1565 covered PSMs (+0.31 pp recall) with no quant regression —
+            // the recall gain is entirely in the M+2/M+3 isotopes (M+1's
+            // predecessor IS the seed, so it is unaffected). `Adjacent` anchors
+            // to the immediate predecessor (former default, byte-identical to
+            // the pre-2026-07 paper output); `Hybrid` uses the seed for the
+            // first `cosine_hybrid_depth` isotopes then falls back to adjacent.
+            // Only the cosine reference changes — the m/z step and
+            // intensity-ratio predecessor stay `ref_hill`.
+            let cos_ref_hill = match cosine_anchor {
+                CosineAnchor::Adjacent => ref_hill,
+                CosineAnchor::Seed => seed_hill,
+                CosineAnchor::Hybrid => {
+                    if iso <= config.cosine_hybrid_depth {
+                        seed_hill
+                    } else {
+                        ref_hill
+                    }
+                }
+            };
             let (best_c, best_cos) = cands
                 .iter()
                 .map(|&c| {
                     (
                         c,
                         cosine_similarity(
-                            ref_hill,
+                            cos_ref_hill,
                             sorted_hills[c],
                             config.cosine_intersection,
                             config.min_scan_overlap,
@@ -528,19 +556,29 @@ fn build_charge_candidate(
                 break;
             }
 
-            // Cosine vs the immediate predecessor in the chain (ref_hill),
-            // not vs the seed. For M+1 the predecessor IS the seed; for
-            // M+k≥2 it's the previously-claimed isotope hill. Verifies
-            // adjacent isotopes co-elute, which is the actual physical
-            // constraint — chains drift in S/N from the seed as you go
-            // out, so a seed-anchored cosine over-rejects far isotopes.
+            // Cosine reference hill (left direction). Same anchor semantics as
+            // the right chain: `Adjacent` = the immediate predecessor
+            // (`ref_hill`, legacy, byte-identical), `Seed` = the mono seed for
+            // every isotope, `Hybrid` = seed for the first `cosine_hybrid_depth`
+            // then adjacent. Only the cosine reference changes.
+            let cos_ref_hill = match cosine_anchor {
+                CosineAnchor::Adjacent => ref_hill,
+                CosineAnchor::Seed => seed_hill,
+                CosineAnchor::Hybrid => {
+                    if iso <= config.cosine_hybrid_depth {
+                        seed_hill
+                    } else {
+                        ref_hill
+                    }
+                }
+            };
             let (best_c, best_cos) = cands
                 .iter()
                 .map(|&c| {
                     (
                         c,
                         cosine_similarity(
-                            ref_hill,
+                            cos_ref_hill,
                             sorted_hills[c],
                             config.cosine_intersection,
                             config.min_scan_overlap,
@@ -1081,6 +1119,124 @@ mod exhaustive_tests {
                     h.mz
                 );
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // cosine_anchor (features.cosine_anchor): "adjacent" (legacy) vs "seed".
+    // -----------------------------------------------------------------------
+
+    fn anchor_config(anchor: &str) -> FeaturesConfig {
+        let mut c = FeaturesConfig {
+            min_charge: 2,
+            max_charge: 2,
+            ..Default::default()
+        };
+        c.cosine_anchor = anchor.to_string();
+        c
+    }
+
+    /// A clean, perfectly co-eluting 3-isotope charge-2 envelope is assembled
+    /// identically (same charge, same hill count) under `adjacent` and `seed`:
+    /// when all isotopes share the seed's elution profile the anchor choice
+    /// makes no difference.
+    #[test]
+    fn clean_envelope_identical_under_adjacent_and_seed() {
+        let step = FeaturesConfig::default().neutron_mass / 2.0;
+        let base = 600.0;
+        // All three hills share scans 20..=24 with the same bell shape, so
+        // every pairwise cosine (seed-anchored or adjacent) is ~1.
+        let hills = vec![
+            hill(base, 20, vec![2.0, 6.0, 10.0, 6.0, 2.0]),
+            hill(base + step, 20, vec![1.5, 4.5, 7.5, 4.5, 1.5]),
+            hill(base + 2.0 * step, 20, vec![1.0, 3.0, 5.0, 3.0, 1.0]),
+        ];
+        let file = FileConfig::default();
+
+        let adj = detect_features(&hills, &anchor_config("adjacent"), &file);
+        let seed = detect_features(&hills, &anchor_config("seed"), &file);
+
+        assert_eq!(adj.len(), 1, "adjacent should find one feature");
+        assert_eq!(seed.len(), 1, "seed should find one feature");
+        assert_eq!(adj[0].charge, 2);
+        assert_eq!(seed[0].charge, 2);
+        assert_eq!(adj[0].hills.len(), 3, "adjacent keeps all 3 isotopes");
+        assert_eq!(seed[0].hills.len(), 3, "seed keeps all 3 isotopes");
+    }
+
+    /// A far isotope (M+2) whose apex has drifted so it co-elutes with its
+    /// neighbour (M+1) but NOT with the mono seed (M0): accepted under
+    /// `adjacent` (cosine vs M+1), rejected under `seed` (cosine vs M0).
+    /// Demonstrates that the two anchors genuinely differ.
+    #[test]
+    fn drifting_far_isotope_kept_by_adjacent_dropped_by_seed() {
+        let step = FeaturesConfig::default().neutron_mass / 2.0;
+        let base = 600.0;
+        // Same bell SHAPE, apex drifting +2 scans per isotope, amplitude tapered
+        // ~0.6× each step (so the intensity-ratio gate is comfortably satisfied;
+        // cosine is scale-invariant so the shape correlations are unchanged).
+        // Adjacent neighbours overlap at lag 2 (autocorr cos ≈ 0.75 ≥ the 0.5
+        // min_chain_cosine); the mono↔M+2 pair overlaps at lag 4 (cos ≈ 0.31,
+        // below the gate).
+        let shape = [1.0f32, 3.0, 6.0, 9.0, 10.0, 9.0, 6.0, 3.0, 1.0];
+        let scaled = |k: f32| -> Vec<f32> { shape.iter().map(|&v| v * k).collect() };
+        let hills = vec![
+            hill(base, 20, scaled(1.0)),               // M0:  scans 20..=28, apex 24
+            hill(base + step, 22, scaled(0.6)),        // M+1: scans 22..=30, apex 26
+            hill(base + 2.0 * step, 24, scaled(0.36)), // M+2: scans 24..=32, apex 28
+        ];
+        let file = FileConfig::default();
+
+        // Hills are already m/z-ascending, so the mono seed is index 0. Drive
+        // build_charge_candidate directly from that seed so the greedy
+        // re-seeding (which could pick M+1 as a fresh mono) can't mask the
+        // anchor difference.
+        let sorted: Vec<&Hill> = hills.iter().collect();
+        let mz: Vec<f64> = sorted.iter().map(|h| h.mz).collect();
+        let im: Vec<f64> = sorted.iter().map(|h| h.im).collect();
+        let ss: Vec<usize> = sorted.iter().map(|h| h.scan_start).collect();
+        let se: Vec<usize> = sorted.iter().map(|h| h.scan_end).collect();
+
+        // Disable the predicted-intensity noise-floor early-stop so the cosine
+        // anchor is the ONLY thing that can differ between the two runs.
+        let mut cfg_adj = anchor_config("adjacent");
+        cfg_adj.chain_predicted_intensity_gate = false;
+        let mut cfg_seed = anchor_config("seed");
+        cfg_seed.chain_predicted_intensity_gate = false;
+
+        let cand_adj = build_charge_candidate(
+            0, 2, &sorted, &mz, &im, &ss, &se, &cfg_adj, &file, false, 0.0, None,
+        )
+        .expect("adjacent should build a chain from the mono seed");
+        let cand_seed = build_charge_candidate(
+            0, 2, &sorted, &mz, &im, &ss, &se, &cfg_seed, &file, false, 0.0, None,
+        )
+        .expect("seed should build a chain from the mono seed");
+
+        assert_eq!(
+            cand_adj.hill_indices.len(),
+            3,
+            "adjacent: M+2 co-elutes with its neighbour M+1 → full envelope"
+        );
+        assert_eq!(
+            cand_seed.hill_indices.len(),
+            2,
+            "seed: M+2 scored against the mono (cos ≈ 0.31 < 0.5) → dropped"
+        );
+    }
+
+    /// An unrecognised `cosine_anchor` value is rejected by config validation.
+    #[test]
+    fn unknown_cosine_anchor_is_a_config_error() {
+        assert!(
+            anchor_config("banana").validate().is_err(),
+            "unknown cosine_anchor must be a config error"
+        );
+        for v in ["adjacent", "seed", "hybrid", "SEED", "Hybrid"] {
+            assert!(
+                anchor_config(v).validate().is_ok(),
+                "`{v}` should be an accepted cosine_anchor"
+            );
         }
     }
 }
