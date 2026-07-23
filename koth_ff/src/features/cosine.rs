@@ -1,16 +1,5 @@
 use crate::models::Hill;
 
-/// Minimum number of scans where BOTH hills have non-gap signal,
-/// required before any cosine similarity is computed. Below this, the
-/// function returns 0 outright. Inspired by AlphaPept's `correlate`
-/// ([feature_finding.py:781-784]) — AlphaPept's comment says "at least
-/// an overlap of 3 elements" but their `+3 >` formula actually requires
-/// 4 scans. We use the literal intent here: overlap ≥ 3.
-///
-/// Strict cutoff > smooth attenuation when downstream thresholds
-/// (0.5–0.6) might otherwise let edge-overlap pairs slip through.
-const MIN_MUTUAL_OVERLAP_SCANS: usize = 3;
-
 /// Compute cosine similarity between two hill intensity profiles.
 ///
 /// Profiles are aligned by absolute scan index and padded with zeros
@@ -19,43 +8,88 @@ const MIN_MUTUAL_OVERLAP_SCANS: usize = 3;
 /// retention times correctly score low.
 ///
 /// Returns 0.0 when the two hills do not mutually overlap by at least
-/// `MIN_MUTUAL_OVERLAP_SCANS` scans — i.e., each hill's range must
-/// extend at least that far into the other's range.
+/// `min_overlap` scans — i.e., their scan ranges must intersect in at
+/// least that many scans. This is the `features.min_scan_overlap` config
+/// value (default 3); inspired by AlphaPept's `correlate` overlap cutoff.
+/// A strict cutoff beats smooth attenuation when downstream thresholds
+/// (0.5–0.6) might otherwise let edge-overlap pairs slip through — but on
+/// fast gradients (3–5 scan hills) a value of 2 recovers real isotope
+/// pairs the 3-scan gate rejects (see `min_scan_overlap` docs).
 ///
-/// NB: an "intersection-only" variant was tested empirically on
-/// PXD003881 (see commit history) — it ranks more peptides above the
-/// downstream `min_combined_score` threshold but admits noise modes
-/// where hill lengths disagree, which regresses the LFQ matrix CV. The
-/// union-padded form's penalty against mismatched-length hills is acting
-/// as an implicit noise filter, so we keep it.
-pub fn cosine_similarity(hill1: &Hill, hill2: &Hill) -> f64 {
-    // Mutual-overlap gate (AlphaPept-style). The overlap region is
-    // `[max(start_a, start_b), min(end_a, end_b)]`, size
-    // `min(end_a, end_b) - max(start_a, start_b) + 1` (or zero if
-    // disjoint). Reject when size < MIN_MUTUAL_OVERLAP_SCANS.
-    //
-    // Equivalent (and faster than computing max/min twice) to:
-    //   start_a + (MIN - 1) > end_b  ||  start_b + (MIN - 1) > end_a
-    if hill1.scan_start + MIN_MUTUAL_OVERLAP_SCANS - 1 > hill2.scan_end
-        || hill2.scan_start + MIN_MUTUAL_OVERLAP_SCANS - 1 > hill1.scan_end
-    {
+/// `intersection` selects the normalisation mode:
+///
+///   * `false` — **union-padded**: each profile's L2 norm is taken over its
+///     full length while the dot product covers only the scan overlap, so
+///     two hills peaking at different RTs (or with very different lengths)
+///     correctly score low. This mismatched-length penalty acts as an
+///     implicit noise filter and is what the PXD003881 LFQ quant tuning was
+///     validated against. An intersection-only variant was tested there and
+///     regressed the LFQ matrix CV, so union stays the default.
+///   * `true` — **intersection-only**: both norms *and* the dot product are
+///     computed over the scan-overlap window alone, giving pure shape
+///     agreement where both hills have signal. This rescues real isotope
+///     pairs on fast gradients (short hills) that union-padding drags below
+///     the chain-cosine gate. Re-benchmark quant before using it for LFQ.
+pub fn cosine_similarity(
+    hill1: &Hill,
+    hill2: &Hill,
+    intersection: bool,
+    min_overlap: usize,
+) -> f64 {
+    // Mutual-overlap gate. Overlap size = `min(end_a, end_b) - max(start_a,
+    // start_b) + 1` (or 0 if disjoint). Reject when it is below `min_overlap`.
+    // Computed directly on scan_start/scan_end (underflow-safe for small
+    // `min_overlap`, unlike the old `start + MIN - 1 > end` form).
+    let gate_lo = hill1.scan_start.max(hill2.scan_start);
+    let gate_hi = hill1.scan_end.min(hill2.scan_end);
+    let overlap = if gate_hi >= gate_lo {
+        gate_hi - gate_lo + 1
+    } else {
+        0
+    };
+    if overlap < min_overlap {
         return 0.0;
     }
 
-    // Allocation-free equivalent of zero-padding both profiles onto a common
-    // scan axis and taking the L2-normalized cosine. Two facts let us skip the
-    // two temporary Vecs entirely:
+    // Overlap is bounded by each hill's *actual profile extent*
+    // (`[scan_start, scan_start + len - 1]`) rather than `scan_end`, so the
+    // direct indexing below can never run off the end of a profile even if a
+    // hill's `scan_end` were ever out of sync with its profile length.
+    let end1 = hill1.scan_start + hill1.intensity_profile.len().saturating_sub(1);
+    let end2 = hill2.scan_start + hill2.intensity_profile.len().saturating_sub(1);
+    let ov_start = hill1.scan_start.max(hill2.scan_start);
+    let ov_end = end1.min(end2);
+    if ov_end < ov_start {
+        return 0.0;
+    }
+
+    if intersection {
+        // Intersection-only: dot product and BOTH L2 norms are accumulated over
+        // the overlap window in one pass, so non-overlapping tails don't inflate
+        // the denominator. Measures shape agreement where both hills have signal.
+        let mut dot = 0.0f64;
+        let mut norm1_sq = 0.0f64;
+        let mut norm2_sq = 0.0f64;
+        for scan in ov_start..=ov_end {
+            let a = hill1.intensity_profile[scan - hill1.scan_start] as f64;
+            let b = hill2.intensity_profile[scan - hill2.scan_start] as f64;
+            dot += a * b;
+            norm1_sq += a * a;
+            norm2_sq += b * b;
+        }
+        if norm1_sq == 0.0 || norm2_sq == 0.0 {
+            return 0.0;
+        }
+        return (dot / (norm1_sq.sqrt() * norm2_sq.sqrt())).clamp(0.0, 1.0);
+    }
+
+    // Union-padded (default). Allocation-free equivalent of zero-padding both
+    // profiles onto a common scan axis and taking the L2-normalized cosine:
     //
     //   * Each profile's L2 norm is invariant to zero-padding — `√(Σ xᵢ²)` is
-    //     the same with or without trailing/leading zeros — so we sum the
-    //     squares of each hill's own profile directly.
-    //   * The dot product is nonzero only where both hills have signal, i.e.
-    //     the scan-index overlap `[max(start), min(end)]`; everywhere else one
-    //     side is a padding zero. So we walk just the overlap.
-    //
-    // The summation order over the nonzero terms is identical to the padded
-    // version (ascending scan index), and the skipped terms were all exactly
-    // `0.0`, so the result is bit-for-bit the same as the old implementation.
+    //     the same with or without padding — so we sum each hill's own squares.
+    //   * The dot product is nonzero only over the scan overlap; everywhere else
+    //     one side is a padding zero. So we walk just the overlap.
     let norm1: f64 = hill1
         .intensity_profile
         .iter()
@@ -79,14 +113,6 @@ pub fn cosine_similarity(hill1: &Hill, hill2: &Hill) -> f64 {
         return 0.0;
     }
 
-    // Overlap is bounded by each hill's *actual profile extent*
-    // (`[scan_start, scan_start + len - 1]`) rather than `scan_end`, so the
-    // direct indexing below can never run off the end of a profile even if a
-    // hill's `scan_end` were ever out of sync with its profile length.
-    let end1 = hill1.scan_start + hill1.intensity_profile.len().saturating_sub(1);
-    let end2 = hill2.scan_start + hill2.intensity_profile.len().saturating_sub(1);
-    let ov_start = hill1.scan_start.max(hill2.scan_start);
-    let ov_end = end1.min(end2);
     let mut dot = 0.0f64;
     for scan in ov_start..=ov_end {
         let a = hill1.intensity_profile[scan - hill1.scan_start] as f64;
@@ -128,54 +154,92 @@ mod tests {
         }
     }
 
-    /// Identical co-eluting hills score ~1.
+    // Default overlap gate used by the pre-existing tests (config default).
+    const OV: usize = 3;
+
+    /// Identical co-eluting hills score ~1 in both modes.
     #[test]
     fn identical_profiles_score_one() {
         let p = vec![1.0, 5.0, 10.0, 5.0, 1.0];
-        let cos = cosine_similarity(&h(10, p.clone()), &h(10, p));
-        assert!((cos - 1.0).abs() < 1e-9, "expected ~1.0, got {cos}");
+        for intersection in [false, true] {
+            let cos = cosine_similarity(&h(10, p.clone()), &h(10, p.clone()), intersection, OV);
+            assert!((cos - 1.0).abs() < 1e-9, "expected ~1.0, got {cos}");
+        }
     }
 
-    /// Hills with NO scan overlap return 0.
+    /// Hills with NO scan overlap return 0 in both modes.
     #[test]
     fn disjoint_hills_score_zero() {
         let h1 = h(10, vec![1.0, 5.0, 1.0]);
         let h2 = h(20, vec![1.0, 5.0, 1.0]);
-        assert_eq!(cosine_similarity(&h1, &h2), 0.0);
+        assert_eq!(cosine_similarity(&h1, &h2, false, OV), 0.0);
+        assert_eq!(cosine_similarity(&h1, &h2, true, OV), 0.0);
     }
 
-    /// Hills with only 2-scan mutual overlap fail the gate (returns 0)
-    /// even though the union-padded cosine would yield a small value.
+    /// Hills with only 2-scan mutual overlap fail the default 3-scan gate
+    /// (returns 0) even though the union-padded cosine would yield a value.
     #[test]
-    fn two_scan_overlap_fails_gate() {
+    fn two_scan_overlap_fails_default_gate() {
         // h1 scans 10..=14, h2 scans 13..=17. Mutual overlap = scans 13, 14
-        // → 2 scans. Below the 3-scan threshold → gate returns 0.
+        // → 2 scans. Below min_overlap=3 → gate returns 0 (both modes).
         let h1 = h(10, vec![1.0, 2.0, 10.0, 5.0, 1.0]);
         let h2 = h(13, vec![5.0, 10.0, 2.0, 1.0, 0.5]);
-        assert_eq!(cosine_similarity(&h1, &h2), 0.0);
+        assert_eq!(cosine_similarity(&h1, &h2, false, 3), 0.0);
+        assert_eq!(cosine_similarity(&h1, &h2, true, 3), 0.0);
     }
 
-    /// Hills with exactly 3-scan mutual overlap pass the gate and
-    /// produce a non-zero similarity.
+    /// The SAME 2-scan-overlap pair passes once `min_overlap` is lowered to 2,
+    /// producing a non-zero similarity. This is the configurable rescue for
+    /// fast-gradient data where isotopes overlap the mono by only ~2 scans.
+    #[test]
+    fn two_scan_overlap_passes_when_gate_lowered() {
+        let h1 = h(10, vec![1.0, 2.0, 10.0, 5.0, 1.0]);
+        let h2 = h(13, vec![5.0, 10.0, 2.0, 1.0, 0.5]);
+        let cos = cosine_similarity(&h1, &h2, false, 2);
+        assert!(cos > 0.0, "expected non-zero cosine at min_overlap=2, got {cos}");
+        assert!(cos <= 1.0);
+    }
+
+    /// Hills with exactly 3-scan mutual overlap pass the default gate.
     #[test]
     fn three_scan_overlap_passes_gate() {
         // h1 scans 10..=14, h2 scans 12..=16. Mutual overlap = scans 12, 13, 14
-        // → 3 scans. Gate passes (overlap >= MIN_MUTUAL_OVERLAP_SCANS = 3).
+        // → 3 scans. Gate passes (overlap >= min_overlap = 3).
         let h1 = h(10, vec![1.0, 2.0, 10.0, 5.0, 1.0]);
         let h2 = h(12, vec![10.0, 5.0, 1.0, 0.5, 0.1]);
-        let cos = cosine_similarity(&h1, &h2);
+        let cos = cosine_similarity(&h1, &h2, false, OV);
         assert!(cos > 0.0, "expected non-zero cosine, got {cos}");
         assert!(cos <= 1.0);
     }
 
     /// Two hills peaking at different RTs (offset by half the profile)
-    /// produce a low cosine even when they overlap.
+    /// produce a low cosine even when they overlap (union mode).
     #[test]
     fn offset_peaks_score_low() {
         // h1: peak at scan 12. h2: peak at scan 17.
         let h1 = h(10, vec![1.0, 1.0, 10.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
         let h2 = h(10, vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0, 1.0, 1.0]);
-        let cos = cosine_similarity(&h1, &h2);
+        let cos = cosine_similarity(&h1, &h2, false, OV);
         assert!(cos < 0.6, "expected low cosine for offset peaks, got {cos}");
+    }
+
+    /// A bright long mono paired with a short dim isotope of the SAME shape:
+    /// union-padding penalises the mono's non-overlapping tails, intersection
+    /// mode does not, so intersection scores strictly higher. This is the
+    /// fast-gradient rescue case the flag exists for.
+    #[test]
+    fn intersection_beats_union_for_length_mismatch() {
+        // Long mono: rises and falls over 9 scans (10..=18).
+        let mono = h(10, vec![1.0, 2.0, 4.0, 8.0, 10.0, 8.0, 4.0, 2.0, 1.0]);
+        // Short dim isotope: same triangular shape scaled down, only the
+        // 3-scan apex region (scans 13..=15) is above detection.
+        let iso = h(13, vec![0.8, 1.0, 0.8]);
+        let union = cosine_similarity(&mono, &iso, false, OV);
+        let inter = cosine_similarity(&mono, &iso, true, OV);
+        assert!(
+            inter > union,
+            "intersection ({inter}) should exceed union ({union})"
+        );
+        assert!(inter > 0.99, "matched apex shapes should score ~1, got {inter}");
     }
 }

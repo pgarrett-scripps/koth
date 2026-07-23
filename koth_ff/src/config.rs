@@ -398,6 +398,22 @@ fn default_max_isotope_log2_ratio() -> f64 {
     1.5
 }
 
+fn default_chain_predicted_intensity_gate() -> bool {
+    true
+}
+
+fn default_cosine_intersection() -> bool {
+    false
+}
+
+fn default_min_scan_overlap() -> usize {
+    3
+}
+
+fn default_exhaustive_min_isotope_score() -> f64 {
+    0.0
+}
+
 fn default_sulfur_aware_scoring() -> bool {
     true
 }
@@ -531,6 +547,84 @@ pub struct FeaturesConfig {
     /// ~2.83× of expected).
     #[serde(default = "default_max_isotope_log2_ratio")]
     pub max_isotope_log2_ratio: f64,
+    /// When true (default, legacy behaviour), isotope-chain extension stops as
+    /// soon as the averagine-*predicted* intensity of the next isotope falls
+    /// below the per-run noise floor (5th-pct hill intensity × 0.8), computed
+    /// from the seed intensity *before the hill is searched for*. This cheaply
+    /// trims decayed chain tails, but it also blocks legitimate low-abundance
+    /// monoisotopic seeds from ever pairing their M+1: a seed already near the
+    /// floor has a predicted M+1 below the floor, so the chain never forms and
+    /// the feature collapses to charge 0. When false, this predicted-intensity
+    /// break is skipped and chain extension is terminated purely by *evidence*:
+    /// a missing hill (`find_neighbors` empty), `min_chain_cosine`, the
+    /// `max_isotope_log2_ratio` intensity-ratio gate, `right_max_decrease`
+    /// (found hill must be ≥ this fraction of the predecessor), and the
+    /// averagine-template-length / `max_isotopes` caps. Setting this false
+    /// recovers dim 2+/3+ features that have both isotope hills present but
+    /// were never paired — recommended when feeding an MS1 search that needs
+    /// feature depth. Re-benchmark FDR/quant when flipping.
+    #[serde(default = "default_chain_predicted_intensity_gate")]
+    pub chain_predicted_intensity_gate: bool,
+    /// Chromatographic-cosine normalisation mode for isotope-chain building.
+    ///
+    /// `false` (default): **union-padded** cosine — each hill's L2 norm is taken
+    /// over its *full* profile while the dot product covers only the scan
+    /// overlap, so a bright long monoisotopic hill paired with a short dim
+    /// isotope is penalised for its non-overlapping tails. This mismatched-length
+    /// penalty acts as an implicit noise filter and is what the PXD003881 quant
+    /// tuning was validated against — keep it for that benchmark.
+    ///
+    /// `true`: **intersection-only** cosine — both norms and the dot product are
+    /// computed over the scan-overlap window alone, measuring pure shape
+    /// agreement where both hills actually have signal. On fast-gradient data
+    /// (short 3–5 scan hills) real isotope pairs whose union cosine is dragged
+    /// below the `min_chain_cosine` gate by length-padding score correctly here
+    /// (measured intersection cosine median ≈0.94 on pairs the union form
+    /// rejected). The `MIN_MUTUAL_OVERLAP_SCANS` overlap gate still applies in
+    /// both modes. Recommended for MS1-search feature depth; re-benchmark quant
+    /// (CV/MV) before adopting it for LFQ.
+    #[serde(default = "default_cosine_intersection")]
+    pub cosine_intersection: bool,
+    /// Minimum number of mutually-overlapping scans two hills must share
+    /// before a chromatographic cosine is computed between them; below it the
+    /// cosine is 0 and the isotope chain will not extend across that pair.
+    /// Default 3 (the long-standing hard gate — keep for PXD003881).
+    ///
+    /// On fast gradients hills are only 3–5 scans wide, so a dim isotope hill
+    /// frequently overlaps its monoisotope by just 1–2 scans and is rejected
+    /// outright regardless of how well the shapes agree — the dominant cause of
+    /// koth emitting a low-abundance monoisotope as an unpaired charge-0 feature
+    /// on such data (biosaur2 requires only ≥1 shared scan). Lowering this to 2
+    /// recovers those pairs; pair it with a shorter `hills.min_scans` (a 2-scan
+    /// hill can never reach a 3-scan overlap) and re-benchmark quant, since
+    /// short-overlap pairs are noisier.
+    #[serde(default = "default_min_scan_overlap")]
+    pub min_scan_overlap: usize,
+    /// Experimental non-destructive isotope assembler (biosaur2 / AlphaPept
+    /// style). When false (default) koth uses the legacy greedy resolver: one
+    /// best candidate per seed, claimed all-or-nothing (a seed whose isotope
+    /// hills are stolen collapses to charge 0). When true, every (seed, charge)
+    /// hypothesis enters an over-complete pool, contested hills are claimed
+    /// longest-envelope-first, and a candidate whose isotope hills are partly
+    /// claimed is TRUNCATED to its free prefix and re-queued rather than dropped
+    /// — recovering charge-2/3 features greedy loses to shorter, higher-cosine
+    /// competitors. Default off = byte-identical to greedy. Validated
+    /// paper-neutral on PXD003881 (recall +0.7pp, cohort CV 15.33→15.30); a small
+    /// win for MS1-search depth downstream.
+    #[serde(default)]
+    pub exhaustive_assembly: bool,
+    /// (exhaustive_assembly only) Minimum isotope-pattern (Bhattacharyya) score a
+    /// candidate — original or truncated — must reach before it may *claim* its
+    /// hills; below-bar candidates are dropped so their hills stay free for a
+    /// better-fitting feature. Default 0.0 = no gate.
+    #[serde(default = "default_exhaustive_min_isotope_score")]
+    pub exhaustive_min_isotope_score: f64,
+    /// (exhaustive_assembly only) When true, contested-hill claim priority is
+    /// ordered by envelope length, then isotope-pattern score, then composite —
+    /// so the best averagine fit wins a shared hill within a length class. Default
+    /// false.
+    #[serde(default)]
+    pub exhaustive_isotope_priority: bool,
     /// Score isotope chains against multiple averagine templates that vary
     /// the sulfur atom count `{0, avg, avg+2, avg+4}` and keep the best fit.
     /// Corrects the systematic Bhattacharyya penalty on Cys/Met-rich
@@ -561,6 +655,12 @@ impl Default for FeaturesConfig {
             right_max_decrease: 0.05,
             max_isotopes: 6,
             max_isotope_log2_ratio: 1.5,
+            chain_predicted_intensity_gate: true,
+            cosine_intersection: false,
+            min_scan_overlap: 3,
+            exhaustive_assembly: false,
+            exhaustive_min_isotope_score: 0.0,
+            exhaustive_isotope_priority: false,
             sulfur_aware_scoring: true,
             neutron_mass: 1.003_354_835,
             min_isotope_score: 0.0,
