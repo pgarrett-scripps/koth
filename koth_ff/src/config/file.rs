@@ -97,6 +97,32 @@ pub struct FileConfig {
     /// (from any input format) during hill detection. Typical value: 3.0.
     #[serde(default)]
     pub bruker_noise_sigma: Option<f64>,
+    /// Use the in-process `dnoise` streaming API instead of the local two-stage
+    /// reader. When `true`, each raw frame is run through dnoise's own pipeline
+    /// (vertical-IM filter -> horizontal halo -> watershed) in a single pass with
+    /// no denoised `.d` written to disk, using the exact stage code the standalone
+    /// `dnoise` tool runs. When `false` (default), the historical local path runs
+    /// (vertical filter + watershed only, no halo) — this is the paper's validated
+    /// pipeline, so streaming is opt-in until re-validated on the Bruker cohort.
+    #[serde(default)]
+    pub bruker_streaming: bool,
+    /// Streaming path only: apply dnoise's horizontal-halo filter after the
+    /// vertical filter (removes the weak m/z halo flanking bright ions). Default
+    /// `true` (matches the standalone `dnoise` MS1 pipeline). No effect unless
+    /// `bruker_streaming` is set.
+    #[serde(default = "default_bruker_halo")]
+    pub bruker_halo: bool,
+    /// Streaming halo: drop a peak below this fraction of the off-column box-max
+    /// reference. Default 0.15.
+    #[serde(default = "default_bruker_halo_peak_fraction")]
+    pub bruker_halo_peak_fraction: f64,
+    /// Streaming halo: reference-box half-width along the TOF index. Default 80.
+    #[serde(default = "default_bruker_halo_mz_idx_half_width")]
+    pub bruker_halo_mz_idx_half_width: u32,
+    /// Streaming halo: reference-box half-width along the ion-mobility scan axis.
+    /// Default 2.
+    #[serde(default = "default_bruker_halo_scan_half_width")]
+    pub bruker_halo_scan_half_width: usize,
     /// Per-scan iterative sigma-clipping noise filter. When set, peaks whose
     /// intensity falls below `median + sigma * (1.4826 * MAD)` of the estimated
     /// noise floor are discarded before hill detection.
@@ -174,6 +200,11 @@ impl Default for FileConfig {
             bruker_watershed_min_centroid_total: 0,
             bruker_watershed_max_tof_offset: default_bruker_watershed_max_tof_offset(),
             bruker_noise_sigma: None,
+            bruker_streaming: false,
+            bruker_halo: default_bruker_halo(),
+            bruker_halo_peak_fraction: default_bruker_halo_peak_fraction(),
+            bruker_halo_mz_idx_half_width: default_bruker_halo_mz_idx_half_width(),
+            bruker_halo_scan_half_width: default_bruker_halo_scan_half_width(),
             noise_filter_sigma: None,
             decoy_mode: false,
             ms2_hills_enabled: false,
@@ -246,4 +277,20 @@ fn default_bruker_watershed_box_mz_idx() -> u32 {
 
 fn default_bruker_watershed_max_tof_offset() -> u32 {
     10
+}
+
+fn default_bruker_halo() -> bool {
+    true
+}
+
+fn default_bruker_halo_peak_fraction() -> f64 {
+    0.15
+}
+
+fn default_bruker_halo_mz_idx_half_width() -> u32 {
+    80
+}
+
+fn default_bruker_halo_scan_half_width() -> usize {
+    2
 }
