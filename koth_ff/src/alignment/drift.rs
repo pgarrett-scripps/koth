@@ -2,6 +2,10 @@ use serde::Serialize;
 
 use super::anchors::AnchorPair;
 
+#[cfg(test)]
+#[path = "drift_tests.rs"]
+mod tests;
+
 /// Sigma-clip schedule for the mass / IM drift fits. Formerly shared the RT
 /// warp's `rt_warp_clip_iters` / `rt_warp_sigma_clip` config knobs; those were
 /// removed with the legacy piecewise/linear warps (the shipped configs and the

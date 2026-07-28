@@ -144,3 +144,46 @@ pub fn find_anchors(
 
     anchors
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pair(ref_mz: f64, run_mz: f64, ref_im: f64, run_im: f64) -> AnchorPair {
+        AnchorPair { ref_rt_norm: 0.0, run_rt_norm: 0.0, ref_mz, run_mz, ref_im, run_im }
+    }
+
+    #[test]
+    fn normalize_rt_maps_range_to_unit_interval() {
+        assert_eq!(normalize_rt(10.0, (10.0, 20.0)), 0.0);
+        assert_eq!(normalize_rt(15.0, (10.0, 20.0)), 0.5);
+        assert_eq!(normalize_rt(20.0, (10.0, 20.0)), 1.0);
+    }
+
+    #[test]
+    fn normalize_rt_clamps_out_of_range() {
+        assert_eq!(normalize_rt(5.0, (10.0, 20.0)), 0.0);
+        assert_eq!(normalize_rt(25.0, (10.0, 20.0)), 1.0);
+    }
+
+    #[test]
+    fn normalize_rt_degenerate_range_is_midpoint() {
+        assert_eq!(normalize_rt(42.0, (10.0, 10.0)), 0.5);
+    }
+
+    #[test]
+    fn ppm_error_is_signed_relative_mass_shift() {
+        // run 10 ppm heavy than a 1000 Da reference.
+        let a = pair(1000.0, 1000.0 * (1.0 + 10.0 / 1e6), 0.0, 0.0);
+        assert!((a.ppm_error() - 10.0).abs() < 1e-9);
+        // and signed the other way.
+        let b = pair(1000.0, 1000.0 * (1.0 - 4.0 / 1e6), 0.0, 0.0);
+        assert!((b.ppm_error() + 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn im_delta_is_run_minus_ref() {
+        let a = pair(1000.0, 1000.0, 1.0, 1.25);
+        assert!((a.im_delta() - 0.25).abs() < 1e-12);
+    }
+}

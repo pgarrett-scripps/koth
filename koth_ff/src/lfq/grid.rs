@@ -2,6 +2,10 @@ use crate::models::Hill;
 
 use super::LfqConfig;
 
+#[cfg(test)]
+#[path = "grid_tests.rs"]
+mod tests;
+
 pub const C13_NEUTRON: f64 = 1.003_354_835;
 
 /// Cache-friendly, mz-sorted lookup record for `build_grid`.
