@@ -389,102 +389,32 @@ intensity_matrix at q ≤ 0.01 for 1% FDR, for example.
 
 ## Configuration
 
-### koth_ff config
+Both binaries take a TOML config via `--config`. Every key is optional (defaults
+apply); the fully-resolved config is written back out (`config.toml` /
+`align_config.toml`) after each run. Parsing uses `deny_unknown_fields`, so a
+stale or misspelled key is a hard error rather than a silent fallback.
 
-Configuration is a TOML file passed with `--config`. All values have defaults; you only need to
-include the keys you want to change. Running the pipeline writes the resolved config to
-`config.toml` in the output directory.
+**The complete, field-by-field reference — every setting, its default, what it
+does, and what to set it to (including Orbitrap vs Bruker/timsTOF) — lives in
+[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).** Read that first.
 
-```toml
-[file]
-mz_tolerance = 8.0          # m/z window for linking peaks to hills and isotopes
-mz_tolerance_type = "ppm"   # "ppm" or "da"
-im_tolerance = 0.05         # ion mobility tolerance
-im_tolerance_type = "relative"  # "relative" (fraction of IM value) or "absolute"
-global_min_mz = 0.0         # ignore peaks below this m/z
-global_max_mz = inf         # ignore peaks above this m/z (inf = no limit)
-intensity_coverage = 1.0    # fraction of hill intensity to retain (1.0 = keep all)
-bruker_mz_ppm = 5.0         # m/z tolerance for Bruker .d centroiding
-bruker_im_pct = 3.0         # IM tolerance (%) for Bruker .d centroiding
-bruker_min_subpeaks = 1     # min raw subpeaks required per centroided Bruker peak
-# noise_filter_sigma = 3.0  # per-scan sigma-clipping noise filter; omit to disable
-# decoy_mode = false        # shuffle spectra before detection (null distribution)
-# n_threads = 8             # parallelism; omit for all CPUs
+Worked, up-to-date examples are the shipped configs in
+[`benchmark/config/`](benchmark/config/):
 
-[hills]
-min_scans = 3               # discard hills shorter than this
-max_gap = 0                 # consecutive missed scans allowed within a hill
-split_hills = true          # split co-eluting hills at valleys
-min_peak_distance = 10      # minimum scan separation between peaks when splitting
-min_peak_height = 0.2       # minimum peak height relative to the hill maximum
-min_prominence = 0.2        # minimum prominence (relative to max) to trigger a split
-lfc_weight = 0.5            # weight of intensity log-fold-change in peak-to-hill matching
-# smoothing_enabled = false # smooth intensity profiles after hill finalization
-# smoothing_window = 1      # half-width of smoothing window (scans)
+| File | Binary | Platform |
+|---|---|---|
+| `koth_ff.toml` | koth_ff (feature finding) | Orbitrap mzML |
+| `koth_ff_bruker.toml` | koth_ff | Bruker/timsTOF `.d` |
+| `koth_align.toml` | koth_align (align + LFQ) | Orbitrap |
+| `koth_align_bruker.toml` | koth_align | Bruker/timsTOF |
 
-[features]
-min_charge = 1
-max_charge = 7
-min_cosine_similarity = 0.5 # minimum elution profile cosine to extend an envelope
-left_max_decrease = 0.05    # max allowed intensity drop on the low-m/z side
-right_max_decrease = 0.05   # max allowed intensity drop on the high-m/z side
-max_isotopes = 6            # maximum isotope peaks per feature
-neutron_mass = 1.003354835  # C13 mass offset in Da
-min_score = 0.0             # drop features below this averagine score (0.0 = keep all)
-
-[scoring]
-isotope_offset_min = -1     # lower bound of neutron offset search
-isotope_offset_max = 1      # upper bound of neutron offset search
-offset_zero_bonus = 0.15    # score bonus for keeping offset = 0
-min_score_threshold = 0.5   # features below this score keep offset = 0
-
-[output]
-format = "tsv"              # "tsv" or "parquet"
-```
-
-A full annotated template is available at `example_config.toml`.
-
-### koth_align config
-
-Config file for `koth_align` is passed with `--config`. A full annotated template is in
-`example_config_align.toml`.
-
-```toml
-[alignment]
-anchor_mass_ppm = 10.0      # PPM tolerance for anchor feature matching
-rt_anchor_window = 0.05     # normalised RT window [0,1] for anchor matching (±5%)
-im_tolerance = 0.05         # ion mobility tolerance (1/K0)
-min_anchor_score = 0.5      # minimum feature score to be used as an anchor
-min_anchor_count = 10       # fall back to identity warp if fewer anchors found
-rt_warp_bandwidth = 0.1     # sliding-window width for RT median computation
-rt_warp_sigma_clip = 3.0    # sigma threshold for anchor outlier rejection
-rt_warp_clip_iters = 5      # number of sigma-clip iterations
-
-[lfq]
-mz_ppm = 10.0               # PPM tolerance for hill lookup per isotopologue
-rt_window_pct = 0.02        # half-window as fraction of gradient (±2% = 4% total)
-im_tolerance = 0.05         # ion mobility tolerance for hill matching
-n_isotopes = 3              # isotopologue rows: 1=M only, 2=M+M1, 3=M+M1+M2
-grid_cols = 100             # RT bins per grid
-min_spectral_bhattacharyya = 0.1  # min spectral Bhattacharyya to keep expanding a peak
-score_mode = "hybrid"       # "hybrid", "rt", "intensity", or "spectral"
-run_tdc = true              # compute per-cell MBR q-values via target-decoy competition
-tdc_method = "qda"          # MBR FDR: "qda" (learned rescorer, default) or "hybrid" (legacy)
-# decoy_mz_shift_da = 11.0  # decoy m/z offset (Da / charge)
-# decoy_rt_shift_pct = 0.01 # decoy RT offset (fraction of gradient)
-# rt_spread_scoring = false # experimental: region-aware, σ-normalised RT term
-# Both isotope metrics (Bhattacharyya pattern + co-elution cosine) are always
-# computed and folded into the hybrid; there is no flag to choose between them.
-
-[lfq.consensus]
-min_member_score = 0.0      # min score for a feature to enter the consensus pool
-min_group_size = 1          # min runs detecting a feature for it to be quantified
-min_seed_score = 0.0        # min score of the best member to keep a consensus row
-
-[output]
-format = "tsv"              # "tsv" (parquet matrix output not yet implemented)
-max_qvalue = 1.0            # threshold for n_runs_detected count in consensus_features.tsv
-```
+koth_ff sections: `[file]` (reading + tolerances + Bruker front-end + m/z
+recalibration), `[hills]` (trace detection + splitter), `[features]` (isotope
+chains + charge + retention gates), `[scoring]`, `[output]`. koth_align sections:
+`[alignment]` (RANSAC RT warp + mass/IM drift), `[lfq]` (XIC extraction +
+integration + decoy/TDC), `[lfq.consensus]` (cross-run grouping), `[output]`. The
+only per-platform differences are `[file].mz_tolerance` (8 ppm Orbitrap / 15 ppm
+timsTOF) and, for koth_align, `[lfq].quant_estimator` and `[lfq].detected_use_grid`.
 
 ## Library API
 
