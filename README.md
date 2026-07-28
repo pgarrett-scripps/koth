@@ -163,21 +163,28 @@ Splitting is controlled by `split_hills = true` in the config.
 Features are isotope envelopes — groups of hills whose m/z values are spaced by
 `neutron_mass / charge` (where `neutron_mass` = 1.003354835 Da, the C13 offset).
 
-The algorithm seeds from the highest-intensity hill downward. For each unassigned seed it tries
-every charge state from `max_charge` down to `min_charge` and searches for isotope partners
-both to the right (M+1, M+2, ...) and to the left (M-1, M-2, ...) of the seed.
+Every hill is tried as a monoisotopic seed, at every charge state from `min_charge` to
+`max_charge`. Chains extend **upward only** — seed → M+1 → M+2 → … — because the seed *is*
+the monoisotopic hypothesis. There is no downward walk: a hill that one could reach is
+itself a seed that builds the same envelope upward, with the averagine template indexed
+from its own position.
 
 A candidate partner must satisfy:
 
 - m/z within `mz_tolerance` of the expected isotope position.
 - Scan range overlaps with the reference hill.
 - If IM data is present, IM within `im_tolerance` of the reference hill.
-- `intensity_max >= ref_hill.intensity_max * max_decrease` (prevents linking to an implausibly
-  weak signal).
-- Cosine similarity of the elution profile with the seed hill is at least `min_cosine_similarity`.
+- `intensity_max >= ref_hill.intensity_max * right_max_decrease` (prevents linking to an
+  implausibly weak signal).
+- Cosine of the elution profile against the `cosine_anchor` reference hill (the seed by
+  default) is at least `min_chain_cosine`.
+- The apex intensity ratio against the chain predecessor matches the averagine ratio within
+  ±`max_isotope_log2_ratio`.
 
-The charge state that produces the longest isotope chain is kept. All hills in the chain are
-marked as assigned so they cannot be reused by a later seed. Feature detection also records
+This produces an over-complete `(seed, charge)` candidate pool, which is then resolved
+**non-destructively**: contested hills are claimed longest-envelope-first, and a candidate
+whose hills are partly claimed is truncated to its free monoisotope-anchored prefix,
+re-scored, and re-queued rather than dropped. Feature detection also records
 per-adjacent-pair cosine similarities and ppm errors for downstream quality filtering.
 
 ### Stage 3: Scoring

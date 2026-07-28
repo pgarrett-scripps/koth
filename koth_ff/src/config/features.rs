@@ -34,7 +34,10 @@ pub struct FeaturesConfig {
     /// isotope chain. The candidate hill's cosine vs the seed hill must clear
     /// this to be added; otherwise chain extension stops in that direction.
     pub min_chain_cosine: f64,
-    pub left_max_decrease: f64,
+    /// Minimum intensity a candidate isotope hill must retain relative to its
+    /// chain predecessor, as a fraction. Chain extension runs upward only
+    /// (the seed IS the monoisotope hypothesis), so there is no downward
+    /// counterpart to this knob.
     pub right_max_decrease: f64,
     pub max_isotopes: usize,
     /// Per-extension intensity-ratio gate. After a candidate hill clears
@@ -136,7 +139,18 @@ fn default_max_isotope_log2_ratio() -> f64 {
 }
 
 fn default_chain_predicted_intensity_gate() -> bool {
-    true
+    // `false` since the downward (M-1, M-2, …) chain extension was removed.
+    //
+    // The gate exists only in the upward loop, so while the downward walk
+    // existed it could route around it: a dim monoisotope whose own upward walk
+    // was killed by the predicted-intensity break was still recovered by seeding
+    // on its M+1 and stepping down (the assembler's `uncontested_envelope_assembled`
+    // fixture is exactly this — every upward walk there breaks at step 1, and
+    // the whole 3-hill envelope used to be built by seeding the M+2 and walking
+    // down twice). With one direction only there is no second route, so leaving
+    // the gate on silently drops those features. Termination is now purely by
+    // evidence — see the field docs.
+    false
 }
 
 fn default_min_scan_overlap() -> usize {
@@ -167,11 +181,10 @@ impl Default for FeaturesConfig {
             min_charge: 1,
             max_charge: 7,
             min_chain_cosine: 0.5,
-            left_max_decrease: 0.05,
             right_max_decrease: 0.05,
             max_isotopes: 6,
             max_isotope_log2_ratio: 1.5,
-            chain_predicted_intensity_gate: true,
+            chain_predicted_intensity_gate: false,
             min_scan_overlap: 3,
             exhaustive_min_isotope_score: 0.0,
             exhaustive_isotope_priority: false,

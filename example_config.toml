@@ -164,7 +164,6 @@ max_charge = 7
 min_chain_cosine = 0.5
 
 # Maximum allowed intensity decrease on the left/right flanks (0.0–1.0)
-left_max_decrease = 0.05
 right_max_decrease = 0.05
 
 # Maximum number of isotope peaks to consider

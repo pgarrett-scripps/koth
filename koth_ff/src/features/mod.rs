@@ -15,8 +15,9 @@ use recalibration::{MzRecalBuilder, MzRecalModel};
 ///
 /// 1. Build an m/z-sorted index of the hills.
 /// 2. Every `(seed hill, charge)` pair builds an isotope chain by extending
-///    left/right with chromatographic-cosine filtering (gated by
-///    `FeaturesConfig.min_chain_cosine`) — see `build_charge_candidate`.
+///    upward only (M+1, M+2, …) with chromatographic-cosine filtering (gated by
+///    `FeaturesConfig.min_chain_cosine`); the seed is the monoisotope
+///    hypothesis — see `build_charge_candidate`.
 /// 3. The over-complete candidate pool is resolved non-destructively by
 ///    `resolve_exhaustive`: contested hills are claimed longest-envelope-first
 ///    and a partly-claimed candidate is truncated to its free prefix and

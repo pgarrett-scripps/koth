@@ -103,10 +103,16 @@
     fn no_hill_claimed_twice() {
         let step = FeaturesConfig::default().neutron_mass / 2.0;
         let prof = vec![2.0f32, 6.0, 10.0, 6.0, 2.0];
+        // The 400.0 and 400.0 + step groups overlap, so several distinct hills
+        // share an m/z. Identity must therefore be `hill_id`, not m/z: two
+        // features legitimately holding two *different* hills that happen to sit
+        // at the same m/z is not a double-claim.
         let mut hills = Vec::new();
         for base in [400.0, 400.0 + step, 650.0] {
             for iso in 0..4 {
-                hills.push(hill(base + iso as f64 * step, 15, prof.clone()));
+                let mut h = hill(base + iso as f64 * step, 15, prof.clone());
+                h.hill_id = hills.len() as u64;
+                hills.push(h);
             }
         }
         let file = FileConfig::default();
@@ -117,8 +123,9 @@
         for f in &feats {
             for h in &f.hills {
                 assert!(
-                    seen.insert(h.mz.to_bits()),
-                    "hill at mz {} claimed by two features",
+                    seen.insert(h.hill_id),
+                    "hill {} (mz {}) claimed by two features",
+                    h.hill_id,
                     h.mz
                 );
             }
@@ -267,3 +274,4 @@
             );
         }
     }
+

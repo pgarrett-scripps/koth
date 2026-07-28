@@ -184,11 +184,10 @@ the acquisition differs.
 | `min_charge` | u8 | `1` → **`2`** | Min precursor charge. `2` (tryptic peptides are 2–5). |
 | `max_charge` | u8 | `7` → **`6`** | Max precursor charge. `6`. |
 | `min_chain_cosine` | f64 | `0.5` → **`0.40`** | Per-extension chromatographic-cosine gate while building a chain (vs the `cosine_anchor` reference). `0.40` recovers +1.24 pp recall at +19% features, neutral quant. **Not the contaminant filter** (co-eluters score ~0.74) — that's `min_isotope_score`. `relaxed` = 0.0; `alphapept_like` = 0.6. |
-| `left_max_decrease` | f64 | `0.05` → **`0.01`** | Allowed intensity drop extending toward lighter isotopes. `0.01` (production); `0.05` (relaxed/alphapept_like). |
-| `right_max_decrease` | f64 | `0.05` → **`0.01`** | Heavier isotope must be ≥ this fraction of its predecessor (chain-termination evidence). `0.01` (production). |
-| `max_isotopes` | usize | `6` | Max isotope peaks per chain. `6`. |
+| `right_max_decrease` | f64 | `0.05` → **`0.01`** | Heavier isotope must be ≥ this fraction of its predecessor (chain-termination evidence). `0.01` (production). Chains extend **upward only**, so there is no `left_max_decrease` counterpart (removed 2026-07-28). |
+| `max_isotopes` | usize | `6` | Max isotope peaks added above the monoisotopic seed, so the envelope is at most `max_isotopes + 1` hills. `6`. (Before the downward walk was removed this bounded each direction separately, allowing envelopes up to `2·max_isotopes + 1`.) |
 | `max_isotope_log2_ratio` | f64 | `1.5` | Intensity-ratio gate: after passing cosine, apex ratio vs predecessor must match averagine within ±this many log2 (≈2.83×). **This catches co-eluting contaminants** cosine misses. Default (not overridden). |
-| `chain_predicted_intensity_gate` | bool | `true` | **Behavior-changing.** `true` (paper default, byte-identical): stop the chain when the averagine-*predicted* next-isotope intensity falls below the noise floor. `false`: purely evidence-based termination — recovers dim 2+/3+ monoisotopes that otherwise collapse to charge 0 (for MS1-search depth). Neutral on PXD003881 recall; **don't flip the paper default** without re-benchmarking FDR/quant. |
+| `chain_predicted_intensity_gate` | bool | **`false`** | **Behavior-changing.** `true`: stop the chain when the averagine-*predicted* next-isotope intensity falls below the noise floor. `false` (default since the downward walk was removed, 2026-07-28): purely evidence-based termination. The gate only ever guarded the upward direction, so while the downward walk existed a dim monoisotope killed by it was still recovered by seeding its M+1 and stepping down. With one direction there is no second route, and leaving it on silently drops those features. |
 | `min_scan_overlap` | usize | `3` | Min mutually-overlapping scans before two hills get a cosine (else 0, no extension). Keep `3` for PXD003881; lower to `2` on fast gradients (3–5-scan hills) to recover dim pairs. |
 | `cosine_anchor` | String | `"seed"` | Which hill each isotope's cosine is measured against. **`"seed"`** (new 2026-07 default; anchor every isotope to the monoisotope — beat `"adjacent"` by +0.31 pp / +1565 PSMs on the 20-run cohort). `"adjacent"` reproduces pre-2026-07 paper output. Validated at load. |
 | `sulfur_aware_scoring` | bool | `true` | Score chains against multiple sulfur-count averagine templates `{0, avg, avg+2, avg+4}`, keep the best — removes the systematic penalty on Cys/Met-rich peptides (³⁴S lifts M+2). `true`. Dedicated `koth_ff_sulfur_{on,off}.toml` exist for A/B. |
@@ -317,7 +316,7 @@ unless you are deliberately re-opening the experiment (and re-benchmarking).
 | `cosine_anchor = "seed"` | `[features]` | ✅ **Won**, now the default (+0.31 pp) | `"seed"` |
 | `sulfur_aware_scoring` | `[features]` | ✅ Small win (+0.06–0.2 pp), on by default | on |
 | `averagine_projection` | `[lfq]` | ❌ **Dud on Orbitrap** (CV +3.1 pp, IQR +0.036, FFCR +1.9 pp, recall flat); Bruker untested | off |
-| `chain_predicted_intensity_gate = false` | `[features]` | ⚪ Neutral on PXD003881 recall; only for MS1-search depth | `true` |
+| `chain_predicted_intensity_gate = false` | `[features]` | ✅ **Now the default** — required once the downward chain walk was removed | `false` |
 | `bruker_streaming` | `[file]` | ⚪ Experimental; parity-verified vs local path but not yet cohort-validated | off |
 | `tic_norm_*` | `[hills]` | ⚪ Experimental (ESI-dropout salvage) | off |
 | `gap_fill_enabled` / `smoothing_enabled` | `[hills]` | ❌ Net-negative for quant (adds features, hurts redundancy); only in `relaxed` | off |
@@ -372,8 +371,9 @@ feature) for Bruker denoising. Two paths:
   `quant_estimator="sum"` (Orbitrap) and `rt_window_pct=0.01`.
 - **Fast/short gradients (3–5-scan hills):** lower `[hills].min_scans` to 2 and
   `[features].min_scan_overlap` to 2; re-benchmark quant.
-- **MS1-search feature depth (dim 2+/3+):** set
-  `[features].chain_predicted_intensity_gate = false`; re-benchmark FDR/quant.
+- **MS1-search feature depth (dim 2+/3+):** `[features].chain_predicted_intensity_gate`
+  is already `false` by default; setting it `true` re-enables the predicted-intensity
+  early-stop and will drop dim monoisotopes.
 - **Match AlphaPept for comparison:** use `koth_ff_alphapept_like.toml`
   (`intensity_coverage=0.95`, `min_chain_cosine=0.6`, `filter_large_baseline_hills=true`).
 

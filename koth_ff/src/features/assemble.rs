@@ -4,6 +4,20 @@
 //! (`build_charge_candidate`) and resolved non-destructively (`resolve_exhaustive`)
 //! by claiming contested hills longest-envelope-first, truncating a partly-claimed
 //! candidate to its free monoisotope-anchored prefix rather than dropping it.
+//!
+//! **Chains extend upward only.** The seed IS the monoisotope hypothesis: a
+//! chain runs seed → M+1 → M+2 → …, never downward. Every hill is tried as a
+//! seed, so a hill a downward walk could have reached is itself a seed that
+//! builds the same envelope upward — with the averagine template indexed from
+//! its own position rather than from a seed that later turns out not to be the
+//! monoisotope. This also keeps `max_isotopes` a bound on the envelope rather
+//! than on each direction separately.
+//!
+//! Consequence to be aware of: nothing downstream reassigns the monoisotope.
+//! If a true monoisotope's own upward chain fails to form, its M+1 may be
+//! emitted as a separate feature whose reported mass is one neutron heavy;
+//! `scoring::isotope_offset_enabled` only re-labels peaks already in a chain
+//! and cannot recover a monoisotope that was never chained.
 
 use std::cmp::Ordering;
 
@@ -40,10 +54,11 @@ pub(super) struct Candidate {
     pub(super) charge: u8,
 }
 
-/// Build the best isotope-chain candidate for one `(seed, charge)` pair, using
-/// the left/right chromatographic-cosine chain extension driven by the
-/// exhaustive resolver (`resolve_exhaustive`). Returns `None` when no isotope
-/// partner is found in either direction (a lone seed — charge 0).
+/// Build the best isotope-chain candidate for one `(seed, charge)` pair by
+/// extending upward (M+1, M+2, …) from the seed under chromatographic-cosine
+/// and isotope-pattern gates; the resolver (`resolve_exhaustive`) scores and
+/// claims. Returns `None` when no isotope partner is found (a lone seed —
+/// charge 0).
 pub(super) fn build_charge_candidate(
     ctx: &ChainCtx,
     seed_idx: usize,
@@ -94,25 +109,26 @@ pub(super) fn build_charge_candidate(
     } else {
         file.mz_tolerance
     };
-    // Which hill the chromatographic-cosine gate is anchored to. `Adjacent`
-    // (default) reproduces legacy koth exactly; `Seed` only changes the cosine
-    // *reference* hill — the m/z step target, `find_neighbors` predecessor, and
-    // the intensity-ratio predecessor all stay the immediate chain predecessor.
+    // Which hill the chromatographic-cosine gate is anchored to. `Seed` is the
+    // default; `Adjacent` reproduces the legacy predecessor anchor. Either way
+    // only the cosine *reference* hill changes — the m/z step target,
+    // `find_neighbors` predecessor, and the intensity-ratio predecessor all stay
+    // the immediate chain predecessor.
     let cosine_anchor = config.cosine_anchor_mode();
 
     let step = config.neutron_mass / charge as f64;
     {
 
-        // Per-charge averagine template, used to early-stop the right chain
-        // when the next theoretical isotope falls below the noise floor.
-        // We assume the seed is monoisotopic for this check (best guess at
-        // chain-build time; the offset search in scoring/mod.rs corrects later).
+        // Per-charge averagine template, used to early-stop the chain when the
+        // next theoretical isotope falls below the noise floor. The seed is
+        // taken as monoisotopic — that is the assembler's contract, not a
+        // provisional guess, so template[iso] indexes the chain directly.
         let neutral_mass_seed_mono = seed_mz * charge as f64 - charge as f64 * PROTON_MASS;
         let template = averagine::lookup_template(neutral_mass_seed_mono);
         let template_mono = template[0].max(1e-12);
         let seed_intensity = seed_hill.intensity_max as f64;
 
-        // Right chain: M+1, M+2, ...
+        // Upward chain: M+1, M+2, ... (the only direction)
         let mut right_chain: Vec<usize> = Vec::new();
         for iso in 1..=config.max_isotopes {
             // Early-stop: bail when theory predicts a peak below noise. Stops
@@ -221,98 +237,16 @@ pub(super) fn build_charge_candidate(
             right_chain.push(best_c);
         }
 
-        // Left chain: M-1, M-2, ...
-        let mut left_chain: Vec<usize> = Vec::new();
-        for iso in 1..=config.max_isotopes {
-            let target_mz = recal_mz(seed_mz - step * iso as f64);
-            let ref_hill = left_chain
-                .last()
-                .map(|&i| sorted_hills[i])
-                .unwrap_or(seed_hill);
-
-            let mut exclude =
-                Vec::with_capacity(right_chain.len() + left_chain.len() + 1);
-            exclude.push(seed_idx);
-            exclude.extend_from_slice(&right_chain);
-            exclude.extend_from_slice(&left_chain);
-
-            let cands = find_neighbors(
-                ctx,
-                target_mz,
-                mz_tol,
-                ref_hill,
-                config.left_max_decrease,
-                &exclude,
-            );
-            if cands.is_empty() {
-                break;
-            }
-
-            // Cosine reference hill (left direction). Same anchor semantics as
-            // the right chain: `Adjacent` = the immediate predecessor
-            // (`ref_hill`, legacy, byte-identical), `Seed` = the mono seed for
-            // every isotope. Only the cosine reference changes.
-            let cos_ref_hill = match cosine_anchor {
-                CosineAnchor::Adjacent => ref_hill,
-                CosineAnchor::Seed => seed_hill,
-            };
-            let (best_c, best_cos) = cands
-                .iter()
-                .map(|&c| {
-                    (
-                        c,
-                        cosine_similarity(
-                            cos_ref_hill,
-                            sorted_hills[c],
-                            config.min_scan_overlap,
-                        ),
-                    )
-                })
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-                .unwrap();
-
-            if best_cos < config.min_chain_cosine {
-                break;
-            }
-
-            // Intensity-ratio gate (left direction). Each left step shifts the
-            // hypothesis: we now assume the previous leftmost (ref_hill) sat at
-            // template[1] and the new candidate sits at template[0]. The
-            // expected ratio is constant across left steps: template[0]/template[1]
-            // (new mono / old "near-mono"). Catches cases where the candidate
-            // is dimmer than the predecessor — the wrong direction for a mono.
-            if config.max_isotope_log2_ratio.is_finite() {
-                let pred_int = ref_hill.intensity_max as f64;
-                let cand_int = sorted_hills[best_c].intensity_max as f64;
-                let theo_pred = template[1].max(1e-12);
-                let theo_cand = template[0].max(1e-12);
-                if pred_int > 0.0 && cand_int > 0.0 {
-                    let observed_ratio = cand_int / pred_int;
-                    let expected_ratio = theo_cand / theo_pred;
-                    if (observed_ratio / expected_ratio).log2().abs()
-                        > config.max_isotope_log2_ratio
-                    {
-                        break;
-                    }
-                }
-            }
-
-            left_chain.push(best_c);
-        }
-
-        if left_chain.is_empty() && right_chain.is_empty() {
+        if right_chain.is_empty() {
             return None; // no partners found — single-hill fallback stays charge=0
         }
 
-        // Assemble chain: left reversed (low→high mz) + seed + right. The
-        // exhaustive resolver rescores every (possibly-truncated) chain itself
-        // (see `rescore_chain`), so this function only needs to return the chain
-        // and its charge — no per-chain scoring here.
-        let chain: Vec<usize> = left_chain
-            .iter()
-            .rev()
-            .copied()
-            .chain(std::iter::once(seed_idx))
+        // Assemble chain: seed + right (already low→high mz). The seed IS the
+        // monoisotope hypothesis — there is no downward extension. Every hill is
+        // tried as a seed, so a hill that a downward walk could have reached is
+        // itself a seed that builds the same chain upward, with the averagine
+        // template correctly indexed from its own position. See the module docs.
+        let chain: Vec<usize> = std::iter::once(seed_idx)
             .chain(right_chain.iter().copied())
             .collect();
 
