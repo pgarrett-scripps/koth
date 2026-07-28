@@ -1,5 +1,39 @@
 # koth_rust
 
+## What this is
+
+Two Rust binaries built together (`cargo build --release`):
+
+- **`koth_ff`** — per-run MS1 feature finder. `raw → [file] read/tolerances →
+  [hills] chromatographic traces → [features] isotope chains (charge + averagine
+  score) → [scoring] optional → hills + features output`. mzML, Bruker `.d`
+  (needs the `tdf` feature + sibling `../../d_noise` crate), and optional Thermo
+  `.raw` (`thermo` feature).
+- **`koth_align`** — cross-run alignment + LFQ. `koth_ff run dirs → [alignment]
+  RANSAC RT warp + mass/IM drift → [lfq.consensus] group the same peptide across
+  runs → [lfq] XIC grid + integrate + target-decoy q-values → intensity matrix`.
+
+Source layout: `koth_ff/src/{config,hills,features,scoring,alignment,lfq,io,output}/`.
+The active q-value path is the QDA rescorer in `lfq/rescore.rs` (not the simpler
+ranker in `lfq/tdc.rs`).
+
+## Configuration
+
+**[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) is the complete, authoritative
+reference for every config setting** — type, default, what it does, what to set
+it to, and Orbitrap-vs-Bruker platform notes. Read it before touching config or
+answering config questions; do not guess field names or defaults from memory.
+
+- Configs are TOML parsed with `#[serde(deny_unknown_fields)]` — a stale/renamed
+  key is a hard build/parse error. A build-time test parses the shipped
+  `benchmark/config/*.toml` against the structs, so field names can't silently
+  drift. If you add/rename a config field, update the struct, the shipped TOMLs,
+  **and** `docs/CONFIGURATION.md` (the doc is not build-checked).
+- Experimental knobs are **default-off and byte-safe** by convention. Their
+  tested verdicts (validated-win / dud / neutral) are recorded in
+  `docs/CONFIGURATION.md` §5 — check there before re-running a settled
+  experiment. Notably `averagine_projection` is a measured dud on Orbitrap.
+
 ## Testing conventions
 
 Large unit-test modules live in a **sibling file** next to the module they test,
