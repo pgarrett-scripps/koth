@@ -11,6 +11,7 @@
 
 use super::elements::{cache, K_PATTERN};
 
+
 /// Averagine atomic ratios per 111.1254 Da of neutral mass. The single
 /// "averagine residue" mass used by Senko's model.
 const AVG_RESIDUE_MASS: f64 = 111.1254;
@@ -55,23 +56,75 @@ pub fn averagine_distribution_with_sulfur(neutral_mass: f64, n_s: u32) -> [f64; 
     cache().distribution(c, h, n, o, n_s)
 }
 
+/// Averagine sulfur count rounded **up** (`ceil`) instead of half-up.
+/// Only the sulfur term changes; C/H/N/O keep `averagine_counts`' rounding.
+///
+/// `s_float = 0.0417·M / 111.1254 = 3.7524e-4·M`, so the ceiling steps at
+/// M ≈ 2665 / 5330 / 7995 Da.
+pub fn averagine_sulfur_ceil(neutral_mass: f64) -> u32 {
+    let scale = neutral_mass.max(0.0) / AVG_RESIDUE_MASS;
+    (AVG_S_PER * scale).ceil().max(0.0) as u32
+}
+
+/// Resolve user-declared sulfur `offsets` against a peptide's expected count.
+///
+/// Each offset is applied to `ceil(expected n_S)`, negatives saturate at 0, and
+/// the result is deduplicated (order-preserving) so a config like
+/// `[-2, -1, 0, 1]` on a small peptide collapses to `{0, 1, 2}` rather than
+/// scoring `n_S = 0` three times. Counts above `MAX_S` are clamped by the
+/// element cache.
+///
+/// Empty `offsets` means "no sulfur awareness" and yields a single template at
+/// the plain averagine (half-up rounded) count — see
+/// [`bhattacharyya_score_best_sulfur`].
+pub fn resolve_sulfur_counts(neutral_mass: f64, offsets: &[i8]) -> Vec<u32> {
+    let s_ceil = averagine_sulfur_ceil(neutral_mass) as i32;
+    let mut out: Vec<u32> = Vec::with_capacity(offsets.len());
+    for &off in offsets {
+        let n_s = (s_ceil + off as i32).max(0) as u32;
+        if !out.contains(&n_s) {
+            out.push(n_s);
+        }
+    }
+    out
+}
+
 /// Sulfur-aware Bhattacharyya scoring.
 ///
-/// Builds isotope-pattern templates for a small set of sulfur counts spanning
-/// the realistic biological range, scores observed against each, returns the
-/// best BC and the winning `n_S`. This corrects the systematic bias on
-/// peptides with 2+ Cys/Met where ³⁴S (4.25 %, +2 Da) elevates M+2 well
-/// above the averagine prediction.
+/// Scores `obs` against one averagine template per user-declared sulfur offset
+/// (see [`resolve_sulfur_counts`]) and returns the best BC with its winning
+/// `n_S`. This corrects the systematic bias on Cys/Met-rich peptides, where
+/// ³⁴S (4.25 %, +2 Da) elevates M+2 well above the averagine prediction.
 ///
-/// Template set per call: `[0, max(1, averagine_S), averagine_S + 2, averagine_S + 4]`,
-/// deduplicated and clamped to `MAX_S` by the element cache.
-pub fn bhattacharyya_score_best_sulfur(obs: &[f64], neutral_mass: f64) -> (f64, u32) {
+/// Offsets are relative to the **ceiling** of the expected count, so the
+/// default `[-1, 0, 1]` gives `{0, 1, 2}` up to 2665 Da, `{1, 2, 3}` to 5330,
+/// `{2, 3, 4}` to 7995. Declare `[-1, 0, 1, 2]` (or include a `0`-reaching
+/// offset) if you want the no-sulfur template retained on large peptides —
+/// ~32 % of 3 kDa tryptic peptides have no sulfur at all.
+///
+/// An empty offset list disables sulfur awareness: a single plain averagine
+/// template at the half-up rounded count, which is the pre-2026-07 `false`
+/// behaviour of `sulfur_aware_scoring`.
+///
+/// Note this is a **max over templates**, so widening the offset list can only
+/// raise scores — including for decoys and mis-assembled chains. Judge a change
+/// to the list on discrimination (recall / target-decoy separation), never on
+/// the isotope-score distribution alone.
+pub fn bhattacharyya_score_best_sulfur(
+    obs: &[f64],
+    neutral_mass: f64,
+    offsets: &[i8],
+) -> (f64, u32) {
     let (c, h, n, o, s_avg) = averagine_counts(neutral_mass);
-    let variants = sulfur_variants(s_avg);
+
+    if offsets.is_empty() {
+        let template = cache().distribution(c, h, n, o, s_avg);
+        return (bhattacharyya_score(obs, &template), s_avg);
+    }
 
     let mut best_bc = 0.0f64;
-    let mut best_s = s_avg;
-    for &n_s in &variants {
+    let mut best_s = averagine_sulfur_ceil(neutral_mass);
+    for n_s in resolve_sulfur_counts(neutral_mass, offsets) {
         let template = cache().distribution(c, h, n, o, n_s);
         let bc = bhattacharyya_score(obs, &template);
         if bc > best_bc {
@@ -80,14 +133,6 @@ pub fn bhattacharyya_score_best_sulfur(obs: &[f64], neutral_mass: f64) -> (f64, 
         }
     }
     (best_bc, best_s)
-}
-
-/// Deduplicated sulfur-count variants we score against:
-/// `[0, max(1, s_avg), s_avg + 2, s_avg + 4]`. For small peptides (s_avg = 0)
-/// this collapses to `{0, 1, 2, 4}`. For larger ones (s_avg = 2) it's
-/// `{0, 2, 4, 6}`. Always includes both the no-S and a high-S extreme.
-fn sulfur_variants(s_avg: u32) -> [u32; 4] {
-    [0, s_avg.max(1), s_avg + 2, s_avg + 4]
 }
 
 /// Compute Bhattacharyya coefficient between observed and theoretical distributions.
@@ -132,71 +177,5 @@ pub fn bhattacharyya_score(obs: &[f64], template: &[f64; K_PATTERN]) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn averagine_counts_scales_linearly() {
-        // 1500 Da peptide → averagine integer composition
-        let (c, h, n, o, s) = averagine_counts(1500.0);
-        let scale = 1500.0 / AVG_RESIDUE_MASS;
-        assert!((c as f64 - 4.9384 * scale).abs() <= 1.0);
-        assert!((h as f64 - 7.7583 * scale).abs() <= 1.0);
-        assert!((n as f64 - 1.3577 * scale).abs() <= 1.0);
-        assert!((o as f64 - 1.4773 * scale).abs() <= 1.0);
-        assert!((s as f64 - 0.0417 * scale).abs() <= 1.0);
-    }
-
-    #[test]
-    fn averagine_distribution_sums_to_one() {
-        for mass in [500.0, 1500.0, 3000.0, 5000.0] {
-            let d = averagine_distribution(mass);
-            let sum: f64 = d.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-9, "{mass}: sum={sum}");
-        }
-    }
-
-    /// Well-aligned 5-hill chain — BC should be high.
-    #[test]
-    fn well_aligned_chain_scores_high() {
-        let template: [f64; K_PATTERN] = [0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0, 0.0, 0.0];
-        let obs = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5];
-        let bc = bhattacharyya_score(&obs, &template);
-        assert!(bc > 0.95, "BC for well-aligned chain should be > 0.95, got {bc}");
-    }
-
-    /// Over-extended chain — same well-aligned first 5 positions plus 3 noise hills
-    /// where the template predicts essentially nothing. New BC must drop noticeably.
-    #[test]
-    fn over_extended_chain_drops_score() {
-        let template: [f64; K_PATTERN] = [0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0001, 0.0, 0.0];
-        let obs_real = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5];
-        let bc_real = bhattacharyya_score(&obs_real, &template);
-        let obs_overextended = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5, 5.0e6, 5.0e6, 5.0e6];
-        let bc_over = bhattacharyya_score(&obs_overextended, &template);
-        assert!(
-            bc_over < bc_real - 0.05,
-            "over-extended BC ({bc_over:.3}) should drop at least 0.05 below clean BC ({bc_real:.3})"
-        );
-    }
-
-    /// Empty / zero input safe.
-    #[test]
-    fn empty_input_returns_zero() {
-        let template: [f64; K_PATTERN] = [0.5, 0.3, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        assert_eq!(bhattacharyya_score(&[], &template), 0.0);
-        assert_eq!(bhattacharyya_score(&[0.0, 0.0], &template), 0.0);
-    }
-
-    /// Sanity: sulfur-override path returns a different template than the default.
-    #[test]
-    fn sulfur_override_changes_pattern() {
-        let m = 1500.0;
-        let avg = averagine_distribution(m);
-        let high_s = averagine_distribution_with_sulfur(m, 3);
-        assert!(
-            (high_s[2] - avg[2]).abs() > 0.005,
-            "3-S override should noticeably shift M+2 (avg={}, hi-S={})", avg[2], high_s[2]
-        );
-    }
-}
+#[path = "averagine_tests.rs"]
+mod tests;

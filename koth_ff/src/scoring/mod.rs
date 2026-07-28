@@ -15,13 +15,13 @@ use averagine::{bhattacharyya_score, lookup_template};
 pub fn score_features(
     features: &[Feature],
     config: &ScoringConfig,
-    sulfur_aware: bool,
+    sulfur_offsets: &[i8],
 ) -> Vec<ScoredFeature> {
     log::info!("Scoring {} features", features.len());
 
     let all_scored: Vec<ScoredFeature> = features
         .iter()
-        .map(|feature| score_one(feature, config, sulfur_aware))
+        .map(|feature| score_one(feature, config, sulfur_offsets))
         .collect();
 
     if log::log_enabled!(log::Level::Debug) {
@@ -65,7 +65,7 @@ pub fn score_features(
     scored
 }
 
-fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_aware: bool) -> ScoredFeature {
+fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_offsets: &[i8]) -> ScoredFeature {
     let neutral_mass = match feature.monoisotopic_neutral_mass() {
         Some(m) => m,
         None => {
@@ -90,10 +90,10 @@ fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_aware: bool) -> S
     let mut best_offset: i8 = 0;
 
     let score_obs = |o: &[f64]| -> f64 {
-        if sulfur_aware {
-            averagine::bhattacharyya_score_best_sulfur(o, neutral_mass).0
-        } else {
+        if sulfur_offsets.is_empty() {
             bhattacharyya_score(o, &template)
+        } else {
+            averagine::bhattacharyya_score_best_sulfur(o, neutral_mass, sulfur_offsets).0
         }
     };
 

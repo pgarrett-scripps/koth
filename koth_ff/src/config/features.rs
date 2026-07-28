@@ -114,13 +114,27 @@ pub struct FeaturesConfig {
     /// exhaustive-resolver rescoring remain adjacent-style regardless.
     #[serde(default = "default_cosine_anchor")]
     pub cosine_anchor: String,
-    /// Score isotope chains against multiple averagine templates that vary
-    /// the sulfur atom count `{0, avg, avg+2, avg+4}` and keep the best fit.
-    /// Corrects the systematic Bhattacharyya penalty on Cys/Met-rich
-    /// peptides whose M+2 is elevated by ³⁴S (4.25%, +2 Da).
-    /// Default true.
-    #[serde(default = "default_sulfur_aware_scoring")]
-    pub sulfur_aware_scoring: bool,
+    /// Sulfur-count offsets to score each isotope chain against, relative to
+    /// the **ceiling** of the averagine-expected sulfur count. The chain is
+    /// scored against one averagine template per offset and the best
+    /// Bhattacharyya kept — this corrects the systematic penalty on Cys/Met-rich
+    /// peptides whose M+2 is elevated by ³⁴S (4.25 %, +2 Da).
+    ///
+    /// Default `[-1, 0, 1]`, i.e. `{0, 1, 2}` sulfurs up to 2665 Da, `{1, 2, 3}`
+    /// to 5330 Da, `{2, 3, 4}` to 7995 Da. Negative results saturate at 0 and
+    /// duplicates collapse, so `[-2, -1, 0, 1]` on a small peptide is `{0, 1, 2}`.
+    /// Widen it (e.g. `[-2, -1, 0, 1]`) to keep the no-sulfur template on large
+    /// peptides — ~32 % of 3 kDa tryptic peptides have no sulfur at all.
+    ///
+    /// An **empty list disables sulfur awareness**: one plain averagine template
+    /// at the half-up rounded count.
+    ///
+    /// Scoring takes a **max over templates**, so a longer list can only raise
+    /// scores — including for decoys and mis-assembled chains. Judge a change on
+    /// discrimination (PSM recall / target–decoy separation), never on the
+    /// isotope-score distribution alone.
+    #[serde(default = "default_sulfur_offsets")]
+    pub sulfur_offsets: Vec<i8>,
     /// Neutron (C13) mass in Da
     pub neutron_mass: f64,
     /// Drop features whose **isotope_score** (Bhattacharyya vs averagine) is
@@ -171,8 +185,8 @@ fn default_cosine_anchor() -> String {
     "seed".to_string()
 }
 
-fn default_sulfur_aware_scoring() -> bool {
-    true
+pub(crate) fn default_sulfur_offsets() -> Vec<i8> {
+    vec![-1, 0, 1]
 }
 
 impl Default for FeaturesConfig {
@@ -189,7 +203,7 @@ impl Default for FeaturesConfig {
             exhaustive_min_isotope_score: 0.0,
             exhaustive_isotope_priority: false,
             cosine_anchor: default_cosine_anchor(),
-            sulfur_aware_scoring: true,
+            sulfur_offsets: default_sulfur_offsets(),
             neutron_mass: 1.003_354_835,
             min_isotope_score: 0.0,
             min_cosine_score: 0.0,

@@ -279,7 +279,7 @@ fn rescore_chain(
         );
     }
     let mean_cosine = cos_sum / (hills.len() - 1) as f64;
-    let isotope_score = score_chain(&hills, charge, config.sulfur_aware_scoring);
+    let isotope_score = score_chain(&hills, charge, &config.sulfur_offsets);
     let composite = isotope_score * mean_cosine.max(0.0);
     (composite, mean_cosine, isotope_score)
 }
@@ -440,7 +440,7 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
     accepted
 }
 
-fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_aware: bool) -> f64 {
+fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_offsets: &[i8]) -> f64 {
     if chain_hills.len() <= 1 || charge == 0 {
         return 0.0;
     }
@@ -476,11 +476,11 @@ fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_aware: bool) -> f64 {
     let obs: Vec<f64> = sorted.iter().map(|h| h.intensity_at_scan(apex_scan)).collect();
     let k = obs.len().min(10);
 
-    if sulfur_aware {
-        averagine::bhattacharyya_score_best_sulfur(&obs[..k], neutral_mass).0
-    } else {
+    if sulfur_offsets.is_empty() {
         let template = averagine::lookup_template(neutral_mass);
         averagine::bhattacharyya_score(&obs[..k], &template)
+    } else {
+        averagine::bhattacharyya_score_best_sulfur(&obs[..k], neutral_mass, sulfur_offsets).0
     }
 }
 

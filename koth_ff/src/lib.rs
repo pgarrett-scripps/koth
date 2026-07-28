@@ -197,7 +197,7 @@ pub fn run_scoring(
     let mut scored = scoring::score_features(
         features,
         scoring_cfg,
-        features_cfg.sulfur_aware_scoring,
+        &features_cfg.sulfur_offsets,
     );
     let any_filter = features_cfg.min_isotope_score > 0.0
         || features_cfg.min_cosine_score > 0.0

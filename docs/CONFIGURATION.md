@@ -190,7 +190,7 @@ the acquisition differs.
 | `chain_predicted_intensity_gate` | bool | **`false`** | **Behavior-changing.** `true`: stop the chain when the averagine-*predicted* next-isotope intensity falls below the noise floor. `false` (default since the downward walk was removed, 2026-07-28): purely evidence-based termination. The gate only ever guarded the upward direction, so while the downward walk existed a dim monoisotope killed by it was still recovered by seeding its M+1 and stepping down. With one direction there is no second route, and leaving it on silently drops those features. |
 | `min_scan_overlap` | usize | `3` | Min mutually-overlapping scans before two hills get a cosine (else 0, no extension). Keep `3` for PXD003881; lower to `2` on fast gradients (3–5-scan hills) to recover dim pairs. |
 | `cosine_anchor` | String | `"seed"` | Which hill each isotope's cosine is measured against. **`"seed"`** (new 2026-07 default; anchor every isotope to the monoisotope — beat `"adjacent"` by +0.31 pp / +1565 PSMs on the 20-run cohort). `"adjacent"` reproduces pre-2026-07 paper output. Validated at load. |
-| `sulfur_aware_scoring` | bool | `true` | Score chains against multiple sulfur-count averagine templates `{0, avg, avg+2, avg+4}`, keep the best — removes the systematic penalty on Cys/Met-rich peptides (³⁴S lifts M+2). `true`. Dedicated `koth_ff_sulfur_{on,off}.toml` exist for A/B. |
+| `sulfur_offsets` | list[int] | `[-1, 0, 1]` | Sulfur-count offsets, relative to the **ceiling** of the averagine-expected count, to score each chain against — one averagine template per offset, best Bhattacharyya kept. Corrects the systematic penalty on Cys/Met-rich peptides (³⁴S lifts M+2). Default resolves to `{0,1,2}` sulfurs up to 2665 Da, `{1,2,3}` to 5330, `{2,3,4}` to 7995. Negatives saturate at 0 and duplicates collapse. Widen to `[-2,-1,0,1]` to keep the no-sulfur template on large peptides (~32 % of 3 kDa peptides have none). **Empty list disables sulfur awareness.** Scoring is a max over templates, so a longer list can only raise scores incl. decoys — judge changes on recall, not the score distribution. `koth_ff_sulfur_{on,off}.toml` exist for A/B. |
 | `neutron_mass` | f64 | `1.003354835` | C13 mass offset for isotope-spacing targets. Default. |
 | `exhaustive_min_isotope_score` | f64 | `0.0` | Exhaustive-resolver knob (unmerged experiment): min Bhattacharyya a candidate needs to *claim* its hills. `0.0` = no gate. Not set in shipped configs. |
 | `exhaustive_isotope_priority` | bool | `false` | Exhaustive-resolver knob: order contested-hill claims by envelope length → isotope score → composite. `false`. Not set in shipped configs. |
@@ -314,7 +314,7 @@ unless you are deliberately re-opening the experiment (and re-benchmarking).
 | `normalize = "median_ratios"` | `[lfq]` | ✅ Valid for **standalone** use; off in paper for fairness | `"none"` |
 | `rt_spread_scoring` | `[lfq]` | ✅ Validated, but kept **default-off** | off |
 | `cosine_anchor = "seed"` | `[features]` | ✅ **Won**, now the default (+0.31 pp) | `"seed"` |
-| `sulfur_aware_scoring` | `[features]` | ✅ Small win (+0.06–0.2 pp), on by default | on |
+| `sulfur_offsets` | `[features]` | ✅ Sulfur-aware scoring is a small win (+0.06–0.2 pp) and stays on. Offsets are ceiling-relative as of 2026-07-28 — the old fixed set `{0, avg, avg+2, avg+4}` resolved to `{0,1,3,5}` over 1332–3997 Da and **skipped n_S = 2** (~7.6 % of peptides) while spending a slot on n_S = 5 (~0.02 %). Requires the pending data re-run (paper `TODO.md` item 6) to requantify. | `[-1, 0, 1]` |
 | `averagine_projection` | `[lfq]` | ❌ **Dud on Orbitrap** (CV +3.1 pp, IQR +0.036, FFCR +1.9 pp, recall flat); Bruker untested | off |
 | `chain_predicted_intensity_gate = false` | `[features]` | ✅ **Now the default** — required once the downward chain walk was removed | `false` |
 | `bruker_streaming` | `[file]` | ⚪ Experimental; parity-verified vs local path but not yet cohort-validated | off |
@@ -337,7 +337,7 @@ Start from the shipped configs; the deltas are minimal.
 | `[lfq].detected_use_grid` | `false` | `true` | IM-vs-2D-grid scale commensurability |
 
 Everything else — splitter params, `min_chain_cosine=0.40`, recalibration,
-`sulfur_aware_scoring`, `min_isotope_score=0.5`, all alignment/consensus/TDC
+`sulfur_offsets`, `min_isotope_score=0.5`, all alignment/consensus/TDC
 settings — is **identical across platforms**.
 
 ---
