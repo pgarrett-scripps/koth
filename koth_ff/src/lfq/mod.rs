@@ -125,6 +125,25 @@ pub struct LfqConfig {
     /// falls back to the raw term when no σ model is available. Default false.
     #[serde(default)]
     pub rt_spread_scoring: bool,
+    /// Report the *averagine-projected* intensity per cell instead of the raw
+    /// box-sum. For each grid column the observed isotopologue vector is passed
+    /// through a matched filter for the theoretical averagine pattern (the same
+    /// mass-derived fingerprint the Bhattacharyya score already uses):
+    /// `proj = <observed, pattern_hat>`, where `pattern_hat` is the L2-normalised
+    /// pattern. As a matched filter this maximises SNR for on-pattern signal
+    /// (recovering faint peptides the raw sum buries in noise) and rejects the
+    /// component of each column orthogonal to the fingerprint (intensity
+    /// distributed unlike averagine — interference, chemical noise). It is NOT a
+    /// pattern-match gate: gross mismatches (lone monoisotopes, wrong charge)
+    /// are still rejected by the Bhattacharyya window gate and the TDC q-value,
+    /// unchanged. The per-peptide constant `‖pattern‖` factor cancels in
+    /// cross-run ratios and CV, so LFQ ratios/CV are unaffected in scale. Apex
+    /// selection and window expansion stay on the raw signal / hybrid score;
+    /// only the reported value changes. Default false (byte-identical raw
+    /// box-sum). Mass-based, ID-free. Effect on the benchmark is unmeasured —
+    /// this is an opt-in knob to be validated, not a new default.
+    #[serde(default)]
+    pub averagine_projection: bool,
 }
 
 fn default_min_spectral_bhattacharyya() -> f64 {
@@ -174,6 +193,7 @@ impl Default for LfqConfig {
             quant_estimator: default_quant_estimator(),
             detected_use_grid: false,
             rt_spread_scoring: false,
+            averagine_projection: false,
         }
     }
 }

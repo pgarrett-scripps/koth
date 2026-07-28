@@ -118,17 +118,30 @@ pub fn integrate(
         right_steps += 1;
     }
 
-    // Integrate across all isotopologue rows in [start, end]
-    let intensity: f64 = grid
-        .intensities
-        .iter()
-        .flat_map(|row| row[start..=end].iter())
-        .map(|&v| v as f64)
-        .sum();
+    // Reported cell intensity. Default: raw box-sum over [start, end] across all
+    // isotopologue rows. When `config.averagine_projection` is set: the summed
+    // averagine-projected (on-pattern) intensity instead, which `score_grid`
+    // precomputed per column. Apex selection and window expansion above stay on
+    // the raw signal / hybrid score either way — only the reported value changes.
+    let (intensity, apex_intensity): (f64, f64) = if config.averagine_projection {
+        let sum: f64 = scores.projected[start..=end]
+            .iter()
+            .map(|&v| v as f64)
+            .sum();
+        (sum, scores.projected[apex] as f64)
+    } else {
+        let sum: f64 = grid
+            .intensities
+            .iter()
+            .flat_map(|row| row[start..=end].iter())
+            .map(|&v| v as f64)
+            .sum();
+        (sum, col_totals[apex] as f64)
+    };
 
     PeakResult {
         intensity,
-        apex_intensity: col_totals[apex] as f64,
+        apex_intensity,
         apex_bin: apex,
         start_bin: start,
         end_bin: end,

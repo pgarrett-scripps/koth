@@ -12,6 +12,14 @@ pub struct ColumnScores {
     /// peaks. This is the "does the isotope pattern match theory?" signal.
     pub bhattacharyya: Vec<f32>,
     pub hybrid: Vec<f32>,
+    /// **Averagine-projected intensity** per column: the observed isotopologue
+    /// vector passed through a matched filter for the L2-normalised theoretical
+    /// pattern (`<observed, pattern_hat>`) — the on-pattern signal component,
+    /// with the part orthogonal to the fingerprint rejected. Only filled when
+    /// `LfqConfig.averagine_projection` is set; left zeroed otherwise (the raw
+    /// box-sum path never reads it). Summed over the integration window by
+    /// `integrate` to form the reported cell intensity.
+    pub projected: Vec<f32>,
     /// **Co-elution cosine** (grid-level scalar): cosine similarity between the
     /// monoisotope's XIC trace and each higher isotope's XIC trace across RT —
     /// i.e. "do the matched isotopes rise and fall together?". Orthogonal to
@@ -27,6 +35,7 @@ impl ColumnScores {
             intensity: vec![0.0f32; n_cols],
             bhattacharyya: vec![0.0f32; n_cols],
             hybrid: vec![0.0f32; n_cols],
+            projected: vec![0.0f32; n_cols],
             coelution: 1.0,
         }
     }
@@ -106,6 +115,17 @@ pub fn score_grid(
     let coelution: f64 = isotope_coelution(&grid.intensities, theory, n_rows, n_cols);
     scores.coelution = coelution as f32;
 
+    // Averagine projection (opt-in, LfqConfig.averagine_projection): L2 norm of
+    // the (L1-normalised) theory pattern, precomputed once so each column's
+    // observed vector can be projected onto the pattern direction below. A zero
+    // norm (degenerate/empty pattern) leaves the projection disabled and the
+    // raw box-sum path untouched.
+    let theory_l2: f64 = if config.averagine_projection {
+        theory.iter().map(|&t| t * t).sum::<f64>().sqrt()
+    } else {
+        0.0
+    };
+
     for col in 0..n_cols {
         // RT score: 1 - cbrt(|col - center| / center)
         let rt_dev = if center > 0.0 {
@@ -142,6 +162,20 @@ pub fn score_grid(
         }
         let bhattacharyya = bhattacharyya_score(&obs[..n_rows], bc_template) as f32;
         scores.bhattacharyya[col] = bhattacharyya;
+
+        // Averagine-projected intensity (opt-in): keep the component of this
+        // column's observed isotope vector that lies along the pattern
+        // direction (`<observed, pattern_hat>`), discarding the orthogonal
+        // off-pattern part (chemical noise, co-isobars, lone monoisotopes).
+        // `obs[..n_rows]` was just filled above; `theory` is L1-normalised.
+        if theory_l2 > 0.0 {
+            let dot: f64 = obs[..n_rows]
+                .iter()
+                .zip(theory.iter())
+                .map(|(&o, &t)| o * t)
+                .sum();
+            scores.projected[col] = (dot / theory_l2) as f32;
+        }
 
         // Hybrid = geometric mean of the four quality signals:
         //   rt × intensity × bhattacharyya(pattern) × coelution(inter-isotope cosine).
@@ -270,5 +304,65 @@ mod spectral_tests {
         // A lone monoisotope (higher rows empty) cannot be judged → 1.0.
         let lone = vec![vec![0.0f32, 5.0, 0.0], vec![0.0f32; 3], vec![0.0f32; 3]];
         assert_eq!(isotope_coelution(&lone, &theory, 3, 3), 1.0);
+    }
+
+    use crate::lfq::integrate::integrate;
+
+    /// Build a 3-isotope × 3-column grid carrying signal only in the centre
+    /// column (so the integration window is exactly the apex — no expansion).
+    fn centre_grid(mono: f32, m1: f32, m2: f32) -> XicGrid {
+        let mut g = XicGrid::empty(3, 3, 0.0, 1.0);
+        g.intensities[0][1] = mono;
+        g.intensities[1][1] = m1;
+        g.intensities[2][1] = m2;
+        g.n_slots_filled = 3;
+        g
+    }
+
+    fn integrate_grid(grid: &XicGrid, theory: &[f64], projection: bool) -> f64 {
+        let bc_template = crate::scoring::averagine::lookup_template(1500.0);
+        let mut cfg = LfqConfig::default();
+        cfg.averagine_projection = projection;
+        let mut scores = ColumnScores::new(3);
+        let mut col_totals = vec![0.0f32; 3];
+        let mut obs = vec![0.0f64; 3];
+        score_grid(grid, theory, &bc_template, &cfg, &mut scores, &mut col_totals, &mut obs, None);
+        integrate(grid, &scores, &col_totals, &cfg).intensity
+    }
+
+    /// With the flag off, the reported intensity is exactly the raw box-sum;
+    /// with it on it is the (positive) averagine matched-filter projection.
+    #[test]
+    fn projection_off_is_raw_sum_on_is_projection() {
+        let theory = [0.5, 0.3, 0.2];
+        let grid = centre_grid(50.0, 30.0, 20.0);
+
+        let raw = integrate_grid(&grid, &theory, false);
+        assert_eq!(raw, 100.0, "flag off must report the raw box-sum (50+30+20)");
+
+        let proj = integrate_grid(&grid, &theory, true);
+        // <[50,30,20], [0.5,0.3,0.2]> / ||[0.5,0.3,0.2]||₂ = 38 / 0.6164 ≈ 61.65
+        assert!((proj - 61.65).abs() < 0.5, "projection ≈ 61.65, got {proj}");
+    }
+
+    /// The matched filter is less inflated by off-pattern contamination than the
+    /// raw box-sum: adding intensity in the low-weight M+2 channel raises the
+    /// projected value by proportionally less than it raises the raw sum.
+    #[test]
+    fn projection_downweights_off_pattern_contamination() {
+        let theory = [0.5, 0.3, 0.2];
+        let clean = centre_grid(50.0, 30.0, 20.0); // raw 100, on-pattern
+        let contam = centre_grid(50.0, 30.0, 60.0); // raw 140, +40 off-pattern in M+2
+
+        let raw_ratio = integrate_grid(&contam, &theory, false)
+            / integrate_grid(&clean, &theory, false);
+        let proj_ratio = integrate_grid(&contam, &theory, true)
+            / integrate_grid(&clean, &theory, true);
+
+        assert!(raw_ratio > 1.35, "raw sum tracks the contamination (140/100), got {raw_ratio}");
+        assert!(
+            proj_ratio < raw_ratio,
+            "projection must be less inflated by off-pattern signal (proj {proj_ratio} vs raw {raw_ratio})"
+        );
     }
 }
