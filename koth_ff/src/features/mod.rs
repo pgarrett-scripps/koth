@@ -53,15 +53,22 @@ pub fn detect_features_with_recal(
 
     let use_im = im_array.iter().any(|&x| x != 0.0);
 
-    // Noise floor for Bhattacharyya scoring (mirrors scoring::score_features).
+    // Per-run noise floor for the predicted-intensity early-stop gate in
+    // `build_charge_candidate` (only consulted when
+    // `chain_predicted_intensity_gate` is true; default off). That gate compares
+    // it against an *apex*-basis predicted isotope intensity
+    // (`seed_hill.intensity_max × template_ratio`), so the floor is derived from
+    // the same apex statistic (`intensity_max`, 5th-pct × 0.8) rather than from
+    // `intensity_sum` — otherwise `intensity_max ≤ intensity_sum` would make the
+    // gate compare apex-vs-sum and fire stricter than intended.
     let min_intensity = {
-        let mut sums: Vec<f64> = hills.iter().map(|h| h.intensity_sum).collect();
-        sums.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        if sums.is_empty() {
+        let mut maxes: Vec<f64> = hills.iter().map(|h| h.intensity_max).collect();
+        maxes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if maxes.is_empty() {
             0.0
         } else {
-            let idx = (sums.len() as f64 * 0.05) as usize;
-            sums[idx] * 0.8
+            let idx = (maxes.len() as f64 * 0.05) as usize;
+            maxes[idx] * 0.8
         }
     };
 
