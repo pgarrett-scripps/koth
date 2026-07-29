@@ -49,15 +49,16 @@ pub struct FeaturesConfig {
     /// ~2.83× of expected).
     #[serde(default = "default_max_isotope_log2_ratio")]
     pub max_isotope_log2_ratio: f64,
-    /// When true (default, legacy behaviour), isotope-chain extension stops as
+    /// When true (legacy behaviour), isotope-chain extension stops as
     /// soon as the averagine-*predicted* intensity of the next isotope falls
     /// below the per-run noise floor (5th-pct hill intensity × 0.8), computed
     /// from the seed intensity *before the hill is searched for*. This cheaply
     /// trims decayed chain tails, but it also blocks legitimate low-abundance
     /// monoisotopic seeds from ever pairing their M+1: a seed already near the
     /// floor has a predicted M+1 below the floor, so the chain never forms and
-    /// the feature collapses to charge 0. When false, this predicted-intensity
-    /// break is skipped and chain extension is terminated purely by *evidence*:
+    /// the feature collapses to charge 0. When false (the default), this
+    /// predicted-intensity break is skipped and chain extension is terminated
+    /// purely by *evidence*:
     /// a missing hill (`find_neighbors` empty), `min_chain_cosine`, the
     /// `max_isotope_log2_ratio` intensity-ratio gate, `right_max_decrease`
     /// (found hill must be ≥ this fraction of the predecessor), and the
@@ -96,17 +97,17 @@ pub struct FeaturesConfig {
     /// Chromatographic-cosine **anchor** for isotope-chain extension: which hill
     /// each candidate isotope's cosine gate is measured against.
     ///
-    /// `"adjacent"` (default, legacy): anchor to the immediate predecessor in
-    /// the chain — for M+1 that is the seed, for M+k≥2 the previously-claimed
-    /// isotope hill. This is koth's deliberate choice: chains drift in S/N as
-    /// they extend from the seed, so anchoring far isotopes to the seed
-    /// over-rejects them. Default = byte-identical to legacy koth.
+    /// `"seed"` (the default): anchor *every* isotope's cosine to the
+    /// monoisotope seed hill (the convention biosaur2 / AlphaPept / Dinosaur all
+    /// use). The m/z step target and the intensity-ratio predecessor still step
+    /// from the immediate predecessor — only the cosine reference changes.
+    /// Rejects a far isotope that co-elutes with its neighbour but not with the
+    /// mono. Beat `"adjacent"` on the 20-run PXD003881 cohort (+0.31 pp recall);
+    /// see `default_cosine_anchor`.
     ///
-    /// `"seed"`: anchor *every* isotope's cosine to the monoisotope seed hill
-    /// (the convention biosaur2 / AlphaPept / Dinosaur all use). The m/z step
-    /// target and the intensity-ratio predecessor still step from the immediate
-    /// predecessor — only the cosine reference changes. Rejects a far isotope
-    /// that co-elutes with its neighbour but not with the mono.
+    /// `"adjacent"` (legacy): anchor to the immediate predecessor in the chain —
+    /// for M+1 that is the seed, for M+k≥2 the previously-claimed isotope hill.
+    /// koth's former default; byte-identical to the pre-2026-07 paper output.
     ///
     /// The per-extension cosine that feeds the composite `mean_cosine` is
     /// computed against whichever reference this selects (so the composite is
