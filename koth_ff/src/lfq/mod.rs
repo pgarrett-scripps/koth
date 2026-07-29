@@ -144,10 +144,35 @@ pub struct LfqConfig {
     /// this is an opt-in knob to be validated, not a new default.
     #[serde(default)]
     pub averagine_projection: bool,
+    /// (Experiment B / audit A2) Score each **decoy** cell against an averagine
+    /// isotope template and theoretical pattern computed from the DECOY's own
+    /// shifted mass (`neutral_mass + decoy_mz_shift_da`) rather than the target's
+    /// mass. Default-off reuses the target's template for the decoy —
+    /// byte-identical to the shipped paper q-values. When true the +11 Da decoy
+    /// is judged against the isotope envelope it actually sits on, removing the
+    /// target-template freebie a mis-massed decoy currently inherits on the
+    /// Bhattacharyya (QDA feature 2) and the co-elution theory weighting
+    /// (feature 3). Applies only to the TDC decoy grid; target scoring and all
+    /// reported intensities are unchanged. Default false.
+    #[serde(default)]
+    pub decoy_own_template: bool,
+    /// (Experiment B / audit A4) Co-elution value assigned to a grid cell with
+    /// fewer than two isotope rows carrying signal (a lone monoisotope — nothing
+    /// to co-elute). Applied identically to target and decoy cells. Default 1.0
+    /// (byte-identical paper: an un-judgeable cell gets the maximal, target-like
+    /// score, which hands noise-grabbing lone-hill decoys a free target-like
+    /// coordinate on QDA feature index 3). Lower it (e.g. 0.5) to make an
+    /// un-co-elutable cell neutral/penalised instead of a freebie.
+    #[serde(default = "default_lone_coelution")]
+    pub lone_coelution: f64,
 }
 
 fn default_min_spectral_bhattacharyya() -> f64 {
     0.1
+}
+
+fn default_lone_coelution() -> f64 {
+    1.0
 }
 
 fn default_normalize() -> String {
@@ -194,6 +219,8 @@ impl Default for LfqConfig {
             detected_use_grid: false,
             rt_spread_scoring: false,
             averagine_projection: false,
+            decoy_own_template: false,
+            lone_coelution: default_lone_coelution(),
         }
     }
 }
@@ -690,6 +717,47 @@ pub fn quantify(
         .map(|cf| crate::scoring::averagine::lookup_template(cf.neutral_mass))
         .collect();
 
+    // (Audit A2) Decoy-specific averagine template + theoretical pattern, computed
+    // from the DECOY's shifted neutral mass (target mass + `decoy_mz_shift_da`,
+    // the same +Da the decoy grid is placed at). Only consulted when
+    // `config.decoy_own_template` is set; otherwise the decoy reuses the target's
+    // template below (byte-identical to the shipped paper q-values). Precomputed
+    // once per feature, like `bc_templates`, so the hot loop stays allocation-free.
+    let decoy_bc_templates: Vec<[f64; K_PATTERN]> = if config.decoy_own_template {
+        consensus
+            .iter()
+            .map(|cf| {
+                crate::scoring::averagine::lookup_template(
+                    cf.neutral_mass + config.decoy_mz_shift_da,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let decoy_theoretical_patterns: Vec<Vec<f64>> = if config.decoy_own_template {
+        consensus
+            .iter()
+            .map(|cf| {
+                // Normalised averagine pattern at the decoy mass, truncated to the
+                // same length as the target's `theoretical_pattern` so the grid's
+                // `n_rows` trimming/weighting behaves identically to the target.
+                let k = cf.theoretical_pattern.len().min(K_PATTERN);
+                let full = crate::scoring::averagine::lookup_template(
+                    cf.neutral_mass + config.decoy_mz_shift_da,
+                );
+                let sum: f64 = full[..k].iter().sum();
+                if sum > 0.0 {
+                    full[..k].iter().map(|&x| x / sum).collect()
+                } else {
+                    vec![0.0; k]
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // Precompute each run's RT range once (from features — no hills needed).
     // `RunInput::rt_range` falls back to a full sweep of `run.features` when
     // `scan_times` is empty (it always is for the align pipeline), so calling it
@@ -818,10 +886,20 @@ pub fn quantify(
                     let dec_mz = corr_mz + config.decoy_mz_shift_da / cf.charge as f64;
                     let dec_rt = corr_rt
                         - config.decoy_rt_shift_pct * (run_rt_range.1 - run_rt_range.0);
+                    // (Audit A2) Judge the decoy against the averagine envelope at
+                    // its OWN shifted mass, not the target's, when the fix is on.
+                    let (dec_pattern, dec_bc) = if config.decoy_own_template {
+                        (
+                            decoy_theoretical_patterns[feat_idx].as_slice(),
+                            &decoy_bc_templates[feat_idx],
+                        )
+                    } else {
+                        (cf.theoretical_pattern.as_slice(), &bc_templates[feat_idx])
+                    };
                     entries.push(quantify_cell(
                         &mut grid, &mut scores, &mut col_totals, &mut obs,
                         &hills_vec, &sorted, &run.scan_times,
-                        &cf.theoretical_pattern, &bc_templates[feat_idx],
+                        dec_pattern, dec_bc,
                         config, &timers, feat_idx, run_idx, cf.charge,
                         dec_mz, dec_rt, corr_im, half_window,
                         rt_sigma_cols_at(dec_rt), true, false, None,

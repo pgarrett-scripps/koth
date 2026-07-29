@@ -112,7 +112,8 @@ pub fn score_grid(
     // trace across RT — "do the matched isotopes rise and fall together?". This
     // is the true inter-isotope cosine; it is orthogonal to the Bhattacharyya
     // pattern match. Rows with no signal are skipped; <2 signal rows → 1.0.
-    let coelution: f64 = isotope_coelution(&grid.intensities, theory, n_rows, n_cols);
+    let coelution: f64 =
+        isotope_coelution(&grid.intensities, theory, n_rows, n_cols, config.lone_coelution);
     scores.coelution = coelution as f32;
 
     // Averagine projection (opt-in, LfqConfig.averagine_projection): L2 norm of
@@ -197,9 +198,15 @@ pub fn score_grid(
 /// isotope-to-isotope co-elution quality in [0, 1]. Rows with no signal are
 /// skipped (absence is the spectral term's concern, not co-elution's); returns
 /// 1.0 when fewer than two rows carry signal (nothing to co-elute).
-fn isotope_coelution(intensities: &[Vec<f32>], theory: &[f64], n_rows: usize, n_cols: usize) -> f64 {
+fn isotope_coelution(
+    intensities: &[Vec<f32>],
+    theory: &[f64],
+    n_rows: usize,
+    n_cols: usize,
+    lone_value: f64,
+) -> f64 {
     if n_rows < 2 {
-        return 1.0;
+        return lone_value;
     }
     let row0 = &intensities[0];
     let (mut wsum, mut csum) = (0.0f64, 0.0f64);
@@ -231,7 +238,7 @@ fn isotope_coelution(intensities: &[Vec<f32>], theory: &[f64], n_rows: usize, n_
     if wsum > 0.0 {
         csum / wsum
     } else {
-        1.0
+        lone_value
     }
 }
 
@@ -289,21 +296,23 @@ mod spectral_tests {
             vec![0.5f32, 4.5, 0.5],
             vec![0.2f32, 1.8, 0.2],
         ];
-        let good = isotope_coelution(&coel, &theory, 3, 3);
+        let good = isotope_coelution(&coel, &theory, 3, 3, 1.0);
         // M+1 peaks at a different column than M → interference.
         let interfere = vec![
             vec![9.0f32, 1.0, 0.0],
             vec![0.0f32, 1.0, 9.0],
             vec![0.0f32, 0.0, 0.0],
         ];
-        let bad = isotope_coelution(&interfere, &theory, 3, 3);
+        let bad = isotope_coelution(&interfere, &theory, 3, 3, 1.0);
         assert!(good > 0.95, "co-eluting rows should score ~1, got {good}");
         assert!(bad < 0.5, "interfering rows should score low, got {bad}");
         assert!(good > bad);
 
         // A lone monoisotope (higher rows empty) cannot be judged → 1.0.
         let lone = vec![vec![0.0f32, 5.0, 0.0], vec![0.0f32; 3], vec![0.0f32; 3]];
-        assert_eq!(isotope_coelution(&lone, &theory, 3, 3), 1.0);
+        assert_eq!(isotope_coelution(&lone, &theory, 3, 3, 1.0), 1.0);
+        // A4: the lone-cell freebie is configurable — a penalised value flows through.
+        assert_eq!(isotope_coelution(&lone, &theory, 3, 3, 0.5), 0.5);
     }
 
     use crate::lfq::integrate::integrate;
