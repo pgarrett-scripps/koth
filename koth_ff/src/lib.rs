@@ -32,14 +32,26 @@ pub mod lfq;
 pub mod mem;
 pub mod models;
 pub mod output;
+pub mod pipeline;
 pub mod scoring;
 pub mod stats;
+
+// In-process / streaming API surface. Re-exported at the crate root so callers
+// write `koth_ff::run_pipeline` / `koth_ff::PipelineSink` without reaching into
+// the module path.
+pub use pipeline::{
+    run_pipeline, run_pipeline_from_spectra, run_pipeline_streaming,
+    run_pipeline_streaming_from_spectra, FeatureFindingOutput, PipelineOptions, PipelineSink,
+};
+
+// Re-export the core in-memory result types at the crate root so a downstream
+// crate (koth_tracer, uno) can name them without depending on the module layout.
+pub use models::{Feature, Hill, ScoredFeature, Spectrum};
 
 use std::path::Path;
 
 use config::{FeaturesConfig, FileConfig, HillsConfig, ScoringConfig};
 use error::KothError;
-use models::{Feature, Hill, ScoredFeature, Spectrum};
 use rand::seq::SliceRandom;
 
 /// Read MS1 spectra from an mzML file or Bruker .d directory.
