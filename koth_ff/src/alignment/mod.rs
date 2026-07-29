@@ -237,7 +237,13 @@ impl RunAlignment {
     /// Apply mass-PPM drift correction to a run mz value.
     /// `run_rt` should be the uncorrected run retention time.
     pub fn correct_mz(&self, mz: f64, run_rt: f64) -> f64 {
-        let rt_norm = anchors::normalize_rt(run_rt, self.run_rt_range);
+        // `mass_drift` is fit with x = ref_rt_norm (see `drift::fit_mass_drift`),
+        // so it must be evaluated on the reference-frame normalised RT — the same
+        // axis `predict_run_mz` uses. Warp the uncorrected run RT into reference
+        // space before normalising, rather than normalising against the run's own
+        // range (which would evaluate the fit off its own axis).
+        let ref_rt = self.warp_rt(run_rt);
+        let rt_norm = anchors::normalize_rt(ref_rt, self.ref_rt_range);
         let ppm = self.mass_drift.predict(rt_norm);
         mz / (1.0 + ppm / 1e6)
     }
