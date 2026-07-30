@@ -16,7 +16,7 @@ types (`Hill`, `Feature`, `ScoredFeature`, `Spectrum`) are re-exported there too
 // Options mirroring the binary's optional stages.
 pub struct PipelineOptions {
     pub scoring:  bool,   // default true;  false == the binary's --no-scoring
-    pub emit_ms2: bool,   // default false; true also detects DIA MS2 hills (mzML only)
+    pub emit_ms2: bool,   // default false; true also detects DIA MS2 hills (mzML + Bruker diaPASEF .d)
 }
 
 // Owned collect-all result (the uno shape).
@@ -92,7 +92,7 @@ The feature order and set handed to the sink are exactly what the file writer
 receives *before* its presentation step (which additionally drops `charge == 0`
 and sorts by descending intensity). That is what makes parity provable.
 
-## MS2 (DIA fragment hills) — opt-in, mzML-only
+## MS2 (DIA fragment hills) — opt-in (mzML + Bruker diaPASEF `.d`)
 
 By default the API is MS1-only and byte-for-byte the historic behavior. Set
 `PipelineOptions.emit_ms2 = true` (or call `run_pipeline_with_ms2`) to *also*
@@ -134,12 +134,30 @@ each hill — grouping is deterministic (sorted by `IsolationWindow::key`) and
 loses no hills. Wide/overlapping DIA schemes can legitimately map a precursor to
 more than one window; the filter above handles that naturally.
 
-### mzML-only caveat
+### Supported inputs and graceful degradation
 
-MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`) only. On Bruker `.d` and
-Thermo `.raw`, `emit_ms2` yields an **empty** MS2 set plus a warning, and the MS1
-result is completely unaffected — the file path degrades gracefully rather than
-erroring. (This mirrors the binary's `[file] ms2_hills_enabled` behavior.) The
+MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`) and **Bruker diaPASEF
+`.d`** (`--features tdf`):
+
+* **mzML** — one MS2 spectrum per precursor isolation window, as recorded.
+* **Bruker diaPASEF `.d`** — the fixed isolation windows are read directly from
+  each MS2 frame's quadrupole settings (`isolation_mz` ± `isolation_width/2`,
+  segmented by scan range). Each window segment of a frame is collapsed down the
+  ion-mobility axis with the **same** dnoise vertical-IM filter + watershed
+  centroiding as the MS1 Bruker reader, and emitted as one MS2 spectrum stamped
+  with that window. No conversion to mzML is needed. This runs only when the
+  caller opts into MS2; the MS1 Bruker output is byte-for-byte unchanged.
+
+Everything else degrades gracefully — `emit_ms2` yields an **empty** MS2 set plus
+a warning, leaving the MS1 result completely unaffected rather than erroring:
+
+* **Bruker ddaPASEF `.d`** — MS2 frames describe per-precursor selection, not
+  fixed windows; precursor reconstruction is out of scope, so no MS2 is emitted.
+  The mode is detected via `FrameReader::get_acquisition()` (DIAPASEF vs
+  DDAPASEF/Unknown).
+* **Thermo `.raw`** — MS1-only for MS2 purposes.
+
+(This mirrors the binary's `[file] ms2_hills_enabled` behavior.) The
 `run_pipeline_streaming_from_spectra` MS2 path splits a mixed-level in-memory
 stream internally (MS2 scans route to the MS2 detector and never pollute MS1).
 
@@ -162,7 +180,14 @@ stream internally (MS2 scans route to the MS2 detector and never pollute MS1).
   mapping is exercised.
 * `koth_ff/tests/pipeline_parity.rs` (`#[ignore]`, needs `--features tdf`):
   the same byte-identity check of `run_pipeline` vs the staged path on the real
-  `tests/data/example_dda.d` Bruker fixture.
+  `tests/data/example_dda.d` Bruker fixture; `emit_ms2_degrades_gracefully_on_bruker_d`
+  asserts a **ddaPASEF** `.d` yields no MS2 with the MS1 side unchanged; and
+  `bruker_diapasef_ms2` (points at a diaPASEF `.d`, override with
+  `KOTH_DIAPASEF_D`; skips if absent) asserts the fixed windows are recovered,
+  every MS2 hill carries its window, and the MS1 side stays byte-identical. The
+  `QuadrupoleSettings` → window-segment mapping itself
+  (`io::bruker::inner::window_segments`) is unit-tested under `--features tdf`
+  (half-open scan ranges, degenerate-row rejection) with no `.d` file needed.
 
 ## How the two consumers plug in
 

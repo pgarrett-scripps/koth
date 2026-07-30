@@ -79,8 +79,10 @@ fn run_pipeline_matches_binary_staged_path() {
 #[test]
 #[ignore = "reads a large .d fixture; run explicitly with --features tdf"]
 fn emit_ms2_degrades_gracefully_on_bruker_d() {
-    // MS2 is mzML-only. On a Bruker `.d`, requesting MS2 must NOT error and must
-    // NOT disturb the MS1 side — it just yields an empty MS2 set (with a warning).
+    // MS2 on Bruker `.d` is diaPASEF-only. `example_dda.d` is ddaPASEF, so
+    // requesting MS2 must NOT error and must NOT disturb the MS1 side — it just
+    // yields an empty MS2 set (with a warning). (A diaPASEF `.d` instead recovers
+    // per-window MS2 hills — see `bruker_diapasef_ms2` below.)
     let path = fixture();
     assert!(path.is_dir(), "fixture missing: {}", path.display());
 
@@ -101,4 +103,61 @@ fn emit_ms2_degrades_gracefully_on_bruker_d() {
         features_tsv(&baseline.features),
         "MS1 features unaffected by emit_ms2 on .d"
     );
+}
+
+/// Smallest diaPASEF `.d` on this machine (not checked into the repo). Override
+/// with `KOTH_DIAPASEF_D`. The test skips (does not fail) when it is absent, so
+/// CI without the raw data is unaffected.
+fn diapasef_fixture() -> PathBuf {
+    std::env::var("KOTH_DIAPASEF_D").map(PathBuf::from).unwrap_or_else(|_| {
+        PathBuf::from(
+            "/home/patrick-garrett/Repos/d_noise/benchmark/data/dia_5min/raw/\
+             LFQ_Ultra2_diaPASEF_5min_50ng_Condition_A_REP1.d",
+        )
+    })
+}
+
+#[test]
+#[ignore = "reads a large diaPASEF .d fixture; run explicitly with --features tdf"]
+fn bruker_diapasef_ms2() {
+    // End-to-end: on a real diaPASEF `.d`, `emit_ms2` must recover the fixed
+    // isolation windows and stamp every MS2 hill with the window it came from,
+    // while leaving the MS1 side byte-identical to a plain MS1 run.
+    let path = diapasef_fixture();
+    if !path.is_dir() {
+        eprintln!("SKIP bruker_diapasef_ms2: no diaPASEF fixture at {}", path.display());
+        return;
+    }
+
+    let config = KothConfig::default();
+
+    let baseline = run_pipeline(&path, &config, &PipelineOptions::default()).expect("baseline");
+    let with_ms2 = run_pipeline_with_ms2(&path, &config, &PipelineOptions::default())
+        .expect("with_ms2 on diaPASEF .d must not error");
+
+    // MS1 side is untouched by turning MS2 on.
+    assert_eq!(
+        hills_tsv(&with_ms2.hills),
+        hills_tsv(&baseline.hills),
+        "MS1 hills unaffected by emit_ms2 on diaPASEF .d"
+    );
+
+    // MS2 hills exist and every one carries a valid isolation window.
+    assert!(!with_ms2.ms2_hills.is_empty(), "diaPASEF .d must yield MS2 hills");
+    assert!(
+        with_ms2.ms2_hills.iter().all(|h| h.isolation_window.is_some()),
+        "every MS2 hill must carry its isolation window"
+    );
+
+    // Windows recovered (this 5-min diaPASEF method has 8 groups x 3 = 24).
+    let windows = koth_ff::group_ms2_hills_by_window(with_ms2.ms2_hills.clone());
+    eprintln!(
+        "diaPASEF MS2: {} hills across {} isolation windows",
+        with_ms2.ms2_hills.len(),
+        windows.len()
+    );
+    assert!(windows.len() >= 2, "expected multiple DIA windows, got {}", windows.len());
+    for (w, _) in &windows {
+        assert!(w.lower < w.upper && w.lower <= w.target && w.target <= w.upper);
+    }
 }

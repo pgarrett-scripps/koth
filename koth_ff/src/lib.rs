@@ -80,9 +80,15 @@ pub fn run_hills_streaming(path: &Path, config: &HillsConfig, file: &FileConfig)
     hills_streaming_inner(path, config, file)
 }
 
-/// Stage 1 (MS2): Detect MS2 hills from an mzML file, partitioned by the
-/// precursor isolation window of each MS2 spectrum (DIA channels).
-/// Only mzML is supported — Bruker .d MS2 frames are not yet handled.
+/// Stage 1 (MS2): Detect MS2 hills partitioned by the precursor isolation window
+/// of each MS2 spectrum (DIA channels).
+///
+/// Supported inputs: mzML (`.mzML`/`.mzML.gz`) and Bruker **diaPASEF** `.d`
+/// (`--features tdf`). On a diaPASEF `.d` the fixed isolation windows are read
+/// straight from the raw frames' quadrupole settings and each window segment is
+/// IM-collapsed into an MS2 spectrum (see [`io::bruker::read_bruker_ms2`]).
+/// ddaPASEF `.d` and Thermo `.raw` are unsupported for MS2: they yield an empty
+/// set plus a warning, leaving MS1 unaffected.
 pub fn run_ms2_hills_streaming(
     path: &Path,
     config: &HillsConfig,
@@ -93,9 +99,34 @@ pub fn run_ms2_hills_streaming(
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_lowercase();
+
+    #[cfg(feature = "tdf")]
+    if name.ends_with(".d")
+        || (path.is_dir() && path.extension().and_then(|e| e.to_str()) == Some("d"))
+    {
+        // Bruker diaPASEF: stream one MS2 spectrum per isolation-window segment
+        // out of the raw `.d`, then group by window exactly as the mzML path
+        // does. ddaPASEF / unknown acquisitions return an empty Vec (with a
+        // warning) from `read_bruker_ms2`, so MS1 is left untouched.
+        let spectra = io::bruker::read_bruker_ms2(path, file)?;
+        if spectra.is_empty() {
+            return Ok(Vec::new());
+        }
+        log::info!(
+            "Streaming MS2 hill detection from {} ({} Bruker diaPASEF MS2 spectra)",
+            path.display(),
+            spectra.len()
+        );
+        return Ok(hills::detect_ms2_hills_from_iter(
+            spectra.into_iter(),
+            config,
+            file,
+        ));
+    }
+
     if !(name.ends_with(".mzml") || name.ends_with(".mzml.gz")) {
         log::warn!(
-            "MS2 hill detection only supports mzML inputs; skipping '{}'",
+            "MS2 hill detection supports mzML and Bruker diaPASEF .d inputs only; skipping '{}'",
             path.display()
         );
         return Ok(Vec::new());
