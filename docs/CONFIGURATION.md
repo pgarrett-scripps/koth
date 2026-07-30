@@ -115,12 +115,41 @@ the learned offset and replaces the fixed isotope-match tolerance with
 
 | Key | Type | Default | What it does / what to set |
 |---|---|---|---|
-| `mz_recalibration` | bool | `false` → **`true`** | Master switch. The **region-adaptive tolerance is the real win** (position-only recal is a documented no-op on well-calibrated instruments). Orbitrap: −5.8% spurious features, recall flat, CV 23.76→23.25%. Bruker (bigger win, since fixed 15 ppm ≫ real ~2.8 ppm spread): recall +1.06 pp, CV 13.89→13.76%. Overridable via `--recalibrate`. |
+| `mz_recalibration` | bool | `false` → **`true`** | Master switch. The **region-adaptive tolerance is the real win** (position-only recal is a documented no-op on well-calibrated instruments). It is a **precision** mechanism, not a recall one — see the measured ablation below. Overridable via `--recalibrate`. |
 | `mz_recalibration_mz_bins` | usize | `20` | m/z bins in the recalibration surface. Default. |
 | `mz_recalibration_rt_bins` | usize | `8` | RT bins in the recalibration surface. Default. |
 | `mz_recalibration_min_samples` | usize | `50` | Min residuals a cell needs before its own median is trusted (else falls back to marginal → global median). Default. |
 | `mz_recalibration_tol_sigma_mult` | f64 | `4.0` | The `N` in `N × σ` adaptive tolerance. **`4.0`**, finalized 2026-07-09 (was 3.0): a balanced single default within ~0.2 pp of each platform's optimum (5.0 Orbitrap / 3.0 Bruker). |
 | `mz_recalibration_tol_floor_ppm` | f64 | `1.0` | Lower ppm bound so a tiny σ in a sparse region can't collapse the window. Default. |
+
+**Measured on/off ablation (2026-07-30).** Both cohorts, all other settings at
+the shipped defaults, recall scored under the shared 10 ppm + RT-interval join.
+This supersedes an earlier entry here that claimed "Orbitrap recall flat" and
+"Bruker recall +1.06 pp"; neither reproduced, and its CV figures (23.76→23.25 %
+Orbitrap, 13.89→13.76 % Bruker) predate the config alignment and match no
+current run.
+
+| Metric | Orbitrap off | Orbitrap on | Bruker off | Bruker on |
+|---|---|---|---|---|
+| PSM recall | 79.85 % | **79.43 %** | 74.97 % | **75.13 %** |
+| Median CV | 13.97 % | **13.94 %** | 9.95 % | **9.91 %** |
+| HUMAN IQR | 0.287 | **0.285** | 0.399 | **0.398** |
+| FFCR | 12.70 % | **12.50 %** | 16.42 % | **16.41 %** |
+| Features | 2.78 M | 2.67 M | 2.03 M | 2.02 M |
+
+Read this as a **precision/recall trade**, not a free win. Every quantitative
+metric improves on both platforms, but by little (largest: Orbitrap FFCR,
+0.20 pp). Recall moves in *opposite* directions — −0.42 pp Orbitrap, +0.16 pp
+Bruker — both significant on an exact McNemar test over paired per-PSM outcomes
+(p = 1.4e-62 and 1.2e-15). The Orbitrap recall loss is the price of the tighter
+isotope-match window: it removes 3.9 % of features, some of which were matching
+PSMs. Paired per-peptide ΔCV on Bruker is −0.0018 pp (Wilcoxon p = 0.007,
+rank-biserial r = −0.009): significant and negligible at once, because n ≈ 82 k
+paired cells. Keep it on for the precision and the lower spurious-feature count;
+do not cite it as a recall win. Reproducers:
+`benchmark/scripts/16_peptide_lfq.py` (Orbitrap quant),
+`benchmark/scripts/bruker_validation.py` (Bruker), paired tests in
+`paper/si/si-body.typ` @tab:si-recal-ablation.
 
 #### Bruker vertical-IM filter (Stage 1) — inert on Orbitrap mzML
 The `.d` front-end runs the `dnoise` vertical-IM feature filter over the raw
