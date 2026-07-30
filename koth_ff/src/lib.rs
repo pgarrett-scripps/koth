@@ -97,16 +97,10 @@ pub fn run_ms2_hills_streaming(
     config: &HillsConfig,
     file: &FileConfig,
 ) -> Result<Vec<Hill>, KothError> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let fmt = io::detect_format(path);
 
     #[cfg(feature = "tdf")]
-    if name.ends_with(".d")
-        || (path.is_dir() && path.extension().and_then(|e| e.to_str()) == Some("d"))
-    {
+    if fmt == io::InputFormat::BrukerD {
         // Bruker diaPASEF: stream one MS2 spectrum per isolation-window segment
         // out of the raw `.d`, then group by window exactly as the mzML path
         // does. ddaPASEF / unknown acquisitions return an empty Vec (with a
@@ -128,7 +122,7 @@ pub fn run_ms2_hills_streaming(
     }
 
     #[cfg(feature = "thermo")]
-    if name.ends_with(".raw") {
+    if fmt == io::InputFormat::ThermoRaw {
         // Thermo DIA: one MS2 spectrum per MS2 scan, stamped with its precursor
         // isolation window, then grouped by window exactly as the mzML path does.
         // A DDA `.raw` (or one that cannot be confidently classified as DIA)
@@ -150,7 +144,7 @@ pub fn run_ms2_hills_streaming(
         ));
     }
 
-    if !(name.ends_with(".mzml") || name.ends_with(".mzml.gz")) {
+    if !matches!(fmt, io::InputFormat::Mzml | io::InputFormat::MzmlGz) {
         log::warn!(
             "MS2 hill detection supports mzML, Bruker diaPASEF .d, and Thermo DIA .raw \
              (.raw needs --features thermo) inputs only; skipping '{}'",
@@ -164,20 +158,20 @@ pub fn run_ms2_hills_streaming(
 }
 
 fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
+    let fmt = io::detect_format(path);
+
     #[cfg(feature = "tdf")]
-    {
-        if path.extension().and_then(|e| e.to_str()) == Some("d") || path.is_dir() {
-            // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
-            let mut spectra = io::read_spectra(path, file)?;
-            if file.decoy_mode {
-                log::info!(
-                    "Decoy mode: shuffling {} Bruker spectra before hill detection",
-                    spectra.len()
-                );
-                spectra.shuffle(&mut rand::thread_rng());
-            }
-            return Ok(hills::detect_hills(&spectra, config, file));
+    if fmt == io::InputFormat::BrukerD {
+        // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
+        let mut spectra = io::read_spectra(path, file)?;
+        if file.decoy_mode {
+            log::info!(
+                "Decoy mode: shuffling {} Bruker spectra before hill detection",
+                spectra.len()
+            );
+            spectra.shuffle(&mut rand::thread_rng());
         }
+        return Ok(hills::detect_hills(&spectra, config, file));
     }
 
     // Thermo .raw: no streaming API, so batch-load all MS1 spectra (mirrors the
@@ -185,7 +179,7 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
     // built with `--features thermo`, or returns a clear "rebuild with
     // --features thermo" error otherwise — handled here (rather than the mzML
     // fall-through below) so the message is actionable in both builds.
-    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("raw")) {
+    if fmt == io::InputFormat::ThermoRaw {
         let mut spectra = io::read_spectra(path, file)?;
         if file.decoy_mode {
             log::info!(
