@@ -36,10 +36,25 @@
 //!
 //! * **`koth_tracer`** (DIA pseudo-spectra) implements [`PipelineSink`]: it
 //!   takes ownership of the hill set in `on_hills` to build its trace index,
-//!   then consumes features incrementally in `on_feature`.
+//!   then consumes features incrementally in `on_feature`. With
+//!   [`PipelineOptions::emit_ms2`] it *also* receives the DIA fragment hills in
+//!   `on_ms2_hills`, partitioned by precursor isolation window, so it can map a
+//!   precursor feature to the window(s) that isolated it.
 //! * **`uno`** (MS1 search) just wants the final feature list: it calls
 //!   [`run_pipeline`] / [`run_pipeline_from_spectra`] and reads
 //!   [`FeatureFindingOutput::features`].
+//!
+//! # MS2 (DIA fragment hills) — opt-in, mzML-only
+//!
+//! MS2 fragment hill detection ([`crate::run_ms2_hills_streaming`]) is exposed
+//! through the *same* seam but is **off by default**. When
+//! [`PipelineOptions::emit_ms2`] is set, the MS2 hills are delivered once via
+//! [`PipelineSink::on_ms2_hills`] (or [`FeatureFindingOutput::ms2_hills`]) after
+//! the whole MS1 side. Each MS2 hill carries its precursor isolation window in
+//! [`Hill::isolation_window`], and [`group_ms2_hills_by_window`] groups them per
+//! DIA channel. MS2 is **mzML-only**; Bruker `.d` / Thermo `.raw` degrade to an
+//! empty MS2 set + a warning, leaving MS1 untouched. With `emit_ms2` false the
+//! MS1 path is byte-for-byte identical to before.
 
 use std::path::Path;
 
@@ -47,7 +62,7 @@ use rand::seq::SliceRandom;
 
 use crate::config::KothConfig;
 use crate::error::KothError;
-use crate::models::{Feature, Hill, ScoredFeature, Spectrum};
+use crate::models::{Feature, Hill, IsolationWindow, ScoredFeature, Spectrum};
 
 /// Knobs that mirror the `koth_ff` binary's optional stages. Everything else is
 /// taken from the [`KothConfig`] passed in explicitly.
@@ -57,11 +72,24 @@ pub struct PipelineOptions {
     /// binary's default; `false` mirrors `--no-scoring` (features are still
     /// emitted, wrapped as [`ScoredFeature`] with zeroed scores).
     pub scoring: bool,
+    /// Also run MS2 hill detection (DIA, partitioned by precursor isolation
+    /// window) over the same input, and deliver the finalized MS2 hill set via
+    /// [`PipelineSink::on_ms2_hills`] (and [`FeatureFindingOutput::ms2_hills`]).
+    ///
+    /// **Default `false`.** When `false`, the MS1 feature path is byte-for-byte
+    /// unchanged — no MS2 reader is opened and no MS2 hook fires; this exactly
+    /// reproduces the historic MS1-only [`run_pipeline`] behavior.
+    ///
+    /// **mzML only.** MS2 detection mirrors [`crate::run_ms2_hills_streaming`]:
+    /// Bruker `.d` and Thermo `.raw` inputs are not handled and yield an empty
+    /// MS2 set plus a warning (the MS1 result is unaffected). MS2 detection is
+    /// independent of MS1 feature finding — the two share only the input.
+    pub emit_ms2: bool,
 }
 
 impl Default for PipelineOptions {
     fn default() -> Self {
-        Self { scoring: true }
+        Self { scoring: true, emit_ms2: false }
     }
 }
 
@@ -86,6 +114,46 @@ pub trait PipelineSink {
     fn on_feature(&mut self, feature: ScoredFeature) {
         let _ = feature;
     }
+
+    /// Called **at most once**, with the whole finalized MS2 hill set, by value,
+    /// **only when [`PipelineOptions::emit_ms2`] is `true`**. Default no-op.
+    ///
+    /// MS2 hills are the DIA fragment traces produced by
+    /// [`crate::run_ms2_hills_streaming`] — detected independently of MS1, and
+    /// partitioned by precursor isolation window. Each hill carries its window
+    /// in [`Hill::isolation_window`] (`Some(..)` for every MS2 hill), so a
+    /// consumer can map an MS1 precursor feature to the window(s) that isolated
+    /// it by testing `window.lower <= precursor_mz <= window.upper`. Group them
+    /// per window with [`group_ms2_hills_by_window`].
+    ///
+    /// Called after `on_hills` and all `on_feature` calls, so a consumer already
+    /// holds the MS1 side before the MS2 hills arrive. Not called at all when
+    /// `emit_ms2` is `false`, nor (with a warning) when the input is not mzML.
+    fn on_ms2_hills(&mut self, hills: Vec<Hill>) {
+        let _ = hills;
+    }
+}
+
+/// Group a finalized MS2 hill set by its precursor isolation window, in a
+/// deterministic order (sorted by [`IsolationWindow::key`]).
+///
+/// MS1 hills (those with `isolation_window == None`) are skipped, so this is
+/// safe to pass any hill slice. This is the convenience shape a `koth_tracer`
+/// consumer uses to walk one DIA channel at a time; the same information is
+/// available per hill via [`Hill::isolation_window`] without grouping.
+pub fn group_ms2_hills_by_window(hills: Vec<Hill>) -> Vec<(IsolationWindow, Vec<Hill>)> {
+    use std::collections::BTreeMap;
+    // BTreeMap keyed on the stable integer window key → deterministic order.
+    let mut groups: BTreeMap<(i64, i64, i64), (IsolationWindow, Vec<Hill>)> = BTreeMap::new();
+    for h in hills {
+        let Some(iw) = h.isolation_window else { continue };
+        groups
+            .entry(iw.key())
+            .or_insert_with(|| (iw, Vec::new()))
+            .1
+            .push(h);
+    }
+    groups.into_values().collect()
 }
 
 /// Owned, in-memory result of a full run — the convenience shape for consumers
@@ -100,6 +168,11 @@ pub trait PipelineSink {
 pub struct FeatureFindingOutput {
     pub hills: Vec<Hill>,
     pub features: Vec<ScoredFeature>,
+    /// Finalized MS2 (DIA fragment) hills, partitioned by precursor isolation
+    /// window — populated **only** when [`PipelineOptions::emit_ms2`] is `true`
+    /// (empty otherwise). Each carries its window in [`Hill::isolation_window`];
+    /// group with [`group_ms2_hills_by_window`].
+    pub ms2_hills: Vec<Hill>,
 }
 
 /// Wrap an unscored [`Feature`] as a [`ScoredFeature`] with zeroed scores —
@@ -162,7 +235,17 @@ pub fn run_pipeline_streaming<S: PipelineSink>(
     sink: &mut S,
 ) -> Result<(), KothError> {
     let hills = crate::run_hills_streaming(path, &config.hills, &config.file)?;
-    drive_from_hills(hills, config, opts, sink)
+    drive_from_hills(hills, config, opts, sink)?;
+    // MS2 is opt-in and independent of MS1: only after the whole MS1 side has
+    // been delivered do we (re)read the input for DIA fragment hills. When
+    // `emit_ms2` is false this branch is skipped entirely, so the MS1-only path
+    // is byte-for-byte unchanged. mzML-only: `.d`/`.raw` return an empty set +
+    // warning via `run_ms2_hills_streaming`.
+    if opts.emit_ms2 {
+        let ms2 = crate::run_ms2_hills_streaming(path, &config.hills, &config.file)?;
+        sink.on_ms2_hills(ms2);
+    }
+    Ok(())
 }
 
 /// Run the full pipeline from an in-memory iterator of spectra, streaming
@@ -182,6 +265,39 @@ where
     I: Iterator<Item = Spectrum>,
     S: PipelineSink,
 {
+    if opts.emit_ms2 {
+        // MS2 hills are detected over the same spectra as MS1, but a streaming
+        // iterator can only be consumed once — so when MS2 is requested we
+        // buffer the input once and run both detectors over it (MS2 is
+        // independent of MS1). This mirrors what the file path does with two
+        // reads, without a second pass over the source. Detect MS2 from the
+        // *unshuffled* buffer (isolation-window hills need RT order); the MS1
+        // decoy shuffle, if any, applies only to the MS1 path below.
+        let buf: Vec<Spectrum> = spectra.collect();
+        // MS2 detector filters to `ms_level == 2` internally, so hand it the
+        // whole buffer. `detect_ms2_hills_from_iter` groups by isolation window.
+        let ms2 = crate::hills::detect_ms2_hills_from_iter(
+            buf.iter().cloned(),
+            &config.hills,
+            &config.file,
+        );
+        // The MS1 detector does *not* filter by level (it processes every
+        // spectrum it is given), so we must exclude MS2 scans here — otherwise
+        // fragment peaks would pollute the MS1 hills. On the file path the MS1
+        // and MS2 readers are already separate streams; this reproduces that.
+        let ms1: Vec<Spectrum> = buf.into_iter().filter(|s| s.ms_level != 2).collect();
+        let hills = if config.file.decoy_mode {
+            let mut ms1 = ms1;
+            ms1.shuffle(&mut rand::thread_rng());
+            crate::hills::detect_hills_from_iter(ms1.into_iter(), &config.hills, &config.file)
+        } else {
+            crate::hills::detect_hills_from_iter(ms1.into_iter(), &config.hills, &config.file)
+        };
+        drive_from_hills(hills, config, opts, sink)?;
+        sink.on_ms2_hills(ms2);
+        return Ok(());
+    }
+
     let hills = if config.file.decoy_mode {
         // Decoy mode needs the full set to shuffle before detection, matching
         // `crate::run_hills` / the binary's mzML decoy branch.
@@ -206,6 +322,9 @@ impl PipelineSink for CollectingSink {
     }
     fn on_feature(&mut self, feature: ScoredFeature) {
         self.out.features.push(feature);
+    }
+    fn on_ms2_hills(&mut self, hills: Vec<Hill>) {
+        self.out.ms2_hills = hills;
     }
 }
 
@@ -233,6 +352,26 @@ where
 {
     let mut sink = CollectingSink::default();
     run_pipeline_streaming_from_spectra(spectra, config, opts, &mut sink)?;
+    Ok(sink.out)
+}
+
+/// Convenience: run the full pipeline **plus** MS2 (DIA fragment) hill detection
+/// from a file path, collecting MS1 hills, MS1 features, and MS2 hills into owned
+/// vectors. The combined shape a `koth_tracer` consumer uses when it wants both
+/// sides at once rather than a streaming sink.
+///
+/// This forces MS2 emission on (equivalent to setting
+/// [`PipelineOptions::emit_ms2`] `true`); the rest of `opts` is honored as-is.
+/// mzML-only for the MS2 side: Bruker `.d` / Thermo `.raw` yield an empty
+/// `ms2_hills` plus a warning, leaving the MS1 result unaffected.
+pub fn run_pipeline_with_ms2(
+    path: &Path,
+    config: &KothConfig,
+    opts: &PipelineOptions,
+) -> Result<FeatureFindingOutput, KothError> {
+    let opts = PipelineOptions { emit_ms2: true, ..opts.clone() };
+    let mut sink = CollectingSink::default();
+    run_pipeline_streaming(path, config, &opts, &mut sink)?;
     Ok(sink.out)
 }
 

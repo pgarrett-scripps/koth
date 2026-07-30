@@ -40,13 +40,14 @@ pub mod stats;
 // write `koth_ff::run_pipeline` / `koth_ff::PipelineSink` without reaching into
 // the module path.
 pub use pipeline::{
-    run_pipeline, run_pipeline_from_spectra, run_pipeline_streaming,
-    run_pipeline_streaming_from_spectra, FeatureFindingOutput, PipelineOptions, PipelineSink,
+    group_ms2_hills_by_window, run_pipeline, run_pipeline_from_spectra, run_pipeline_streaming,
+    run_pipeline_streaming_from_spectra, run_pipeline_with_ms2, FeatureFindingOutput,
+    PipelineOptions, PipelineSink,
 };
 
 // Re-export the core in-memory result types at the crate root so a downstream
 // crate (koth_tracer, uno) can name them without depending on the module layout.
-pub use models::{Feature, Hill, ScoredFeature, Spectrum};
+pub use models::{Feature, Hill, IsolationWindow, ScoredFeature, Spectrum};
 
 use std::path::Path;
 
