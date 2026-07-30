@@ -6,14 +6,19 @@
 //! cargo run --release -p koth_ff --example streaming_api -- path/to/run.mzML
 //! ```
 //!
-//! Neither consumer below writes or reads any intermediate parquet/tsv file:
-//! hills and features are obtained directly as owned Rust structs in memory.
+//! None of the consumers below writes or reads any intermediate parquet/tsv
+//! file: hills and features are obtained directly as owned Rust structs in
+//! memory. The third consumer (`tracer_with_ms2`) also pulls the DIA MS2
+//! fragment hills, partitioned by isolation window, in the same in-process call
+//! — mzML only; on Bruker `.d` / Thermo `.raw` the MS2 set is empty (with a
+//! warning) and the MS1 side is unaffected.
 
 use std::path::PathBuf;
 
 use koth_ff::{
-    config::KothConfig, run_pipeline, run_pipeline_streaming, Feature, Hill, PipelineOptions,
-    PipelineSink, ScoredFeature,
+    config::KothConfig, group_ms2_hills_by_window, run_pipeline, run_pipeline_streaming,
+    run_pipeline_with_ms2, Feature, Hill, IsolationWindow, PipelineOptions, PipelineSink,
+    ScoredFeature,
 };
 
 // ---------------------------------------------------------------------------
@@ -89,6 +94,45 @@ fn tracer_style(path: &std::path::Path, config: &KothConfig) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// koth_tracer with MS2: get MS1 precursor features AND the DIA fragment hills,
+// partitioned by isolation window, in one in-process call — no files. Then map
+// each precursor to the window(s) that isolated it. mzML only for the MS2 side.
+// ---------------------------------------------------------------------------
+fn tracer_with_ms2(path: &std::path::Path, config: &KothConfig) {
+    // `run_pipeline_with_ms2` forces MS2 emission on; equivalently, set
+    // `PipelineOptions { emit_ms2: true, ..Default::default() }` on any entry.
+    let out = run_pipeline_with_ms2(path, config, &PipelineOptions::default())
+        .expect("pipeline with ms2");
+
+    // Group the flat MS2 hill set into DIA channels (each hill already carries
+    // its window in `hill.isolation_window`; this is just the convenience view).
+    let windows: Vec<(IsolationWindow, Vec<Hill>)> = group_ms2_hills_by_window(out.ms2_hills);
+    println!(
+        "[tracer+ms2] {} MS1 features, {} DIA isolation windows",
+        out.features.len(),
+        windows.len()
+    );
+
+    // Precursor -> window mapping: a precursor feature is isolated by every
+    // window whose [lower, upper] contains its (charge-1) precursor m/z.
+    for f in out.features.iter().filter(|f| f.feature.charge > 0).take(3) {
+        let mz = f.feature.monoisotopic_mz(); // precursor m/z of the feature
+        let isolating: Vec<&(IsolationWindow, Vec<Hill>)> = windows
+            .iter()
+            .filter(|(w, _)| w.lower <= mz && mz <= w.upper)
+            .collect();
+        let n_frag: usize = isolating.iter().map(|(_, hs)| hs.len()).sum();
+        println!(
+            "[tracer+ms2]   precursor m/z {:.4} z{} -> {} window(s), {} candidate fragment hills",
+            mz,
+            f.feature.charge,
+            isolating.len(),
+            n_frag
+        );
+    }
+}
+
 fn main() {
     let path: PathBuf = std::env::args()
         .nth(1)
@@ -98,4 +142,5 @@ fn main() {
 
     tracer_style(&path, &config);
     uno_style(&path, &config);
+    tracer_with_ms2(&path, &config);
 }
