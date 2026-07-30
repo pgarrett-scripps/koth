@@ -71,7 +71,7 @@ fn ensure_dotnet_root() {
 pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
     ensure_dotnet_root();
     let mut reader = RawFileReader::open(path).map_err(|e| {
-        KothError::TdfError(format!(
+        KothError::ThermoError(format!(
             "could not open Thermo .raw file '{}': {e} \
              (a .NET 8 runtime must be installed for native .raw reading)",
             path.display()
@@ -277,7 +277,7 @@ fn precursor_window(spec: &RawSpectrum) -> Option<IsolationWindow> {
 pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
     ensure_dotnet_root();
     let mut reader = RawFileReader::open(path).map_err(|e| {
-        KothError::TdfError(format!(
+        KothError::ThermoError(format!(
             "could not open Thermo .raw file '{}': {e} \
              (a .NET 8 runtime must be installed for native .raw reading)",
             path.display()

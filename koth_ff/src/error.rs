@@ -15,6 +15,11 @@ pub enum KothError {
     #[error("Bruker TDF error: {0}")]
     TdfError(String),
 
+    // Ungated: the `thermo` feature does not enable `tdf`, so the Thermo reader
+    // needs an error variant that exists in a thermo-only build.
+    #[error("Thermo .raw error: {0}")]
+    ThermoError(String),
+
     #[error("CSV write error: {0}")]
     CsvError(#[from] csv::Error),
 
