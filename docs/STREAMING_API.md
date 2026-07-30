@@ -16,7 +16,7 @@ types (`Hill`, `Feature`, `ScoredFeature`, `Spectrum`) are re-exported there too
 // Options mirroring the binary's optional stages.
 pub struct PipelineOptions {
     pub scoring:  bool,   // default true;  false == the binary's --no-scoring
-    pub emit_ms2: bool,   // default false; true also detects DIA MS2 hills (mzML + Bruker diaPASEF .d)
+    pub emit_ms2: bool,   // default false; true also detects DIA MS2 hills (mzML + Bruker diaPASEF .d + Thermo DIA .raw)
 }
 
 // Owned collect-all result (the uno shape).
@@ -136,8 +136,8 @@ more than one window; the filter above handles that naturally.
 
 ### Supported inputs and graceful degradation
 
-MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`) and **Bruker diaPASEF
-`.d`** (`--features tdf`):
+MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`), **Bruker diaPASEF `.d`**
+(`--features tdf`), and **Thermo DIA `.raw`** (`--features thermo`):
 
 * **mzML** — one MS2 spectrum per precursor isolation window, as recorded.
 * **Bruker diaPASEF `.d`** — the fixed isolation windows are read directly from
@@ -147,6 +147,14 @@ MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`) and **Bruker diaPASEF
   centroiding as the MS1 Bruker reader, and emitted as one MS2 spectrum stamped
   with that window. No conversion to mzML is needed. This runs only when the
   caller opts into MS2; the MS1 Bruker output is byte-for-byte unchanged.
+* **Thermo DIA `.raw`** — each MS2 scan's precursor isolation window is read from
+  the Thermo `RawFileReader` (`precursor.isolation_window()` → absolute
+  `lower`/`target`/`upper` m/z, falling back to the precursor m/z as center) and
+  one centroided MS2 spectrum is emitted per scan, reusing the **same** scan→peaks
+  conversion as the MS1 `.raw` reader. Orbitrap scans are 1-D centroids (no ion
+  mobility), so there is no per-scan segmentation — one MS2 scan → one spectrum.
+  DIA is detected first (below); only a DIA verdict emits MS2. Runs only under
+  `emit_ms2`; the MS1 `.raw` output is byte-for-byte unchanged.
 
 Everything else degrades gracefully — `emit_ms2` yields an **empty** MS2 set plus
 a warning, leaving the MS1 result completely unaffected rather than erroring:
@@ -155,7 +163,17 @@ a warning, leaving the MS1 result completely unaffected rather than erroring:
   fixed windows; precursor reconstruction is out of scope, so no MS2 is emitted.
   The mode is detected via `FrameReader::get_acquisition()` (DIAPASEF vs
   DDAPASEF/Unknown).
-* **Thermo `.raw`** — MS1-only for MS2 purposes.
+* **Thermo DDA `.raw`** — detected heuristically: a first, signal-free pass
+  collects the MS2 isolation windows and computes their **mean recurrence**
+  (`n_ms2 / distinct_windows`). A fixed DIA schedule revisits a small window set
+  every cycle (recurrence >> 1); DDA selects data-dependent precursors that each
+  appear ~once (recurrence ~= 1). DIA requires a small distinct-window count and
+  recurrence >= 3, with a floor of 8 MS2 scans; otherwise the file is treated as
+  DDA and no MS2 is emitted (no DDA precursor reconstruction, MS1 untouched).
+  *Known failure modes:* targeted **PRM/tMS2** (fixed repeating inclusion list)
+  is classified as DIA; **all-ion / MSe / bbCID** shows up as a 1-2 channel DIA;
+  highly-multiplexed / scanning-quad DIA with near-unique per-scan centers would
+  be missed. See `io::thermo::is_dia_schedule` for the full rationale.
 
 (This mirrors the binary's `[file] ms2_hills_enabled` behavior.) The
 `run_pipeline_streaming_from_spectra` MS2 path splits a mixed-level in-memory
@@ -188,6 +206,15 @@ stream internally (MS2 scans route to the MS2 detector and never pollute MS1).
   `QuadrupoleSettings` → window-segment mapping itself
   (`io::bruker::inner::window_segments`) is unit-tested under `--features tdf`
   (half-open scan ranges, degenerate-row rejection) with no `.d` file needed.
+* `koth_ff/tests/thermo_dia_ms2.rs` (`#[ignore]`, needs `--features thermo`, a
+  .NET 8 runtime, and a DIA `.raw` via `KOTH_DIA_RAW`; skips if absent):
+  `thermo_dia_raw_ms2` asserts a DIA `.raw` recovers multiple isolation windows,
+  every MS2 hill carries its window, and the MS1 side is unchanged. The pure DIA
+  logic — isolation-window derivation and the DIA-vs-DDA recurrence heuristic
+  (`io::thermo::{derive_isolation_window, is_dia_schedule}`) — is unit-tested in
+  `io/thermo_tests.rs` under `--features thermo` with **no `.raw` file** (so it
+  runs in CI without a .NET runtime): fixed-schedule vs data-dependent streams,
+  the recurrence threshold boundary, all-ion single-window, and too-few-scans.
 
 ## How the two consumers plug in
 

@@ -44,7 +44,7 @@
 //!   [`run_pipeline`] / [`run_pipeline_from_spectra`] and reads
 //!   [`FeatureFindingOutput::features`].
 //!
-//! # MS2 (DIA fragment hills) — opt-in, mzML-only
+//! # MS2 (DIA fragment hills) — opt-in
 //!
 //! MS2 fragment hill detection ([`crate::run_ms2_hills_streaming`]) is exposed
 //! through the *same* seam but is **off by default**. When
@@ -52,9 +52,11 @@
 //! [`PipelineSink::on_ms2_hills`] (or [`FeatureFindingOutput::ms2_hills`]) after
 //! the whole MS1 side. Each MS2 hill carries its precursor isolation window in
 //! [`Hill::isolation_window`], and [`group_ms2_hills_by_window`] groups them per
-//! DIA channel. MS2 is **mzML-only**; Bruker `.d` / Thermo `.raw` degrade to an
-//! empty MS2 set + a warning, leaving MS1 untouched. With `emit_ms2` false the
-//! MS1 path is byte-for-byte identical to before.
+//! DIA channel. MS2 is supported on **mzML**, **Bruker diaPASEF `.d`**
+//! (`--features tdf`), and **Thermo DIA `.raw`** (`--features thermo`); DDA
+//! acquisitions (ddaPASEF `.d`, DDA `.raw`) degrade to an empty MS2 set + a
+//! warning, leaving MS1 untouched. With `emit_ms2` false the MS1 path is
+//! byte-for-byte identical to before.
 
 use std::path::Path;
 
@@ -80,10 +82,11 @@ pub struct PipelineOptions {
     /// unchanged — no MS2 reader is opened and no MS2 hook fires; this exactly
     /// reproduces the historic MS1-only [`run_pipeline`] behavior.
     ///
-    /// **mzML only.** MS2 detection mirrors [`crate::run_ms2_hills_streaming`]:
-    /// Bruker `.d` and Thermo `.raw` inputs are not handled and yield an empty
-    /// MS2 set plus a warning (the MS1 result is unaffected). MS2 detection is
-    /// independent of MS1 feature finding — the two share only the input.
+    /// MS2 detection mirrors [`crate::run_ms2_hills_streaming`]: mzML, Bruker
+    /// diaPASEF `.d` (`--features tdf`), and Thermo DIA `.raw` (`--features
+    /// thermo`) are supported; DDA acquisitions (ddaPASEF `.d`, DDA `.raw`) yield
+    /// an empty MS2 set plus a warning (the MS1 result is unaffected). MS2
+    /// detection is independent of MS1 feature finding — they share only the input.
     pub emit_ms2: bool,
 }
 

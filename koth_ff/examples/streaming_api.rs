@@ -10,9 +10,11 @@
 //! file: hills and features are obtained directly as owned Rust structs in
 //! memory. The third consumer (`tracer_with_ms2`) also pulls the DIA MS2
 //! fragment hills, partitioned by isolation window, in the same in-process call
-//! — supported on mzML and Bruker **diaPASEF** `.d` (`--features tdf`, windows
-//! read straight from the raw quadrupole settings). On ddaPASEF `.d` / Thermo
-//! `.raw` the MS2 set is empty (with a warning) and the MS1 side is unaffected.
+//! — supported on mzML, Bruker **diaPASEF** `.d` (`--features tdf`, windows read
+//! straight from the raw quadrupole settings), and Thermo **DIA** `.raw`
+//! (`--features thermo`, one MS2 spectrum per scan stamped with its precursor
+//! isolation window). On DDA acquisitions (ddaPASEF `.d` / DDA `.raw`) the MS2
+//! set is empty (with a warning) and the MS1 side is unaffected.
 
 use std::path::PathBuf;
 
@@ -99,7 +101,7 @@ fn tracer_style(path: &std::path::Path, config: &KothConfig) {
 // koth_tracer with MS2: get MS1 precursor features AND the DIA fragment hills,
 // partitioned by isolation window, in one in-process call — no files. Then map
 // each precursor to the window(s) that isolated it. MS2 side: mzML + Bruker
-// diaPASEF `.d`.
+// diaPASEF `.d` + Thermo DIA `.raw`.
 // ---------------------------------------------------------------------------
 fn tracer_with_ms2(path: &std::path::Path, config: &KothConfig) {
     // `run_pipeline_with_ms2` forces MS2 emission on; equivalently, set

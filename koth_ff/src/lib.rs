@@ -83,12 +83,15 @@ pub fn run_hills_streaming(path: &Path, config: &HillsConfig, file: &FileConfig)
 /// Stage 1 (MS2): Detect MS2 hills partitioned by the precursor isolation window
 /// of each MS2 spectrum (DIA channels).
 ///
-/// Supported inputs: mzML (`.mzML`/`.mzML.gz`) and Bruker **diaPASEF** `.d`
-/// (`--features tdf`). On a diaPASEF `.d` the fixed isolation windows are read
-/// straight from the raw frames' quadrupole settings and each window segment is
-/// IM-collapsed into an MS2 spectrum (see [`io::bruker::read_bruker_ms2`]).
-/// ddaPASEF `.d` and Thermo `.raw` are unsupported for MS2: they yield an empty
-/// set plus a warning, leaving MS1 unaffected.
+/// Supported inputs: mzML (`.mzML`/`.mzML.gz`), Bruker **diaPASEF** `.d`
+/// (`--features tdf`), and Thermo **DIA** `.raw` (`--features thermo`). On a
+/// diaPASEF `.d` the fixed isolation windows are read straight from the raw
+/// frames' quadrupole settings and each window segment is IM-collapsed into an
+/// MS2 spectrum (see [`io::bruker::read_bruker_ms2`]). On a DIA `.raw` each MS2
+/// scan becomes one MS2 spectrum stamped with its precursor isolation window
+/// (see [`io::thermo::read_thermo_ms2`]). ddaPASEF `.d` and DDA `.raw` are
+/// unsupported for MS2 (precursor reconstruction is out of scope): they yield an
+/// empty set plus a warning, leaving MS1 unaffected.
 pub fn run_ms2_hills_streaming(
     path: &Path,
     config: &HillsConfig,
@@ -124,9 +127,33 @@ pub fn run_ms2_hills_streaming(
         ));
     }
 
+    #[cfg(feature = "thermo")]
+    if name.ends_with(".raw") {
+        // Thermo DIA: one MS2 spectrum per MS2 scan, stamped with its precursor
+        // isolation window, then grouped by window exactly as the mzML path does.
+        // A DDA `.raw` (or one that cannot be confidently classified as DIA)
+        // returns an empty Vec (with a warning) from `read_thermo_ms2`, so MS1 is
+        // left untouched.
+        let spectra = io::thermo::read_thermo_ms2(path)?;
+        if spectra.is_empty() {
+            return Ok(Vec::new());
+        }
+        log::info!(
+            "Streaming MS2 hill detection from {} ({} Thermo DIA MS2 spectra)",
+            path.display(),
+            spectra.len()
+        );
+        return Ok(hills::detect_ms2_hills_from_iter(
+            spectra.into_iter(),
+            config,
+            file,
+        ));
+    }
+
     if !(name.ends_with(".mzml") || name.ends_with(".mzml.gz")) {
         log::warn!(
-            "MS2 hill detection supports mzML and Bruker diaPASEF .d inputs only; skipping '{}'",
+            "MS2 hill detection supports mzML, Bruker diaPASEF .d, and Thermo DIA .raw \
+             (.raw needs --features thermo) inputs only; skipping '{}'",
             path.display()
         );
         return Ok(Vec::new());
