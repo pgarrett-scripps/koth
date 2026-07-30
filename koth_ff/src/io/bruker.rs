@@ -43,6 +43,32 @@ pub mod inner {
         }
     }
 
+    /// dnoise vertical-IM filter parameters from the run's `[file]` config. Shared
+    /// by every Bruker path (MS1 local, MS1 streaming, diaPASEF MS2) so the values
+    /// are defined once.
+    fn filter_params(file: &FileConfig) -> FilterParams {
+        FilterParams {
+            mz_half_width: file.bruker_filter_mz_half_width,
+            min_feature_length: file.bruker_filter_min_feature_length,
+            max_internal_gap: file.bruker_filter_max_internal_gap,
+            min_window_intensity: file.bruker_filter_min_window_intensity,
+            min_feature_intensity: file.bruker_filter_min_feature_intensity,
+            num_iterations: file.bruker_filter_num_iterations,
+        }
+    }
+
+    /// dnoise watershed-centroiding parameters from the run's `[file]` config.
+    /// Shared by every Bruker path (see [`filter_params`]).
+    fn watershed_params(file: &FileConfig) -> WatershedParams {
+        WatershedParams {
+            box_scan: file.bruker_watershed_box_scan,
+            box_mz_idx: file.bruker_watershed_box_mz_idx,
+            min_seed_intensity: file.bruker_watershed_min_seed_intensity,
+            min_centroid_total: file.bruker_watershed_min_centroid_total,
+            max_tof_offset: file.bruker_watershed_max_tof_offset,
+        }
+    }
+
     /// Sort spectra by retention time and reassign sequential scan indices. Shared
     /// by both reader paths so the downstream hill detector sees a canonical order.
     fn finalize(mut spectra: Vec<Spectrum>) -> Result<Vec<Spectrum>, KothError> {
@@ -69,21 +95,8 @@ pub mod inner {
         path: &Path,
         file: &FileConfig,
     ) -> Result<Vec<Spectrum>, KothError> {
-        let filter_params = FilterParams {
-            mz_half_width: file.bruker_filter_mz_half_width,
-            min_feature_length: file.bruker_filter_min_feature_length,
-            max_internal_gap: file.bruker_filter_max_internal_gap,
-            min_window_intensity: file.bruker_filter_min_window_intensity,
-            min_feature_intensity: file.bruker_filter_min_feature_intensity,
-            num_iterations: file.bruker_filter_num_iterations,
-        };
-        let watershed_params = WatershedParams {
-            box_scan: file.bruker_watershed_box_scan,
-            box_mz_idx: file.bruker_watershed_box_mz_idx,
-            min_seed_intensity: file.bruker_watershed_min_seed_intensity,
-            min_centroid_total: file.bruker_watershed_min_centroid_total,
-            max_tof_offset: file.bruker_watershed_max_tof_offset,
-        };
+        let filter_params = filter_params(file);
+        let watershed_params = watershed_params(file);
         let halo_params = HaloParams {
             peak_fraction: file.bruker_halo_peak_fraction,
             mz_idx_half_width: file.bruker_halo_mz_idx_half_width,
@@ -157,21 +170,8 @@ pub mod inner {
         let mz_converter = metadata.mz_converter;
         let ims_converter = metadata.im_converter;
 
-        let filter_params = FilterParams {
-            mz_half_width: file.bruker_filter_mz_half_width,
-            min_feature_length: file.bruker_filter_min_feature_length,
-            max_internal_gap: file.bruker_filter_max_internal_gap,
-            min_window_intensity: file.bruker_filter_min_window_intensity,
-            min_feature_intensity: file.bruker_filter_min_feature_intensity,
-            num_iterations: file.bruker_filter_num_iterations,
-        };
-        let watershed_params = WatershedParams {
-            box_scan: file.bruker_watershed_box_scan,
-            box_mz_idx: file.bruker_watershed_box_mz_idx,
-            min_seed_intensity: file.bruker_watershed_min_seed_intensity,
-            min_centroid_total: file.bruker_watershed_min_centroid_total,
-            max_tof_offset: file.bruker_watershed_max_tof_offset,
-        };
+        let filter_params = filter_params(file);
+        let watershed_params = watershed_params(file);
         let noise_sigma = file.bruker_noise_sigma;
 
         let processed = AtomicUsize::new(0);
@@ -394,21 +394,8 @@ pub mod inner {
         let mz_converter = metadata.mz_converter;
         let ims_converter = metadata.im_converter;
 
-        let filter_params = FilterParams {
-            mz_half_width: file.bruker_filter_mz_half_width,
-            min_feature_length: file.bruker_filter_min_feature_length,
-            max_internal_gap: file.bruker_filter_max_internal_gap,
-            min_window_intensity: file.bruker_filter_min_window_intensity,
-            min_feature_intensity: file.bruker_filter_min_feature_intensity,
-            num_iterations: file.bruker_filter_num_iterations,
-        };
-        let watershed_params = WatershedParams {
-            box_scan: file.bruker_watershed_box_scan,
-            box_mz_idx: file.bruker_watershed_box_mz_idx,
-            min_seed_intensity: file.bruker_watershed_min_seed_intensity,
-            min_centroid_total: file.bruker_watershed_min_centroid_total,
-            max_tof_offset: file.bruker_watershed_max_tof_offset,
-        };
+        let filter_params = filter_params(file);
+        let watershed_params = watershed_params(file);
         let noise_sigma = file.bruker_noise_sigma;
 
         // One Vec<Spectrum> per MS2 frame, in ascending frame (== RT) order so
