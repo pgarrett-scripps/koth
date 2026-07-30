@@ -180,8 +180,14 @@ fn default_cosine_anchor() -> String {
     // `seed` is the default: anchoring every isotope's chromatographic cosine
     // to the monoisotope seed (as biosaur2 / AlphaPept / Dinosaur all do) beat
     // the former `adjacent` (predecessor) anchor on the full 20-run PXD003881
-    // cohort — recall 0.7933 -> 0.7964 (+0.31 pp, +1565 covered PSMs) with no
-    // quant regression (median CV, MV rate, and HUMAN FPR all flat-to-better).
+    // cohort, at +0.31 pp recall (+1565 covered PSMs) with no quant regression
+    // (median CV, MV rate, and HUMAN FPR all flat-to-better).
+    //
+    // The absolute recall figures that used to be quoted here (0.7933 ->
+    // 0.7964) predate `b83e1e1` and no longer describe any current run. The
+    // current cohort recall at this default is 0.7943; the matching `adjacent`
+    // arm has not been re-measured since, so the +0.31 pp delta above is
+    // historical and should be re-derived before being cited anywhere.
     // Set to `adjacent` to reproduce the pre-2026-07 paper feature output.
     "seed".to_string()
 }

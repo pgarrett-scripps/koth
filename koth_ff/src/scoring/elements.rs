@@ -8,7 +8,7 @@
 //! This replaces the older per-mass averagine template table:
 //!   - flexible: hold C/H/N/O fixed, vary S → sulfur-aware scoring is one knob
 //!   - accurate: no 50 Da mass bins
-//!   - cheap: ~75 KB cache, ~4 convolutions per lookup (~1 µs)
+//!   - cheap: ~82 kB cache, ~4 convolutions per lookup (~1 µs)
 //!
 //! The five element distributions are exact (NOT Poisson approximations) —
 //! built by incrementally convolving the single-atom distribution.
