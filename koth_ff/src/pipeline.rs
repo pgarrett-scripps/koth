@@ -245,7 +245,9 @@ pub fn run_pipeline_streaming<S: PipelineSink>(
     // is byte-for-byte unchanged. mzML-only: `.d`/`.raw` return an empty set +
     // warning via `run_ms2_hills_streaming`.
     if opts.emit_ms2 {
-        let ms2 = crate::run_ms2_hills_streaming(path, &config.hills, &config.file)?;
+        // MS2 hill detection uses the MS2-resolved config: `[hills]` with any
+        // `[hills_ms2]` overrides applied. Absent `[hills_ms2]` ⇒ same as MS1.
+        let ms2 = crate::run_ms2_hills_streaming(path, &config.ms2_hills(), &config.file)?;
         sink.on_ms2_hills(ms2);
     }
     Ok(())
@@ -281,7 +283,7 @@ where
         // whole buffer. `detect_ms2_hills_from_iter` groups by isolation window.
         let ms2 = crate::hills::detect_ms2_hills_from_iter(
             buf.iter().cloned(),
-            &config.hills,
+            &config.ms2_hills(),
             &config.file,
         );
         // The MS1 detector does *not* filter by level (it processes every
@@ -367,6 +369,11 @@ where
 /// [`PipelineOptions::emit_ms2`] `true`); the rest of `opts` is honored as-is.
 /// mzML-only for the MS2 side: Bruker `.d` / Thermo `.raw` yield an empty
 /// `ms2_hills` plus a warning, leaving the MS1 result unaffected.
+///
+/// MS2 fragment hills are detected with [`KothConfig::ms2_hills`] — `[hills]`
+/// plus any `[hills_ms2]` overrides — so an in-process caller drives MS1 and MS2
+/// hill settings independently from one `KothConfig`. With no `[hills_ms2]` the
+/// MS2 side uses `[hills]` verbatim.
 pub fn run_pipeline_with_ms2(
     path: &Path,
     config: &KothConfig,

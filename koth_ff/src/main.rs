@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
         log::info!("Detecting MS2 hills (streaming, per isolation window)...");
         let t = Instant::now();
         let ms2_hills =
-            run_ms2_hills_streaming(&args.input, &config.hills, &config.file)
+            run_ms2_hills_streaming(&args.input, &config.ms2_hills(), &config.file)
                 .with_context(|| {
                     format!("Failed to detect MS2 hills from {}", args.input.display())
                 })?;

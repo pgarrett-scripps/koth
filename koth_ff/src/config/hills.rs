@@ -126,6 +126,100 @@ fn default_split_height_frac() -> f64 {
     0.10
 }
 
+/// Per-field overrides applied to MS2 (DIA fragment) hill detection.
+///
+/// **Override semantics.** MS2 hill detection *inherits* the user's entire
+/// `[hills]` config and then overwrites only the fields set here. A field left
+/// `None` (absent from `[hills_ms2]` in the TOML) keeps its `[hills]` value —
+/// it does **not** fall back to [`HillsConfig::default`]. When the whole
+/// `[hills_ms2]` table is absent, MS2 uses `[hills]` verbatim (see
+/// [`super::KothConfig::ms2_hills`]), which is byte-for-byte the pre-existing
+/// behavior.
+///
+/// Every field mirrors the same-named field on [`HillsConfig`]; see there for
+/// what each one does.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HillsMs2Overrides {
+    pub min_scans: Option<usize>,
+    pub max_gap: Option<usize>,
+    pub split_hills: Option<bool>,
+    pub split_valley_ratio: Option<f64>,
+    pub split_sigma_mult: Option<f64>,
+    pub split_height_frac: Option<f64>,
+    pub lfc_weight: Option<f64>,
+    pub gap_fill_enabled: Option<bool>,
+    pub smoothing_enabled: Option<bool>,
+    pub smoothing_window: Option<usize>,
+    pub filter_large_baseline_hills: Option<bool>,
+    pub large_hill_min_scans: Option<usize>,
+    pub large_hill_peak_factor: Option<f64>,
+    pub tic_norm_window: Option<usize>,
+    pub tic_norm_min_scale: Option<f64>,
+    pub tic_norm_max_scale: Option<f64>,
+    pub tic_norm_mode: Option<String>,
+}
+
+impl HillsMs2Overrides {
+    /// Return a copy of `base` (`[hills]`) with each `Some(..)` override applied.
+    /// Fields left `None` keep their `base` value.
+    pub fn apply_to(&self, base: &HillsConfig) -> HillsConfig {
+        let mut c = base.clone();
+        if let Some(v) = self.min_scans {
+            c.min_scans = v;
+        }
+        if let Some(v) = self.max_gap {
+            c.max_gap = v;
+        }
+        if let Some(v) = self.split_hills {
+            c.split_hills = v;
+        }
+        if let Some(v) = self.split_valley_ratio {
+            c.split_valley_ratio = v;
+        }
+        if let Some(v) = self.split_sigma_mult {
+            c.split_sigma_mult = v;
+        }
+        if let Some(v) = self.split_height_frac {
+            c.split_height_frac = v;
+        }
+        if let Some(v) = self.lfc_weight {
+            c.lfc_weight = v;
+        }
+        if let Some(v) = self.gap_fill_enabled {
+            c.gap_fill_enabled = v;
+        }
+        if let Some(v) = self.smoothing_enabled {
+            c.smoothing_enabled = v;
+        }
+        if let Some(v) = self.smoothing_window {
+            c.smoothing_window = v;
+        }
+        if let Some(v) = self.filter_large_baseline_hills {
+            c.filter_large_baseline_hills = v;
+        }
+        if let Some(v) = self.large_hill_min_scans {
+            c.large_hill_min_scans = v;
+        }
+        if let Some(v) = self.large_hill_peak_factor {
+            c.large_hill_peak_factor = v;
+        }
+        if let Some(v) = self.tic_norm_window {
+            c.tic_norm_window = v;
+        }
+        if let Some(v) = self.tic_norm_min_scale {
+            c.tic_norm_min_scale = v;
+        }
+        if let Some(v) = self.tic_norm_max_scale {
+            c.tic_norm_max_scale = v;
+        }
+        if let Some(ref v) = self.tic_norm_mode {
+            c.tic_norm_mode = v.clone();
+        }
+        c
+    }
+}
+
 impl Default for HillsConfig {
     fn default() -> Self {
         Self {
