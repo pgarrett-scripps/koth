@@ -59,13 +59,10 @@ pub fn stream_mzml_ms2(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> 
 type BoxedRawIter = Box<dyn Iterator<Item = MultiLayerSpectrum> + Send>;
 
 fn open_reader(path: &Path) -> Result<BoxedRawIter, KothError> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    if name.ends_with(".gz") {
+    // Route the compressed-vs-plain decision through the single canonical format
+    // predicate. `open_reader` is only reached for paths already classified as
+    // mzML, so anything not `MzmlGz` here is plain (uncompressed) mzML.
+    if super::detect_format(path) == super::InputFormat::MzmlGz {
         // Decompress the full file into memory so mzdata gets a seekable Cursor.
         // open_gzipped_read uses a limited PreBufferedStream that corrupts large
         // base64 arrays (e.g. zlib-compressed Orbitrap data) during streaming.

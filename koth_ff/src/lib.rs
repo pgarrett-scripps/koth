@@ -60,16 +60,31 @@ pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, Kot
     io::read_spectra(path, file)
 }
 
+/// Apply the decoy construction to a full spectrum set: when `file.decoy_mode`
+/// is set, shuffle the **entire** set (Fisher–Yates over `rand::thread_rng`)
+/// before hill detection; otherwise return it untouched.
+///
+/// This is the single definition of the "shuffle the whole set, then detect"
+/// step. Every entry point — in-memory ([`run_hills`]), streaming
+/// ([`hills_streaming_inner`]), and the MS2-buffered pipeline path
+/// ([`pipeline::run_pipeline_streaming_from_spectra`]) — routes its decoy shuffle
+/// through here so the RNG source and full-set semantics live in exactly one
+/// place.
+pub(crate) fn shuffle_if_decoy(mut spectra: Vec<Spectrum>, file: &FileConfig) -> Vec<Spectrum> {
+    if file.decoy_mode {
+        log::info!(
+            "Decoy mode: shuffling {} spectra before hill detection",
+            spectra.len()
+        );
+        spectra.shuffle(&mut rand::thread_rng());
+    }
+    spectra
+}
+
 /// Stage 1: Detect chromatographic hills from MS1 spectra.
 pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) -> Vec<Hill> {
-    if file.decoy_mode {
-        log::info!("Decoy mode: shuffling {} spectra before hill detection", spectra.len());
-        let mut shuffled = spectra.to_vec();
-        shuffled.shuffle(&mut rand::thread_rng());
-        hills::detect_hills(&shuffled, config, file)
-    } else {
-        hills::detect_hills(spectra, config, file)
-    }
+    let spectra = shuffle_if_decoy(spectra.to_vec(), file);
+    hills::detect_hills(&spectra, config, file)
 }
 
 /// Stage 1 (streaming): Detect hills by reading the mzML/Bruker file directly,
@@ -97,16 +112,10 @@ pub fn run_ms2_hills_streaming(
     config: &HillsConfig,
     file: &FileConfig,
 ) -> Result<Vec<Hill>, KothError> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let fmt = io::detect_format(path);
 
     #[cfg(feature = "tdf")]
-    if name.ends_with(".d")
-        || (path.is_dir() && path.extension().and_then(|e| e.to_str()) == Some("d"))
-    {
+    if fmt == io::InputFormat::BrukerD {
         // Bruker diaPASEF: stream one MS2 spectrum per isolation-window segment
         // out of the raw `.d`, then group by window exactly as the mzML path
         // does. ddaPASEF / unknown acquisitions return an empty Vec (with a
@@ -128,7 +137,7 @@ pub fn run_ms2_hills_streaming(
     }
 
     #[cfg(feature = "thermo")]
-    if name.ends_with(".raw") {
+    if fmt == io::InputFormat::ThermoRaw {
         // Thermo DIA: one MS2 spectrum per MS2 scan, stamped with its precursor
         // isolation window, then grouped by window exactly as the mzML path does.
         // A DDA `.raw` (or one that cannot be confidently classified as DIA)
@@ -150,7 +159,7 @@ pub fn run_ms2_hills_streaming(
         ));
     }
 
-    if !(name.ends_with(".mzml") || name.ends_with(".mzml.gz")) {
+    if !matches!(fmt, io::InputFormat::Mzml | io::InputFormat::MzmlGz) {
         log::warn!(
             "MS2 hill detection supports mzML, Bruker diaPASEF .d, and Thermo DIA .raw \
              (.raw needs --features thermo) inputs only; skipping '{}'",
@@ -164,20 +173,13 @@ pub fn run_ms2_hills_streaming(
 }
 
 fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
+    let fmt = io::detect_format(path);
+
     #[cfg(feature = "tdf")]
-    {
-        if path.extension().and_then(|e| e.to_str()) == Some("d") || path.is_dir() {
-            // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
-            let mut spectra = io::read_spectra(path, file)?;
-            if file.decoy_mode {
-                log::info!(
-                    "Decoy mode: shuffling {} Bruker spectra before hill detection",
-                    spectra.len()
-                );
-                spectra.shuffle(&mut rand::thread_rng());
-            }
-            return Ok(hills::detect_hills(&spectra, config, file));
-        }
+    if fmt == io::InputFormat::BrukerD {
+        // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
+        let spectra = shuffle_if_decoy(io::read_spectra(path, file)?, file);
+        return Ok(hills::detect_hills(&spectra, config, file));
     }
 
     // Thermo .raw: no streaming API, so batch-load all MS1 spectra (mirrors the
@@ -185,27 +187,15 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
     // built with `--features thermo`, or returns a clear "rebuild with
     // --features thermo" error otherwise — handled here (rather than the mzML
     // fall-through below) so the message is actionable in both builds.
-    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("raw")) {
-        let mut spectra = io::read_spectra(path, file)?;
-        if file.decoy_mode {
-            log::info!(
-                "Decoy mode: shuffling {} Thermo spectra before hill detection",
-                spectra.len()
-            );
-            spectra.shuffle(&mut rand::thread_rng());
-        }
+    if fmt == io::InputFormat::ThermoRaw {
+        let spectra = shuffle_if_decoy(io::read_spectra(path, file)?, file);
         return Ok(hills::detect_hills(&spectra, config, file));
     }
 
     // mzML path — collect first if decoy mode so we can shuffle
     let iter = io::mzml::stream_mzml(path)?;
     if file.decoy_mode {
-        let mut spectra: Vec<_> = iter.collect();
-        log::info!(
-            "Decoy mode: shuffling {} spectra before hill detection",
-            spectra.len()
-        );
-        spectra.shuffle(&mut rand::thread_rng());
+        let spectra = shuffle_if_decoy(iter.collect(), file);
         log::info!("Streaming hill detection from {} (decoy)", path.display());
         Ok(hills::detect_hills_from_iter(spectra.into_iter(), config, file))
     } else {
@@ -290,4 +280,51 @@ pub fn run_scoring(
         );
     }
     scored
+}
+
+#[cfg(test)]
+mod shuffle_tests {
+    use super::*;
+    use config::FileConfig;
+
+    fn spectra(n: usize) -> Vec<Spectrum> {
+        (0..n)
+            .map(|i| Spectrum {
+                scan_index: i,
+                retention_time: i as f64 * 0.1,
+                peaks: Vec::new(),
+                ms_level: 1,
+                isolation_window: None,
+            })
+            .collect()
+    }
+
+    /// Decoy off: the set is returned untouched, in the exact input order (the
+    /// non-decoy path the byte-parity tests exercise).
+    #[test]
+    fn no_decoy_is_identity() {
+        let file = FileConfig {
+            decoy_mode: false,
+            ..FileConfig::default()
+        };
+        let out = shuffle_if_decoy(spectra(64), &file);
+        let idx: Vec<usize> = out.iter().map(|s| s.scan_index).collect();
+        assert_eq!(idx, (0..64).collect::<Vec<_>>());
+    }
+
+    /// Decoy on: the FULL set is permuted with no drops or duplicates (a decoy
+    /// run must shuffle every spectrum, not a subset). Order is `thread_rng`, so
+    /// we assert the preserved multiset, which is the load-bearing invariant.
+    #[test]
+    fn decoy_permutes_full_set() {
+        let file = FileConfig {
+            decoy_mode: true,
+            ..FileConfig::default()
+        };
+        let out = shuffle_if_decoy(spectra(256), &file);
+        assert_eq!(out.len(), 256);
+        let mut idx: Vec<usize> = out.iter().map(|s| s.scan_index).collect();
+        idx.sort_unstable();
+        assert_eq!(idx, (0..256).collect::<Vec<_>>());
+    }
 }

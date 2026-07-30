@@ -60,8 +60,6 @@
 
 use std::path::Path;
 
-use rand::seq::SliceRandom;
-
 use crate::config::KothConfig;
 use crate::error::KothError;
 use crate::models::{Feature, Hill, IsolationWindow, ScoredFeature, Spectrum};
@@ -291,13 +289,9 @@ where
         // fragment peaks would pollute the MS1 hills. On the file path the MS1
         // and MS2 readers are already separate streams; this reproduces that.
         let ms1: Vec<Spectrum> = buf.into_iter().filter(|s| s.ms_level != 2).collect();
-        let hills = if config.file.decoy_mode {
-            let mut ms1 = ms1;
-            ms1.shuffle(&mut rand::thread_rng());
-            crate::hills::detect_hills_from_iter(ms1.into_iter(), &config.hills, &config.file)
-        } else {
-            crate::hills::detect_hills_from_iter(ms1.into_iter(), &config.hills, &config.file)
-        };
+        let ms1 = crate::shuffle_if_decoy(ms1, &config.file);
+        let hills =
+            crate::hills::detect_hills_from_iter(ms1.into_iter(), &config.hills, &config.file);
         drive_from_hills(hills, config, opts, sink)?;
         sink.on_ms2_hills(ms2);
         return Ok(());
@@ -306,8 +300,7 @@ where
     let hills = if config.file.decoy_mode {
         // Decoy mode needs the full set to shuffle before detection, matching
         // `crate::run_hills` / the binary's mzML decoy branch.
-        let mut buf: Vec<Spectrum> = spectra.collect();
-        buf.shuffle(&mut rand::thread_rng());
+        let buf = crate::shuffle_if_decoy(spectra.collect(), &config.file);
         crate::hills::detect_hills_from_iter(buf.into_iter(), &config.hills, &config.file)
     } else {
         crate::hills::detect_hills_from_iter(spectra, &config.hills, &config.file)

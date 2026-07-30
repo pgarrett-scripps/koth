@@ -141,6 +141,9 @@ fn default_split_height_frac() -> f64 {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HillsMs2Overrides {
+    // keep in sync with HillsConfig — one Option<T> per overridable field, and a
+    // matching `if let Some(..)` in `apply_to`. The `every_override_field_is_applied`
+    // guard test fails if a field here is not wired into `apply_to`.
     pub min_scans: Option<usize>,
     pub max_gap: Option<usize>,
     pub split_hills: Option<bool>,
@@ -217,6 +220,96 @@ impl HillsMs2Overrides {
             c.tic_norm_mode = v.clone();
         }
         c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guard against a `HillsMs2Overrides` field that exists but was never wired
+    /// into `apply_to`. Build a `[hills]` where every field is non-default, and a
+    /// `[hills_ms2]` overriding every field to a value distinct from that base;
+    /// after `apply_to`, every field must have changed. An un-wired field keeps
+    /// its base value and fails the matching `assert_ne!`.
+    #[test]
+    fn every_override_field_is_applied() {
+        let base = HillsConfig {
+            min_scans: 5,
+            max_gap: 2,
+            split_hills: false,
+            split_valley_ratio: 0.5,
+            split_sigma_mult: 3.0,
+            split_height_frac: 0.2,
+            lfc_weight: 0.7,
+            gap_fill_enabled: true,
+            smoothing_enabled: true,
+            smoothing_window: 3,
+            filter_large_baseline_hills: true,
+            large_hill_min_scans: 30,
+            large_hill_peak_factor: 1.5,
+            tic_norm_window: 7,
+            tic_norm_min_scale: 0.4,
+            tic_norm_max_scale: 2.5,
+            tic_norm_mode: "tic".to_string(),
+        };
+        let ov = HillsMs2Overrides {
+            min_scans: Some(9),
+            max_gap: Some(4),
+            split_hills: Some(true),
+            split_valley_ratio: Some(0.8),
+            split_sigma_mult: Some(6.0),
+            split_height_frac: Some(0.3),
+            lfc_weight: Some(0.9),
+            gap_fill_enabled: Some(false),
+            smoothing_enabled: Some(false),
+            smoothing_window: Some(6),
+            filter_large_baseline_hills: Some(false),
+            large_hill_min_scans: Some(50),
+            large_hill_peak_factor: Some(3.0),
+            tic_norm_window: Some(11),
+            tic_norm_min_scale: Some(0.6),
+            tic_norm_max_scale: Some(4.0),
+            tic_norm_mode: Some("median".to_string()),
+        };
+        let got = ov.apply_to(&base);
+
+        assert_ne!(got.min_scans, base.min_scans);
+        assert_ne!(got.max_gap, base.max_gap);
+        assert_ne!(got.split_hills, base.split_hills);
+        assert_ne!(got.split_valley_ratio, base.split_valley_ratio);
+        assert_ne!(got.split_sigma_mult, base.split_sigma_mult);
+        assert_ne!(got.split_height_frac, base.split_height_frac);
+        assert_ne!(got.lfc_weight, base.lfc_weight);
+        assert_ne!(got.gap_fill_enabled, base.gap_fill_enabled);
+        assert_ne!(got.smoothing_enabled, base.smoothing_enabled);
+        assert_ne!(got.smoothing_window, base.smoothing_window);
+        assert_ne!(
+            got.filter_large_baseline_hills,
+            base.filter_large_baseline_hills
+        );
+        assert_ne!(got.large_hill_min_scans, base.large_hill_min_scans);
+        assert_ne!(got.large_hill_peak_factor, base.large_hill_peak_factor);
+        assert_ne!(got.tic_norm_window, base.tic_norm_window);
+        assert_ne!(got.tic_norm_min_scale, base.tic_norm_min_scale);
+        assert_ne!(got.tic_norm_max_scale, base.tic_norm_max_scale);
+        assert_ne!(got.tic_norm_mode, base.tic_norm_mode);
+
+        // Sanity: applied config equals the override values exactly.
+        assert_eq!(got.min_scans, 9);
+        assert_eq!(got.tic_norm_mode, "median");
+    }
+
+    /// A `None` override leaves the base value untouched (the documented
+    /// inherit-not-reset semantics).
+    #[test]
+    fn none_override_keeps_base_value() {
+        let base = HillsConfig {
+            min_scans: 5,
+            ..HillsConfig::default()
+        };
+        let got = HillsMs2Overrides::default().apply_to(&base);
+        assert_eq!(got.min_scans, 5);
     }
 }
 
