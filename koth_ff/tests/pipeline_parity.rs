@@ -14,7 +14,10 @@ use std::path::PathBuf;
 
 use koth_ff::config::KothConfig;
 use koth_ff::output::{write_features_tsv, write_hills_tsv};
-use koth_ff::{run_features, run_hills_streaming, run_pipeline, run_scoring, PipelineOptions};
+use koth_ff::{
+    run_features, run_hills_streaming, run_pipeline, run_pipeline_with_ms2, run_scoring,
+    PipelineOptions,
+};
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/data/example_dda.d")
@@ -70,5 +73,32 @@ fn run_pipeline_matches_binary_staged_path() {
         "run_pipeline == staged path: {} hills, {} features",
         out.hills.len(),
         out.features.len()
+    );
+}
+
+#[test]
+#[ignore = "reads a large .d fixture; run explicitly with --features tdf"]
+fn emit_ms2_degrades_gracefully_on_bruker_d() {
+    // MS2 is mzML-only. On a Bruker `.d`, requesting MS2 must NOT error and must
+    // NOT disturb the MS1 side — it just yields an empty MS2 set (with a warning).
+    let path = fixture();
+    assert!(path.is_dir(), "fixture missing: {}", path.display());
+
+    let config = KothConfig::default();
+
+    let baseline = run_pipeline(&path, &config, &PipelineOptions::default()).expect("baseline");
+    let with_ms2 = run_pipeline_with_ms2(&path, &config, &PipelineOptions::default())
+        .expect("with_ms2 on .d must not error");
+
+    assert!(with_ms2.ms2_hills.is_empty(), "no MS2 hills from a Bruker .d");
+    assert_eq!(
+        hills_tsv(&with_ms2.hills),
+        hills_tsv(&baseline.hills),
+        "MS1 hills unaffected by emit_ms2 on .d"
+    );
+    assert_eq!(
+        features_tsv(&with_ms2.features),
+        features_tsv(&baseline.features),
+        "MS1 features unaffected by emit_ms2 on .d"
     );
 }
