@@ -152,6 +152,16 @@ smoothing_window = 1
 # large_hill_min_scans = 40
 # large_hill_peak_factor = 2.0
 
+# Optional separate hill-detection settings for MS2 (DIA fragment) scans,
+# used only when `[file].ms2_hills_enabled = true`. OVERRIDE semantics: MS2
+# hill detection starts from `[hills]` above and applies ONLY the fields you
+# set here; every field you omit is inherited from `[hills]` (NOT reset to a
+# built-in default). If this whole table is absent, MS2 hills use `[hills]`
+# unchanged. Example: fragment traces are often shorter than precursor traces,
+# so relax `min_scans` for MS2 only while keeping all other `[hills]` settings:
+# [hills_ms2]
+# min_scans = 2
+
 [features]
 # Charge state range to consider
 min_charge = 1

@@ -81,7 +81,7 @@ Platform differences are called out inline.
 
 ## 3. `koth_ff` — feature-finding config (`KothConfig`)
 
-Sections: `[file]`, `[hills]`, `[features]`, `[scoring]`, `[output]`.
+Sections: `[file]`, `[hills]`, `[hills_ms2]` (optional MS2 overrides), `[features]`, `[scoring]`, `[output]`.
 
 ### 3.1 `[file]` — reading, shared tolerances, Bruker front-end, recalibration
 
@@ -176,6 +176,34 @@ the acquisition differs.
 | `tic_norm_min_scale` | f64 | `0.5` | Lower clamp on the per-scan multiplier. Active only when `tic_norm_window > 0`. |
 | `tic_norm_max_scale` | f64 | `3.0` | Upper clamp on the per-scan multiplier. Active only when `tic_norm_window > 0`. |
 | `tic_norm_mode` | String | `"median"` | Reference quantity: `"median"` (robust, recommended — fires only on whole-scan suppression) or `"tic"` (heavy-tailed, scales real apices down). |
+
+#### `[hills_ms2]` — optional per-field overrides for MS2 (DIA fragment) hills
+
+Optional table. Only consulted when `[file].ms2_hills_enabled = true` (DIA MS2
+hill detection, written to `hills_ms2.*`). **Override semantics, not a fresh
+config:** MS2 hill detection starts from your `[hills]` values and overwrites
+**only** the keys you set under `[hills_ms2]`; every key you omit is inherited
+from `[hills]` — it does **not** reset to the built-in default. If the whole
+`[hills_ms2]` table is absent, MS2 hills use `[hills]` verbatim (byte-identical
+to prior behavior — the default path is the regression guard).
+
+Every key here is the `Option`-wrapped twin of the same-named `[hills]` key
+(`min_scans`, `max_gap`, `split_hills`, `split_valley_ratio`, `split_sigma_mult`,
+`split_height_frac`, `lfc_weight`, `gap_fill_enabled`, `smoothing_enabled`,
+`smoothing_window`, `filter_large_baseline_hills`, `large_hill_min_scans`,
+`large_hill_peak_factor`, `tic_norm_window`, `tic_norm_min_scale`,
+`tic_norm_max_scale`, `tic_norm_mode`); see the `[hills]` table above for what
+each does. `deny_unknown_fields` applies here too — a typo is a parse error. The
+resolved MS2 config is computed by `KothConfig::ms2_hills()` and used by the
+binary and every streaming pipeline entry point. Not set in any shipped config.
+
+Typical use — fragment traces are often shorter than precursor traces, so relax
+`min_scans` for MS2 only while keeping all other `[hills]` settings:
+
+```toml
+[hills_ms2]
+min_scans = 2
+```
 
 ### 3.3 `[features]` — isotope-chain assembly + charge + retention
 

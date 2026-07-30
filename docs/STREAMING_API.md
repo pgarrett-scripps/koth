@@ -108,6 +108,18 @@ partitions MS2 spectra by their **precursor isolation window** and runs an
 independent per-window detector, so a hill never spans two windows. It is
 independent of MS1 feature finding; the two share only the input file.
 
+**MS2 hill settings are independently configurable.** The pipeline detects MS2
+hills with `KothConfig::ms2_hills()`, which resolves to `[hills]` plus any
+`[hills_ms2]` overrides (see `docs/CONFIGURATION.md` §3.2). So one `KothConfig`
+drives MS1 and MS2 hill detection with *different* settings — e.g. a smaller
+`min_scans` for short fragment traces — without touching the MS1 path. With no
+`[hills_ms2]` present, `ms2_hills()` returns `[hills]` unchanged, so the MS2 side
+is byte-identical to using `[hills]` directly. An in-process caller that builds a
+`KothConfig` programmatically can set `config.hills_ms2 = Some(HillsMs2Overrides
+{ min_scans: Some(2), ..Default::default() })` to the same effect; the low-level
+`run_ms2_hills_streaming(path, &HillsConfig, …)` still takes an explicit
+`HillsConfig` for callers that want to pass one directly.
+
 ### Window carriage and the precursor → window mapping
 
 Every MS2 `Hill` carries its isolation window in `hill.isolation_window`
