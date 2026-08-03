@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **The benchmark and the manuscript moved to their own repository**,
+  [tacular-omics/koth-paper](https://github.com/tacular-omics/koth-paper), with
+  their history. This repository is now the tool alone. Two consequences for
+  anyone reading older entries below: paths of the form `benchmark/config/*.toml`
+  and `benchmark/scripts/*` refer to that repository, and the build-time config
+  parse test now covers only this repo's `example_config*.toml` rather than the
+  tuned per-platform configs, which are validated where they are run.
 - **Feature detection now defaults to the exhaustive non-destructive assembler
   with a seed-anchored isotope cosine** (previously a greedy resolver with an
   adjacent-anchored cosine). The exhaustive pool claims contested hills

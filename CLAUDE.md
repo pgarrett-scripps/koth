@@ -25,10 +25,15 @@ it to, and Orbitrap-vs-Bruker platform notes. Read it before touching config or
 answering config questions; do not guess field names or defaults from memory.
 
 - Configs are TOML parsed with `#[serde(deny_unknown_fields)]` — a stale/renamed
-  key is a hard build/parse error. A build-time test parses the shipped
-  `benchmark/config/*.toml` against the structs, so field names can't silently
-  drift. If you add/rename a config field, update the struct, the shipped TOMLs,
+  key is a hard build/parse error. A build-time test parses this repo's
+  `example_config*.toml` against the structs, so field names can't silently
+  drift. If you add/rename a config field, update the struct, both templates,
   **and** `docs/CONFIGURATION.md` (the doc is not build-checked).
+- The benchmark and the manuscript now live in a separate repository,
+  `tacular-omics/koth-paper`. Its `benchmark/config/*.toml` are the tuned
+  per-platform configs; they are NOT build-checked from here, so a renamed field
+  breaks them at benchmark run time rather than at compile time. Update them
+  there when you rename a config field.
 - Experimental knobs are **default-off and byte-safe** by convention. Their
   tested verdicts (validated-win / dud / neutral) are recorded in
   `docs/CONFIGURATION.md` §5 — check there before re-running a settled

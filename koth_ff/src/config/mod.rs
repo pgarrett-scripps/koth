@@ -115,22 +115,24 @@ mod config_parse_tests {
         }
     }
 
+    // These used to also parse eight tuned configs from `benchmark/config/`. The
+    // benchmark now lives in its own repository (tacular-omics/koth-paper), and
+    // `include_str!` resolves at COMPILE time, so leaving them would not merely
+    // skip a test -- it would stop this crate building at all.
+    //
+    // The guard still covers everything this repository ships. The tuned configs
+    // are guarded on the other side by `#[serde(deny_unknown_fields)]`: a renamed
+    // or removed field makes koth_ff reject them the moment the benchmark runs,
+    // which is the only thing that runs them.
+
     #[test]
     fn shipped_koth_configs_parse() {
         parse_koth("example_config.toml", include_str!("../../../example_config.toml"));
-        parse_koth("koth_ff.toml", include_str!("../../../benchmark/config/koth_ff.toml"));
-        parse_koth("koth_ff_bruker.toml", include_str!("../../../benchmark/config/koth_ff_bruker.toml"));
-        parse_koth("koth_ff_relaxed.toml", include_str!("../../../benchmark/config/koth_ff_relaxed.toml"));
-        parse_koth("koth_ff_sulfur_on.toml", include_str!("../../../benchmark/config/koth_ff_sulfur_on.toml"));
-        parse_koth("koth_ff_sulfur_off.toml", include_str!("../../../benchmark/config/koth_ff_sulfur_off.toml"));
-        parse_koth("koth_ff_alphapept_like.toml", include_str!("../../../benchmark/config/koth_ff_alphapept_like.toml"));
     }
 
     #[test]
     fn shipped_align_configs_parse() {
         parse_align("example_config_align.toml", include_str!("../../../example_config_align.toml"));
-        parse_align("koth_align.toml", include_str!("../../../benchmark/config/koth_align.toml"));
-        parse_align("koth_align_bruker.toml", include_str!("../../../benchmark/config/koth_align_bruker.toml"));
     }
 }
 

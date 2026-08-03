@@ -405,15 +405,17 @@ stale or misspelled key is a hard error rather than a silent fallback.
 does, and what to set it to (including Orbitrap vs Bruker/timsTOF) — lives in
 [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).** Read that first.
 
-Worked, up-to-date examples are the shipped configs in
-[`benchmark/config/`](benchmark/config/):
+This repository ships two templates, [`example_config.toml`](example_config.toml)
+(koth_ff) and [`example_config_align.toml`](example_config_align.toml)
+(koth_align). Both list every knob at its struct default.
 
-| File | Binary | Platform |
-|---|---|---|
-| `koth_ff.toml` | koth_ff (feature finding) | Orbitrap mzML |
-| `koth_ff_bruker.toml` | koth_ff | Bruker/timsTOF `.d` |
-| `koth_align.toml` | koth_align (align + LFQ) | Orbitrap |
-| `koth_align_bruker.toml` | koth_align | Bruker/timsTOF |
+The tuned per-platform configurations behind the published benchmark
+(`koth_ff.toml` / `koth_ff_bruker.toml` and `koth_align.toml` /
+`koth_align_bruker.toml`, Orbitrap and timsTOF) live with the benchmark that
+produced them, in [`benchmark/config/`](https://github.com/tacular-omics/koth-paper/tree/master/benchmark/config)
+of the [koth-paper](https://github.com/tacular-omics/koth-paper) repository. They differ from the defaults in
+24 settings between the two platforms, so start from the one matching your
+instrument rather than from the templates if you are reproducing the paper.
 
 koth_ff sections: `[file]` (reading + tolerances + Bruker front-end + m/z
 recalibration), `[hills]` (trace detection + splitter), `[features]` (isotope

@@ -105,16 +105,17 @@ fn emit_ms2_degrades_gracefully_on_bruker_d() {
     );
 }
 
-/// Smallest diaPASEF `.d` on this machine (not checked into the repo). Override
-/// with `KOTH_DIAPASEF_D`. The test skips (does not fail) when it is absent, so
-/// CI without the raw data is unaffected.
-fn diapasef_fixture() -> PathBuf {
-    std::env::var("KOTH_DIAPASEF_D").map(PathBuf::from).unwrap_or_else(|_| {
-        PathBuf::from(
-            "/home/patrick-garrett/Repos/d_noise/benchmark/data/dia_5min/raw/\
-             LFQ_Ultra2_diaPASEF_5min_50ng_Condition_A_REP1.d",
-        )
-    })
+/// A diaPASEF `.d` to run the MS2 parity check against. Not checked into the
+/// repo: set `KOTH_DIAPASEF_D` to point at one. The test skips (does not fail)
+/// when it is unset or absent, so a checkout without the raw data is
+/// unaffected.
+///
+/// This used to fall back to an absolute path under the author's home
+/// directory. That is useless to anyone else and, now that this repository is
+/// public, it leaked a local layout into shipped source. There is no sensible
+/// default for a multi-gigabyte vendor file, so there is no fallback.
+fn diapasef_fixture() -> Option<PathBuf> {
+    std::env::var_os("KOTH_DIAPASEF_D").map(PathBuf::from)
 }
 
 #[test]
@@ -123,7 +124,10 @@ fn bruker_diapasef_ms2() {
     // End-to-end: on a real diaPASEF `.d`, `emit_ms2` must recover the fixed
     // isolation windows and stamp every MS2 hill with the window it came from,
     // while leaving the MS1 side byte-identical to a plain MS1 run.
-    let path = diapasef_fixture();
+    let Some(path) = diapasef_fixture() else {
+        eprintln!("SKIP bruker_diapasef_ms2: set KOTH_DIAPASEF_D to a diaPASEF .d");
+        return;
+    };
     if !path.is_dir() {
         eprintln!("SKIP bruker_diapasef_ms2: no diaPASEF fixture at {}", path.display());
         return;
