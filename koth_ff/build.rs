@@ -18,9 +18,21 @@
 use std::process::Command;
 
 fn main() {
+    // Emitting ANY rerun-if-changed replaces cargo's default, which is "rerun
+    // when any file in the package changed". So everything that can move the
+    // stamp has to be listed explicitly:
+    //
+    //   src, Cargo.toml   editing a source file makes the tree dirty, and the
+    //                     `-dirty` suffix has to appear. Listing only build.rs
+    //                     here was a bug: cargo recompiled the crate on a source
+    //                     edit without re-running this file, so a clean SHA
+    //                     stayed baked into a binary built from an edited tree.
+    //   .git/HEAD         a checkout or branch switch changes the commit.
+    //   .git/index        `git commit` clears dirty without touching any source
+    //                     file, so index is what catches dirty -> clean.
     println!("cargo:rerun-if-changed=build.rs");
-    // Rebuild when HEAD moves, so a checkout or commit refreshes the stamp
-    // instead of leaving a stale SHA baked into an otherwise-fresh binary.
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
     for p in ["../.git/HEAD", "../.git/index"] {
         if std::path::Path::new(p).exists() {
             println!("cargo:rerun-if-changed={p}");
