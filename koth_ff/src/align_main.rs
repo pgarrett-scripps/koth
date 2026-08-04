@@ -21,7 +21,7 @@ use koth_ff::{
     long_about = "Discovers all per-run subdirectories inside <batch_dir>, aligns retention \
                   time, m/z ppm, and ion mobility across runs, then performs Sage-style LFQ \
                   by extracting ion chromatogram grids from hill data.",
-    version
+    version = koth_ff::VERSION
 )]
 struct Args {
     /// Directory containing one subdirectory per run.

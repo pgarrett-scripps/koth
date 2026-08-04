@@ -21,6 +21,19 @@
 //! let scored = run_scoring(&features, &config.scoring, &config.features);
 //! ```
 
+/// Crate version with the git commit it was built from, e.g. `0.1.0 (a1b2c3d4e5f6)`,
+/// or `0.1.0 (a1b2c3d4e5f6-dirty)` when the working tree had uncommitted changes.
+///
+/// This is what `--version` reports on both binaries, and what the benchmark's
+/// pin check reads. `KOTH_GIT_SHA` is set by `build.rs`; it is `unknown` when the
+/// crate is built from a source archive with no git directory.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("KOTH_GIT_SHA"),
+    ")"
+);
+
 pub mod alignment;
 pub mod config;
 pub mod input;

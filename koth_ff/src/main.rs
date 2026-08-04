@@ -19,7 +19,7 @@ use koth_ff::{
 #[command(
     name = "koth_ff",
     about = "High-performance LC-MS feature finder for timsTOF and mzML data",
-    version
+    version = koth_ff::VERSION
 )]
 struct Args {
     /// Input file path (.mzML) or Bruker .d directory
