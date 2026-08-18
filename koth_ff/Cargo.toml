@@ -5,7 +5,17 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 repository.workspace   = true
+authors          = ["Patrick Garrett <pgarrett@scripps.edu>"]
 description      = "High-performance LC-MS feature finder for timsTOF and mzML data"
+default-run      = "koth_ff"
+readme           = "../README.md"
+homepage         = "https://github.com/tacular-omics/koth_rust"
+documentation    = "https://docs.rs/koth_ff"
+keywords         = ["mass-spectrometry", "proteomics", "lc-ms", "timstof", "feature-detection"]
+categories       = ["science", "command-line-utilities"]
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "koth_ff"
@@ -24,7 +34,7 @@ crate-type = ["rlib"]
 mzdata     = { workspace = true }
 flate2     = "1"
 timsrust   = { workspace = true, optional = true }
-dnoise     = { path = "../../d_noise", default-features = false, optional = true }
+dnoise     = { version = "0.1.0", default-features = false, optional = true }
 # Native Thermo .raw reading (opt-in). Wraps Thermo's RawFileReader assemblies via
 # a self-hosted .NET runtime, so a `.raw` file can be fed to koth_ff directly with
 # no prior mzML conversion. Requires a .NET 8 runtime at build and run time; kept
@@ -51,3 +61,7 @@ tdf = ["dep:timsrust", "dep:dnoise"]
 # Native Thermo Fisher .raw input (no mzML conversion). Off by default: enabling it
 # requires a .NET 8 runtime at build and run time. `cargo build -p koth_ff --features thermo`.
 thermo = ["dep:thermorawfilereader"]
+
+[package.metadata.docs.rs]
+features = ["tdf"]
+rustdoc-args = ["--cfg", "docsrs"]

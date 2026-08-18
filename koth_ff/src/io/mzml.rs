@@ -45,7 +45,9 @@ pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> + Se
 /// Only spectra with `ms_level == 2` and a parsable precursor isolation window
 /// are yielded. The `scan_index` on each yielded spectrum is its absolute
 /// position in the file, so callers can later re-index per-isolation-window.
-pub fn stream_mzml_ms2(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> + Send>, KothError> {
+pub fn stream_mzml_ms2(
+    path: &Path,
+) -> Result<Box<dyn Iterator<Item = Spectrum> + Send>, KothError> {
     crate::mem::log_mem("before open_reader (stream_mzml_ms2)");
     Ok(Box::new(ms2_stream(open_reader(path)?)))
 }
@@ -72,12 +74,11 @@ fn open_reader(path: &Path) -> Result<BoxedRawIter, KothError> {
         io::Read::read_to_end(&mut decoder, &mut buf)
             .map_err(|e| KothError::MzmlError(format!("gzip decompress: {e}")))?;
         let cursor = io::Cursor::new(buf);
-        let reader = MZReader::open_read_seek(cursor)
-            .map_err(|e| KothError::MzmlError(e.to_string()))?;
+        let reader =
+            MZReader::open_read_seek(cursor).map_err(|e| KothError::MzmlError(e.to_string()))?;
         Ok(Box::new(reader))
     } else {
-        let reader = MZReader::open_path(path)
-            .map_err(|e| KothError::MzmlError(e.to_string()))?;
+        let reader = MZReader::open_path(path).map_err(|e| KothError::MzmlError(e.to_string()))?;
         Ok(Box::new(reader))
     }
 }
@@ -131,7 +132,9 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
         if ms1_count == 0 {
             log::info!(
                 "First MS1 scan: scan_index={} rt={:.2} min  peaks={}",
-                idx, retention_time, peaks.len()
+                idx,
+                retention_time,
+                peaks.len()
             );
         }
 
@@ -167,14 +170,22 @@ fn ms2_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
                 let raw = p.isolation_window();
                 let target = raw.target as f64;
                 let lower = match raw.flags {
-                    mzdata::spectrum::IsolationWindowState::Offset => target - raw.lower_bound as f64,
+                    mzdata::spectrum::IsolationWindowState::Offset => {
+                        target - raw.lower_bound as f64
+                    }
                     _ => raw.lower_bound as f64,
                 };
                 let upper = match raw.flags {
-                    mzdata::spectrum::IsolationWindowState::Offset => target + raw.upper_bound as f64,
+                    mzdata::spectrum::IsolationWindowState::Offset => {
+                        target + raw.upper_bound as f64
+                    }
                     _ => raw.upper_bound as f64,
                 };
-                IsolationWindow { target, lower, upper }
+                IsolationWindow {
+                    target,
+                    lower,
+                    upper,
+                }
             }
             None => {
                 if !warned_missing_precursor {
@@ -194,7 +205,12 @@ fn ms2_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
         if ms2_count == 0 {
             log::info!(
                 "First MS2 scan: scan_index={} rt={:.2} min isolation={:.4}({:.4}-{:.4}) peaks={}",
-                idx, retention_time, iw.target, iw.lower, iw.upper, peaks.len()
+                idx,
+                retention_time,
+                iw.target,
+                iw.lower,
+                iw.upper,
+                peaks.len()
             );
         }
         ms2_count += 1;
@@ -226,7 +242,7 @@ fn extract_peaks(spectrum: &mut MultiLayerSpectrum) -> Vec<Peak> {
                 .filter(|p| p.intensity() > 0.0)
                 .map(|p| Peak {
                     mz: p.mz() as f32,
-                    intensity: p.intensity() as f32,
+                    intensity: p.intensity(),
                     ion_mobility: 0.0,
                 })
                 .collect();
@@ -246,7 +262,7 @@ fn extract_peaks(spectrum: &mut MultiLayerSpectrum) -> Vec<Peak> {
                     .filter(|(_, &i)| i > 0.0)
                     .map(|(&mz, &intensity)| Peak {
                         mz: mz as f32,
-                        intensity: intensity as f32,
+                        intensity,
                         ion_mobility: 0.0,
                     })
                     .collect();

@@ -96,7 +96,7 @@ pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
         }
 
         spectra.push(Spectrum {
-            scan_index: 0, // assigned after the RT sort below
+            scan_index: 0,               // assigned after the RT sort below
             retention_time: spec.time(), // Thermo reports scan time in minutes
             peaks,
             ms_level: 1,
@@ -192,7 +192,11 @@ fn schedule_stats(windows: &[IsolationWindow]) -> ScheduleStats {
     } else {
         n_ms2 as f64 / distinct as f64
     };
-    ScheduleStats { n_ms2, distinct, recurrence }
+    ScheduleStats {
+        n_ms2,
+        distinct,
+        recurrence,
+    }
 }
 
 /// Heuristic DIA detector over the per-MS2-scan isolation windows of a `.raw`.
@@ -253,7 +257,11 @@ fn derive_isolation_window(
     } else {
         (center, center)
     };
-    Some(IsolationWindow { target: center, lower: lo, upper: hi })
+    Some(IsolationWindow {
+        target: center,
+        lower: lo,
+        upper: hi,
+    })
 }
 
 /// Bridge a [`RawSpectrum`]'s precursor to an [`IsolationWindow`], or `None` if
@@ -332,7 +340,9 @@ pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
         if spec.ms_level() != 2 {
             continue;
         }
-        let Some(window) = precursor_window(&spec) else { continue };
+        let Some(window) = precursor_window(&spec) else {
+            continue;
+        };
         let peaks = centroid_peaks(&spec);
         if peaks.is_empty() {
             continue;

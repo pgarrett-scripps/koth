@@ -21,11 +21,7 @@ use crate::models::Hill;
 /// peaking at different RTs (or with very different lengths) correctly score
 /// low. This mismatched-length penalty acts as an implicit noise filter and is
 /// what the PXD003881 LFQ quant tuning was validated against.
-pub fn cosine_similarity(
-    hill1: &Hill,
-    hill2: &Hill,
-    min_overlap: usize,
-) -> f64 {
+pub fn cosine_similarity(hill1: &Hill, hill2: &Hill, min_overlap: usize) -> f64 {
     // Mutual-overlap gate. Overlap size = `min(end_a, end_b) - max(start_a,
     // start_b) + 1` (or 0 if disjoint). Reject when it is below `min_overlap`.
     // Computed directly on scan_start/scan_end (underflow-safe for small

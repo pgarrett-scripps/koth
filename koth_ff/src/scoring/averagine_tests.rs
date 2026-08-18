@@ -32,14 +32,19 @@ fn well_aligned_chain_scores_high() {
     let template: [f64; K_PATTERN] = [0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0, 0.0, 0.0];
     let obs = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5];
     let bc = bhattacharyya_score(&obs, &template);
-    assert!(bc > 0.95, "BC for well-aligned chain should be > 0.95, got {bc}");
+    assert!(
+        bc > 0.95,
+        "BC for well-aligned chain should be > 0.95, got {bc}"
+    );
 }
 
 /// Over-extended chain — same well-aligned first 5 positions plus 3 noise hills
 /// where the template predicts essentially nothing. New BC must drop noticeably.
 #[test]
 fn over_extended_chain_drops_score() {
-    let template: [f64; K_PATTERN] = [0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0001, 0.0, 0.0];
+    let template: [f64; K_PATTERN] = [
+        0.50, 0.30, 0.15, 0.04, 0.008, 0.001, 0.0005, 0.0001, 0.0, 0.0,
+    ];
     let obs_real = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5];
     let bc_real = bhattacharyya_score(&obs_real, &template);
     let obs_overextended = [5.0e7, 3.0e7, 1.5e7, 4.0e6, 8.0e5, 5.0e6, 5.0e6, 5.0e6];
@@ -82,7 +87,10 @@ fn offsets_resolve_against_ceil_bands() {
 /// small peptide does not score the same template repeatedly.
 #[test]
 fn offsets_saturate_and_dedup() {
-    assert_eq!(resolve_sulfur_counts(1500.0, &[-3, -2, -1, 0, 1]), vec![0, 1, 2]);
+    assert_eq!(
+        resolve_sulfur_counts(1500.0, &[-3, -2, -1, 0, 1]),
+        vec![0, 1, 2]
+    );
     assert_eq!(resolve_sulfur_counts(1500.0, &[0, 0, 0]), vec![1]);
     assert_eq!(resolve_sulfur_counts(1500.0, &[]), Vec::<u32>::new());
     // Order is preserved as declared, not sorted.
@@ -144,6 +152,8 @@ fn sulfur_override_changes_pattern() {
     let high_s = averagine_distribution_with_sulfur(m, 3);
     assert!(
         (high_s[2] - avg[2]).abs() > 0.005,
-        "3-S override should noticeably shift M+2 (avg={}, hi-S={})", avg[2], high_s[2]
+        "3-S override should noticeably shift M+2 (avg={}, hi-S={})",
+        avg[2],
+        high_s[2]
     );
 }

@@ -24,7 +24,11 @@ fn fixture() -> PathBuf {
 }
 
 fn hills_tsv(hills: &[koth_ff::Hill]) -> String {
-    let p = std::env::temp_dir().join(format!("koth_pp_h_{}_{}.tsv", std::process::id(), rand_tag()));
+    let p = std::env::temp_dir().join(format!(
+        "koth_pp_h_{}_{}.tsv",
+        std::process::id(),
+        rand_tag()
+    ));
     write_hills_tsv(hills, &p).expect("write hills tsv");
     let s = std::fs::read_to_string(&p).expect("read hills tsv");
     let _ = std::fs::remove_file(&p);
@@ -32,7 +36,11 @@ fn hills_tsv(hills: &[koth_ff::Hill]) -> String {
 }
 
 fn features_tsv(features: &[koth_ff::ScoredFeature]) -> String {
-    let p = std::env::temp_dir().join(format!("koth_pp_f_{}_{}.tsv", std::process::id(), rand_tag()));
+    let p = std::env::temp_dir().join(format!(
+        "koth_pp_f_{}_{}.tsv",
+        std::process::id(),
+        rand_tag()
+    ));
     write_features_tsv(features, &p).expect("write features tsv");
     let s = std::fs::read_to_string(&p).expect("read features tsv");
     let _ = std::fs::remove_file(&p);
@@ -41,7 +49,10 @@ fn features_tsv(features: &[koth_ff::ScoredFeature]) -> String {
 
 fn rand_tag() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
 }
 
 #[test]
@@ -62,7 +73,11 @@ fn run_pipeline_matches_binary_staged_path() {
 
     assert_eq!(out.hills.len(), hills.len(), "hill count");
     assert_eq!(out.features.len(), scored.len(), "feature count");
-    assert_eq!(hills_tsv(&out.hills), hills_tsv(&hills), "hills TSV parity on real .d");
+    assert_eq!(
+        hills_tsv(&out.hills),
+        hills_tsv(&hills),
+        "hills TSV parity on real .d"
+    );
     assert_eq!(
         features_tsv(&out.features),
         features_tsv(&scored),
@@ -92,7 +107,10 @@ fn emit_ms2_degrades_gracefully_on_bruker_d() {
     let with_ms2 = run_pipeline_with_ms2(&path, &config, &PipelineOptions::default())
         .expect("with_ms2 on .d must not error");
 
-    assert!(with_ms2.ms2_hills.is_empty(), "no MS2 hills from a Bruker .d");
+    assert!(
+        with_ms2.ms2_hills.is_empty(),
+        "no MS2 hills from a Bruker .d"
+    );
     assert_eq!(
         hills_tsv(&with_ms2.hills),
         hills_tsv(&baseline.hills),
@@ -129,7 +147,10 @@ fn bruker_diapasef_ms2() {
         return;
     };
     if !path.is_dir() {
-        eprintln!("SKIP bruker_diapasef_ms2: no diaPASEF fixture at {}", path.display());
+        eprintln!(
+            "SKIP bruker_diapasef_ms2: no diaPASEF fixture at {}",
+            path.display()
+        );
         return;
     }
 
@@ -147,9 +168,15 @@ fn bruker_diapasef_ms2() {
     );
 
     // MS2 hills exist and every one carries a valid isolation window.
-    assert!(!with_ms2.ms2_hills.is_empty(), "diaPASEF .d must yield MS2 hills");
     assert!(
-        with_ms2.ms2_hills.iter().all(|h| h.isolation_window.is_some()),
+        !with_ms2.ms2_hills.is_empty(),
+        "diaPASEF .d must yield MS2 hills"
+    );
+    assert!(
+        with_ms2
+            .ms2_hills
+            .iter()
+            .all(|h| h.isolation_window.is_some()),
         "every MS2 hill must carry its isolation window"
     );
 
@@ -160,7 +187,11 @@ fn bruker_diapasef_ms2() {
         with_ms2.ms2_hills.len(),
         windows.len()
     );
-    assert!(windows.len() >= 2, "expected multiple DIA windows, got {}", windows.len());
+    assert!(
+        windows.len() >= 2,
+        "expected multiple DIA windows, got {}",
+        windows.len()
+    );
     for (w, _) in &windows {
         assert!(w.lower < w.upper && w.lower <= w.target && w.target <= w.upper);
     }

@@ -24,8 +24,8 @@ pub mod inner {
     use timsrust::readers::FrameReader;
 
     use dnoise::{
-        filter_iterated, watershed_centroid, FilterParams, FlatFrame, HaloParams, RunContext,
-        Stages, WatershedParams,
+        filter_iterated, watershed_centroid, FilterParams, FlatFrame, HaloParams, Ms1PolygonParams,
+        RunContext, Stages, WatershedParams,
     };
 
     use crate::config::FileConfig;
@@ -91,10 +91,7 @@ pub mod inner {
     /// watershed in a single pass over each raw MS1 frame — the exact stage code
     /// the standalone `dnoise` tool runs, with no denoised `.d` written to disk.
     /// Calibration comes straight from the context, so no timsrust converters here.
-    fn read_bruker_streaming(
-        path: &Path,
-        file: &FileConfig,
-    ) -> Result<Vec<Spectrum>, KothError> {
+    fn read_bruker_streaming(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
         let filter_params = filter_params(file);
         let watershed_params = watershed_params(file);
         let halo_params = HaloParams {
@@ -102,9 +99,19 @@ pub mod inner {
             mz_idx_half_width: file.bruker_halo_mz_idx_half_width,
             scan_half_width: file.bruker_halo_scan_half_width,
         };
-        // Vertical filter + optional halo + watershed, all in one in-process pass.
+        let polygon_params = Ms1PolygonParams {
+            mz_pad: file.bruker_ms1_polygon_mz_pad,
+            im_pad: file.bruker_ms1_polygon_im_pad,
+        };
+        // Vertical filter + optional halo + optional MS1 selection-polygon gate +
+        // watershed, all in one in-process pass. `Stages` carries more stages than
+        // koth wires up (MS/MS denoising, smoothing, the box centroider, and the
+        // two diaPASEF window gates); those stay at their dnoise defaults, which
+        // are off. Any stage added here needs a `bruker_*` key beside it, or it is
+        // unreachable from a config file.
         let stages = Stages {
             halo: file.bruker_halo.then_some(&halo_params),
+            ms1_polygon: file.bruker_ms1_polygon.then_some(&polygon_params),
             watershed: Some(&watershed_params),
             ..Stages::default()
         };
@@ -208,7 +215,7 @@ pub mod inner {
 
                     let mut spectrum = Spectrum {
                         scan_index: frame.index,
-                        retention_time: frame.rt_in_seconds as f64 / 60.0,
+                        retention_time: frame.rt_in_seconds / 60.0,
                         peaks: out_peaks,
                         ms_level: 1,
                         isolation_window: None,

@@ -11,7 +11,6 @@
 
 use super::elements::{cache, K_PATTERN};
 
-
 /// Averagine atomic ratios per 111.1254 Da of neutral mass. The single
 /// "averagine residue" mass used by Senko's model.
 const AVG_RESIDUE_MASS: f64 = 111.1254;

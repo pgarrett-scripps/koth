@@ -36,9 +36,24 @@ struct Envelope {
 fn synthetic_run(n_scans: usize) -> Vec<Spectrum> {
     const NEUTRON: f32 = 1.003_354_8;
     let envelopes = [
-        Envelope { mono_mz: 500.0, charge: 2, n_isotopes: 4, base: 1.0e5 },
-        Envelope { mono_mz: 700.0, charge: 3, n_isotopes: 3, base: 6.0e4 },
-        Envelope { mono_mz: 900.5, charge: 1, n_isotopes: 3, base: 4.0e4 },
+        Envelope {
+            mono_mz: 500.0,
+            charge: 2,
+            n_isotopes: 4,
+            base: 1.0e5,
+        },
+        Envelope {
+            mono_mz: 700.0,
+            charge: 3,
+            n_isotopes: 3,
+            base: 6.0e4,
+        },
+        Envelope {
+            mono_mz: 900.5,
+            charge: 1,
+            n_isotopes: 3,
+            base: 4.0e4,
+        },
     ];
 
     // Triangular elution shape peaking at the middle scan, in [0.05, 1.0].
@@ -87,8 +102,16 @@ fn synthetic_dia_run(n_scans: usize) -> Vec<Spectrum> {
 
     // Two DIA windows; each isolates a precursor m/z band and shows fragments.
     let windows = [
-        IsolationWindow { target: 500.0, lower: 495.0, upper: 505.0 },
-        IsolationWindow { target: 700.0, lower: 695.0, upper: 705.0 },
+        IsolationWindow {
+            target: 500.0,
+            lower: 495.0,
+            upper: 505.0,
+        },
+        IsolationWindow {
+            target: 700.0,
+            lower: 695.0,
+            upper: 705.0,
+        },
     ];
     // Fragment mono m/z per window (2 traces each, one charge-1 doublet).
     let frags = [[300.0f32, 450.0], [280.0f32, 610.0]];
@@ -202,7 +225,11 @@ fn collect_all_matches_manual_staged_path() {
     assert_eq!(out.features.len(), manual_scored.len(), "feature count");
 
     // ...and byte-identical once serialized through the real output writers.
-    assert_eq!(hills_tsv(&out.hills), hills_tsv(&manual_hills), "hills TSV parity");
+    assert_eq!(
+        hills_tsv(&out.hills),
+        hills_tsv(&manual_hills),
+        "hills TSV parity"
+    );
     assert_eq!(
         features_tsv(&out.features),
         features_tsv(&manual_scored),
@@ -256,7 +283,10 @@ fn streaming_sink_matches_collect_all() {
     assert_eq!(sink.hills.len(), collected.hills.len());
     assert_eq!(sink.features.len(), collected.features.len());
     assert_eq!(hills_tsv(&sink.hills), hills_tsv(&collected.hills));
-    assert_eq!(features_tsv(&sink.features), features_tsv(&collected.features));
+    assert_eq!(
+        features_tsv(&sink.features),
+        features_tsv(&collected.features)
+    );
 }
 
 #[test]
@@ -274,7 +304,10 @@ fn no_scoring_option_matches_binary_no_scoring_wrap() {
     let out = run_pipeline_from_spectra(
         spectra.iter().cloned(),
         &config,
-        &PipelineOptions { scoring: false, ..PipelineOptions::default() },
+        &PipelineOptions {
+            scoring: false,
+            ..PipelineOptions::default()
+        },
     )
     .expect("pipeline no-scoring");
 
@@ -320,8 +353,11 @@ fn emit_ms2_yields_same_hills_as_detect_ms2_hills_from_iter() {
     let spectra = synthetic_dia_run(11);
 
     // Ground truth: the MS2 detector run directly over the same spectra.
-    let expected =
-        crate::hills::detect_ms2_hills_from_iter(spectra.iter().cloned(), &config.hills, &config.file);
+    let expected = crate::hills::detect_ms2_hills_from_iter(
+        spectra.iter().cloned(),
+        &config.hills,
+        &config.file,
+    );
     assert!(!expected.is_empty(), "fixture produced no MS2 hills");
     assert!(
         expected.iter().all(|h| h.isolation_window.is_some()),
@@ -332,7 +368,10 @@ fn emit_ms2_yields_same_hills_as_detect_ms2_hills_from_iter() {
     let out = run_pipeline_from_spectra(
         spectra.iter().cloned(),
         &config,
-        &PipelineOptions { emit_ms2: true, ..PipelineOptions::default() },
+        &PipelineOptions {
+            emit_ms2: true,
+            ..PipelineOptions::default()
+        },
     )
     .expect("pipeline emit_ms2");
 
@@ -344,7 +383,10 @@ fn emit_ms2_yields_same_hills_as_detect_ms2_hills_from_iter() {
     );
 
     // The whole run also carries MS1 features (the two sides coexist).
-    assert!(!out.features.is_empty(), "MS1 features still produced with MS2 on");
+    assert!(
+        !out.features.is_empty(),
+        "MS1 features still produced with MS2 on"
+    );
 }
 
 #[test]
@@ -354,7 +396,11 @@ fn emit_ms2_isolates_ms1_and_off_never_emits_ms2() {
 
     // Baseline: the *clean* MS1 result — the MS1-only spectra through the default
     // (MS2-off) pipeline, exactly what an MS1-only caller has always gotten.
-    let ms1_only: Vec<Spectrum> = spectra.iter().filter(|s| s.ms_level != 2).cloned().collect();
+    let ms1_only: Vec<Spectrum> = spectra
+        .iter()
+        .filter(|s| s.ms_level != 2)
+        .cloned()
+        .collect();
     let baseline =
         run_pipeline_from_spectra(ms1_only.into_iter(), &config, &PipelineOptions::default())
             .expect("baseline");
@@ -366,7 +412,10 @@ fn emit_ms2_isolates_ms1_and_off_never_emits_ms2() {
     let on = run_pipeline_from_spectra(
         spectra.iter().cloned(),
         &config,
-        &PipelineOptions { emit_ms2: true, ..PipelineOptions::default() },
+        &PipelineOptions {
+            emit_ms2: true,
+            ..PipelineOptions::default()
+        },
     )
     .expect("ms2 on");
     assert_eq!(
@@ -379,7 +428,10 @@ fn emit_ms2_isolates_ms1_and_off_never_emits_ms2() {
         features_tsv(&baseline.features),
         "MS2-on MS1 features == clean MS1-only baseline"
     );
-    assert!(!on.ms2_hills.is_empty(), "MS2 hills present when emit_ms2 is on");
+    assert!(
+        !on.ms2_hills.is_empty(),
+        "MS2 hills present when emit_ms2 is on"
+    );
 
     // MS2 *off* must never populate the MS2 side, regardless of input (the hook
     // is simply not called). MS1 output of the off path is unchanged from before
@@ -390,7 +442,10 @@ fn emit_ms2_isolates_ms1_and_off_never_emits_ms2() {
         &PipelineOptions::default(),
     )
     .expect("ms2 off");
-    assert!(off.ms2_hills.is_empty(), "no MS2 hills when emit_ms2 is off");
+    assert!(
+        off.ms2_hills.is_empty(),
+        "no MS2 hills when emit_ms2 is off"
+    );
     assert_eq!(
         hills_tsv(&off.hills),
         hills_tsv(&baseline.hills),
@@ -412,13 +467,19 @@ fn on_ms2_hills_fires_once_after_features_and_groups_by_window() {
     run_pipeline_streaming_from_spectra(
         spectra.iter().cloned(),
         &config,
-        &PipelineOptions { emit_ms2: true, ..PipelineOptions::default() },
+        &PipelineOptions {
+            emit_ms2: true,
+            ..PipelineOptions::default()
+        },
         &mut sink,
     )
     .expect("stream emit_ms2");
 
     assert_eq!(sink.on_ms2_calls, 1, "on_ms2_hills fires exactly once");
-    assert!(sink.ms2_after_features, "MS2 must be delivered after MS1 features");
+    assert!(
+        sink.ms2_after_features,
+        "MS2 must be delivered after MS1 features"
+    );
     assert!(!sink.ms2_hills.is_empty());
 
     // The window mapping koth_tracer relies on: two DIA channels, each hill

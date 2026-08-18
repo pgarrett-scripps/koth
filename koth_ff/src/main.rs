@@ -60,14 +60,17 @@ struct Args {
     #[arg(long, default_value = "info")]
     log_level: String,
 
+    /// Worker threads for the parallel stages. Overrides `file.n_threads`
+    /// (default when both are unset: all available cores)
+    #[arg(long)]
+    threads: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let log_filter = format!("koth_ff={}", args.log_level);
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter)).init();
 
     let mut config = match &args.config {
         Some(cfg_path) => KothConfig::from_toml(cfg_path)
@@ -82,6 +85,18 @@ fn main() -> anyhow::Result<()> {
     }
     if args.filter_baseline_hills {
         config.hills.filter_large_baseline_hills = true;
+    }
+    if args.threads.is_some() {
+        config.file.n_threads = args.threads;
+    }
+    // Must run before the first rayon use anywhere: build_global is a no-op
+    // (an Err) once the pool exists.
+    if let Some(n) = config.file.n_threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .context("Failed to configure the global thread pool")?;
+        log::info!("Thread pool: {n} threads");
     }
 
     let file_stem = args
@@ -105,17 +120,21 @@ fn main() -> anyhow::Result<()> {
     let t = Instant::now();
     let hills = run_hills_streaming(&args.input, &config.hills, &config.file)
         .with_context(|| format!("Failed to detect hills from {}", args.input.display()))?;
-    log::info!("[timing] hill detection: {:.2?} ({} hills)", t.elapsed(), hills.len());
+    log::info!(
+        "[timing] hill detection: {:.2?} ({} hills)",
+        t.elapsed(),
+        hills.len()
+    );
     log_mem(&format!("after hill detection ({} hills)", hills.len()));
 
     let hills_ext = match config.output.format {
-        OutputFormat::Tsv     => "tsv",
+        OutputFormat::Tsv => "tsv",
         OutputFormat::Parquet => "parquet",
     };
     let hills_path = out_dir.join(format!("hills.{hills_ext}"));
     let t = Instant::now();
     match config.output.format {
-        OutputFormat::Tsv     => write_hills_tsv(&hills, &hills_path),
+        OutputFormat::Tsv => write_hills_tsv(&hills, &hills_path),
         OutputFormat::Parquet => write_hills_parquet(&hills, &hills_path),
     }
     .with_context(|| format!("Failed to write hills to {}", hills_path.display()))?;
@@ -126,17 +145,17 @@ fn main() -> anyhow::Result<()> {
     if config.file.ms2_hills_enabled {
         log::info!("Detecting MS2 hills (streaming, per isolation window)...");
         let t = Instant::now();
-        let ms2_hills =
-            run_ms2_hills_streaming(&args.input, &config.ms2_hills(), &config.file)
-                .with_context(|| {
-                    format!("Failed to detect MS2 hills from {}", args.input.display())
-                })?;
+        let ms2_hills = run_ms2_hills_streaming(&args.input, &config.ms2_hills(), &config.file)
+            .with_context(|| format!("Failed to detect MS2 hills from {}", args.input.display()))?;
         log::info!(
             "[timing] MS2 hill detection: {:.2?} ({} hills)",
             t.elapsed(),
             ms2_hills.len()
         );
-        log_mem(&format!("after MS2 hill detection ({} hills)", ms2_hills.len()));
+        log_mem(&format!(
+            "after MS2 hill detection ({} hills)",
+            ms2_hills.len()
+        ));
 
         if !ms2_hills.is_empty() {
             let ms2_path = out_dir.join(format!("hills_ms2.{hills_ext}"));
@@ -145,9 +164,7 @@ fn main() -> anyhow::Result<()> {
                 OutputFormat::Tsv => write_ms2_hills_tsv(&ms2_hills, &ms2_path),
                 OutputFormat::Parquet => write_ms2_hills_parquet(&ms2_hills, &ms2_path),
             }
-            .with_context(|| {
-                format!("Failed to write MS2 hills to {}", ms2_path.display())
-            })?;
+            .with_context(|| format!("Failed to write MS2 hills to {}", ms2_path.display()))?;
             log::info!("[timing] write hills_ms2.{hills_ext}: {:.2?}", t.elapsed());
         } else {
             log::info!("No MS2 hills produced (input may have no MS2 spectra).");
@@ -158,16 +175,23 @@ fn main() -> anyhow::Result<()> {
     // (intensity_profile is Arc so no data duplication)
     log::info!("Detecting features...");
     let t = Instant::now();
-    let features = run_features(&hills, &config.features, &config.file)
-        .context("Feature detection failed")?;
-    log::info!("[timing] feature detection: {:.2?} ({} features)", t.elapsed(), features.len());
+    let features =
+        run_features(&hills, &config.features, &config.file).context("Feature detection failed")?;
+    log::info!(
+        "[timing] feature detection: {:.2?} ({} features)",
+        t.elapsed(),
+        features.len()
+    );
 
     // Build hills summary before we release the hills vec
     let hills_report = build_hills_report(&hills);
 
     // Drop hills — profile data stays alive via Arc refs inside features
     drop(hills);
-    log_mem(&format!("after feature detection ({} features)", features.len()));
+    log_mem(&format!(
+        "after feature detection ({} features)",
+        features.len()
+    ));
 
     // Stage 3: Scoring (optional)
     let scored = if args.no_scoring {
@@ -191,28 +215,36 @@ fn main() -> anyhow::Result<()> {
     };
 
     let features_ext = match config.output.format {
-        OutputFormat::Tsv     => "tsv",
+        OutputFormat::Tsv => "tsv",
         OutputFormat::Parquet => "parquet",
     };
     let features_path = out_dir.join(format!("features.{features_ext}"));
     let t = Instant::now();
     match config.output.format {
-        OutputFormat::Tsv     => write_features_tsv(&scored, &features_path),
+        OutputFormat::Tsv => write_features_tsv(&scored, &features_path),
         OutputFormat::Parquet => write_features_parquet(&scored, &features_path),
     }
     .with_context(|| format!("Failed to write features to {}", features_path.display()))?;
-    log::info!("[timing] write features.{features_ext}: {:.2?}", t.elapsed());
+    log::info!(
+        "[timing] write features.{features_ext}: {:.2?}",
+        t.elapsed()
+    );
 
     // Report
     let features_report = build_features_report(&scored);
-    let report = RunReport { hills: hills_report, features: features_report };
+    let report = RunReport {
+        hills: hills_report,
+        features: features_report,
+    };
     let report_path = out_dir.join("report.json");
     write_report(&report, &report_path).context("Failed to write report")?;
 
     log::info!("[timing] total: {:.2?}", total_start.elapsed());
 
     let config_path = out_dir.join("config.toml");
-    let config_str = config.to_toml_string().context("Failed to serialize config")?;
+    let config_str = config
+        .to_toml_string()
+        .context("Failed to serialize config")?;
     std::fs::write(&config_path, config_str)
         .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
 

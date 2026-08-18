@@ -85,7 +85,11 @@ pub fn integrate(
     let max_score = scores.hybrid[apex];
     // half_max for expansion: if hybrid is zero (edge peak), fall back to
     // a nominal threshold so expansion still uses min_spectral_bhattacharyya as gate.
-    let half_max = if max_score > 0.0 { max_score * 0.5 } else { 0.0 };
+    let half_max = if max_score > 0.0 {
+        max_score * 0.5
+    } else {
+        0.0
+    };
     let spec_min = config.min_spectral_bhattacharyya as f32;
 
     // Expand left

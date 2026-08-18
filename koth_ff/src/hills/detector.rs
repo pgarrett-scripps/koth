@@ -7,7 +7,6 @@ use crate::models::{Hill, Spectrum};
 use super::active::ActiveHill;
 use super::smooth;
 
-
 pub struct HillDetector {
     min_mz: f64,
     max_mz: f64,
@@ -140,17 +139,19 @@ impl HillDetector {
                 self.finalized.push(h);
             }
         }
-        if let Some(t) = _t_clean { self.dbg_clean += t.elapsed(); }
+        if let Some(t) = _t_clean {
+            self.dbg_clean += t.elapsed();
+        }
         let _t_sort = self.profiling.then(std::time::Instant::now);
         // Higher-intensity hills get first pick of candidate peaks, preventing
         // noise spikes from stealing matches away from real signal.
-        sorted.sort_unstable_by(|a, b| {
-            b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         self.intensity_sorted = sorted;
         self.stale_buf = stale;
 
-        if let Some(t) = _t_sort { self.dbg_sort += t.elapsed(); }
+        if let Some(t) = _t_sort {
+            self.dbg_sort += t.elapsed();
+        }
         let _t_match = self.profiling.then(std::time::Instant::now);
         // Per-scan claimed-peak flags (reuse allocation across scans).
         self.claimed_peaks.clear();
@@ -164,10 +165,18 @@ impl HillDetector {
             // before the mutable add_point call below.
             let (hill_mz, hill_im, last_int) = {
                 let h = &self.active_hills[&hill_id];
-                (h.running_mz_mean, h.running_im_mean, h.last_real_intensity())
+                (
+                    h.running_mz_mean,
+                    h.running_im_mean,
+                    h.last_real_intensity(),
+                )
             };
 
-            let tol = if self.use_ppm { hill_mz * self.tol_mult } else { self.tol_mult };
+            let tol = if self.use_ppm {
+                hill_mz * self.tol_mult
+            } else {
+                self.tol_mult
+            };
             let im_tol = self.calc_im_tol(hill_im);
             let lo = hill_mz - tol;
             let hi = hill_mz + tol;
@@ -218,21 +227,20 @@ impl HillDetector {
 
             if let Some(pk_idx) = best_peak_idx {
                 let peak = &spectrum.peaks[pk_idx];
-                self.active_hills
-                    .get_mut(&hill_id)
-                    .unwrap()
-                    .add_point(
-                        peak.mz as f64,
-                        peak.intensity as f64,
-                        rt,
-                        peak.ion_mobility as f64,
-                        scan_idx,
-                    );
+                self.active_hills.get_mut(&hill_id).unwrap().add_point(
+                    peak.mz as f64,
+                    peak.intensity as f64,
+                    rt,
+                    peak.ion_mobility as f64,
+                    scan_idx,
+                );
                 self.claimed_peaks[pk_idx] = true;
             }
         }
 
-        if let Some(t) = _t_match { self.dbg_match += t.elapsed(); }
+        if let Some(t) = _t_match {
+            self.dbg_match += t.elapsed();
+        }
         let _t_new = self.profiling.then(std::time::Instant::now);
         // Start new hills for any unclaimed peaks within the mz bounds.
         for (pk_idx, peak) in spectrum.peaks.iter().enumerate() {
@@ -247,11 +255,20 @@ impl HillDetector {
             self.next_id += 1;
             self.active_hills.insert(
                 id,
-                ActiveHill::new(mz, peak.intensity as f64, rt, peak.ion_mobility as f64, scan_idx, use_im),
+                ActiveHill::new(
+                    mz,
+                    peak.intensity as f64,
+                    rt,
+                    peak.ion_mobility as f64,
+                    scan_idx,
+                    use_im,
+                ),
             );
         }
 
-        if let Some(t) = _t_new { self.dbg_new += t.elapsed(); }
+        if let Some(t) = _t_new {
+            self.dbg_new += t.elapsed();
+        }
         self.scan_idx += 1;
     }
 
@@ -259,7 +276,10 @@ impl HillDetector {
         if self.profiling {
             log::info!(
                 "[process_scan profile] clean {:.2?}, sort {:.2?}, match {:.2?}, new {:.2?}",
-                self.dbg_clean, self.dbg_sort, self.dbg_match, self.dbg_new
+                self.dbg_clean,
+                self.dbg_sort,
+                self.dbg_match,
+                self.dbg_new
             );
         }
         for (_, hill) in self.active_hills {

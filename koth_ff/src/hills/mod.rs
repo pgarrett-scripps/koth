@@ -49,11 +49,7 @@ where
     detect_hills_from_iter_inner(spectra, config, file)
 }
 
-fn detect_hills_from_iter_inner<I>(
-    spectra: I,
-    config: &HillsConfig,
-    file: &FileConfig,
-) -> Vec<Hill>
+fn detect_hills_from_iter_inner<I>(spectra: I, config: &HillsConfig, file: &FileConfig) -> Vec<Hill>
 where
     I: Iterator<Item = Spectrum>,
 {
@@ -79,8 +75,7 @@ where
         detect_ns += t1.elapsed();
         count += 1;
     }
-    if count > 0 {
-        let avg_peaks = total_peaks / count;
+    if let Some(avg_peaks) = total_peaks.checked_div(count) {
         log::info!(
             "Hill detection: processed {} spectra, {:.1}M total peaks, avg {}/scan \
              [read(decompress+parse) {:.2?}, detect(process_scan) {:.2?}]",

@@ -8,7 +8,7 @@ use crate::models::{Hill, ScoredFeature};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn median(v: &mut Vec<f64>) -> f64 {
+fn median(v: &mut [f64]) -> f64 {
     if v.is_empty() {
         return f64::NAN;
     }
@@ -21,7 +21,7 @@ fn median(v: &mut Vec<f64>) -> f64 {
     }
 }
 
-fn stats(values: &mut Vec<f64>) -> StatSummary {
+fn stats(values: &mut [f64]) -> StatSummary {
     StatSummary {
         median: median(values),
         std: crate::stats::std_dev(values),
@@ -71,18 +71,18 @@ pub struct RunReport {
 // ── builders ──────────────────────────────────────────────────────────────────
 
 pub fn build_hills_report(hills: &[Hill]) -> HillsReport {
-    let mut mz_stds    = hills.iter().map(|h| h.mz_std).collect::<Vec<_>>();
-    let mut im_stds    = hills.iter().map(|h| h.im_std).collect::<Vec<_>>();
-    let mut rt_widths  = hills.iter().map(|h| h.rt_width).collect::<Vec<_>>();
-    let mut n_scans    = hills.iter().map(|h| h.n_scans as f64).collect::<Vec<_>>();
-    let mut int_sums   = hills.iter().map(|h| h.intensity_sum).collect::<Vec<_>>();
+    let mut mz_stds = hills.iter().map(|h| h.mz_std).collect::<Vec<_>>();
+    let mut im_stds = hills.iter().map(|h| h.im_std).collect::<Vec<_>>();
+    let mut rt_widths = hills.iter().map(|h| h.rt_width).collect::<Vec<_>>();
+    let mut n_scans = hills.iter().map(|h| h.n_scans as f64).collect::<Vec<_>>();
+    let mut int_sums = hills.iter().map(|h| h.intensity_sum).collect::<Vec<_>>();
 
     HillsReport {
         n: hills.len(),
-        mz_std:       stats(&mut mz_stds),
-        im_std:       stats(&mut im_stds),
-        rt_width:     stats(&mut rt_widths),
-        n_scans:      stats(&mut n_scans),
+        mz_std: stats(&mut mz_stds),
+        im_std: stats(&mut im_stds),
+        rt_width: stats(&mut rt_widths),
+        n_scans: stats(&mut n_scans),
         intensity_sum: stats(&mut int_sums),
     }
 }
@@ -95,22 +95,34 @@ pub fn build_features_report(features: &[ScoredFeature]) -> FeaturesReport {
         *charge_dist.entry(sf.feature.charge).or_insert(0) += 1;
     }
 
-    let mut cosine    = scored.iter().map(|sf| sf.cosine_score).collect::<Vec<_>>();
-    let mut isotope   = scored.iter().map(|sf| sf.isotope_score).collect::<Vec<_>>();
-    let mut combined  = scored.iter().map(|sf| sf.combined_score).collect::<Vec<_>>();
-    let mut ppm       = scored.iter().map(|sf| sf.feature.ppm_error).collect::<Vec<_>>();
-    let mut n_iso     = scored.iter().map(|sf| sf.feature.hills.len() as f64).collect::<Vec<_>>();
-    let mut rt_w      = scored.iter().map(|sf| sf.feature.rt_end() - sf.feature.rt_start()).collect::<Vec<_>>();
+    let mut cosine = scored.iter().map(|sf| sf.cosine_score).collect::<Vec<_>>();
+    let mut isotope = scored.iter().map(|sf| sf.isotope_score).collect::<Vec<_>>();
+    let mut combined = scored
+        .iter()
+        .map(|sf| sf.combined_score)
+        .collect::<Vec<_>>();
+    let mut ppm = scored
+        .iter()
+        .map(|sf| sf.feature.ppm_error)
+        .collect::<Vec<_>>();
+    let mut n_iso = scored
+        .iter()
+        .map(|sf| sf.feature.hills.len() as f64)
+        .collect::<Vec<_>>();
+    let mut rt_w = scored
+        .iter()
+        .map(|sf| sf.feature.rt_end() - sf.feature.rt_start())
+        .collect::<Vec<_>>();
 
     FeaturesReport {
         n: scored.len(),
         charge_distribution: charge_dist,
-        cosine_score:   stats(&mut cosine),
-        isotope_score:  stats(&mut isotope),
+        cosine_score: stats(&mut cosine),
+        isotope_score: stats(&mut isotope),
         combined_score: stats(&mut combined),
-        ppm_error:      stats(&mut ppm),
-        n_isotopes:     stats(&mut n_iso),
-        rt_width:       stats(&mut rt_w),
+        ppm_error: stats(&mut ppm),
+        n_isotopes: stats(&mut n_iso),
+        rt_width: stats(&mut rt_w),
     }
 }
 

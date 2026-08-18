@@ -235,7 +235,6 @@ pub fn build_consensus(
     let ref_rt_range = runs[alignment.reference_idx].rt_range();
     let rt_window_abs = config.rt_window_pct * (ref_rt_range.1 - ref_rt_range.0);
 
-
     // Greedy single-linkage sweep: compare each feature against the first member
     // (anchor) of the current group.  Comparing against the anchor rather than the
     // last member prevents drift in group coordinates as members accumulate.
@@ -267,12 +266,20 @@ pub fn build_consensus(
         if same_charge && mass_ok && rt_ok && im_ok {
             group.push(i);
         } else {
-            push_if_passes(emit_group(&projected, &group, runs.len()), config, &mut consensus);
+            push_if_passes(
+                emit_group(&projected, &group, runs.len()),
+                config,
+                &mut consensus,
+            );
             group.clear();
             group.push(i);
         }
     }
-    push_if_passes(emit_group(&projected, &group, runs.len()), config, &mut consensus);
+    push_if_passes(
+        emit_group(&projected, &group, runs.len()),
+        config,
+        &mut consensus,
+    );
     log::info!(
         "[timing] consensus sweep ({} pre-merge groups): {:.2?}",
         consensus.len(),
@@ -296,7 +303,10 @@ pub fn build_consensus(
         t_merge.elapsed()
     );
 
-    let n_multi_run = consensus.iter().filter(|c| c.n_contributing_runs > 1).count();
+    let n_multi_run = consensus
+        .iter()
+        .filter(|c| c.n_contributing_runs > 1)
+        .count();
     log::info!(
         "Consensus: {} groups from {} projected features ({} runs, {} cross-run)",
         consensus.len(),
@@ -465,7 +475,12 @@ fn merge_consensus(
 mod tests {
     use super::*;
 
-    fn proj(run_idx: usize, feature_idx: u32, combined_score: f64, ref_mz: f64) -> ProjectedFeature {
+    fn proj(
+        run_idx: usize,
+        feature_idx: u32,
+        combined_score: f64,
+        ref_mz: f64,
+    ) -> ProjectedFeature {
         ProjectedFeature {
             run_idx,
             feature_idx,
@@ -508,7 +523,10 @@ mod tests {
         let first = emit_group(&projected, &[0, 1], 2);
         for _ in 0..64 {
             let cf = emit_group(&projected, &[0, 1], 2);
-            assert_eq!(cf.ref_mz, first.ref_mz, "seed m/z must be stable across calls");
+            assert_eq!(
+                cf.ref_mz, first.ref_mz,
+                "seed m/z must be stable across calls"
+            );
             assert_eq!(cf.seed_run_idx, first.seed_run_idx);
         }
     }

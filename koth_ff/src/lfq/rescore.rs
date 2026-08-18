@@ -7,16 +7,17 @@
 //!   2. Bhattacharyya — observed vs theoretical isotope PATTERN match
 //!   3. coelution     — cosine between the matched isotopes' XIC traces
 //!   4. |IM delta|    — ion-mobility distance from the cell's own predicted IM
-//!                      (inert on Orbitrap, where IM is absent → imputed)
+//!      (inert on Orbitrap, where IM is absent → imputed)
 //!
 //! Protocol (Percolator-style, but with a QDA core):
-//!   * Competition = ALL target cells (detected + match-between-runs) + decoy
-//!     cells (all with signal). Every target is scored and gets a q, so a
-//!     background-contaminated cell in a depleted well is gatable regardless of
-//!     whether it was detected or transferred — required for fold-change rescue
-//!     on large-dynamic-range designs (e.g. timsTOF HYE).
-//!   * 3-fold cross-validation by `feature_idx` (a cell is never scored by a
-//!     model trained on its own feature).
+//!
+//! * Competition = ALL target cells (detected + match-between-runs) + decoy
+//!   cells (all with signal). Every target is scored and gets a q, so a
+//!   background-contaminated cell in a depleted well is gatable regardless of
+//!   whether it was detected or transferred — required for fold-change rescue
+//!   on large-dynamic-range designs (e.g. timsTOF HYE).
+//! * 3-fold cross-validation by `feature_idx` (a cell is never scored by a
+//!   model trained on its own feature).
 //!   * Within each training fold, iterate: q-values by the current score →
 //!     confident targets (train-FDR ≤ 1%, or the top-N by score as a fallback)
 //!     as positives, decoys as negatives → fit QDA → rescore.
@@ -288,7 +289,11 @@ pub fn compute_qvalues_qda(entries: &[LfqEntry]) -> HashMap<(usize, usize), f64>
             .filter(|v| v.is_finite())
             .collect();
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        medians[k] = if vals.is_empty() { 0.0 } else { vals[vals.len() / 2] };
+        medians[k] = if vals.is_empty() {
+            0.0
+        } else {
+            vals[vals.len() / 2]
+        };
     }
     let mut feat: Vec<[f64; NF]> = Vec::with_capacity(n);
     for r in &raw {
@@ -405,7 +410,14 @@ pub fn compute_qvalues_qda(entries: &[LfqEntry]) -> HashMap<(usize, usize), f64>
 mod tests {
     use super::*;
 
-    fn entry(feature_idx: usize, run_idx: usize, is_decoy: bool, ppm: f64, rt: f64, bc: f32) -> LfqEntry {
+    fn entry(
+        feature_idx: usize,
+        run_idx: usize,
+        is_decoy: bool,
+        ppm: f64,
+        rt: f64,
+        bc: f32,
+    ) -> LfqEntry {
         LfqEntry {
             feature_idx,
             run_idx,
@@ -438,7 +450,14 @@ mod tests {
             // decoys spread across the ppm/RT window with low BC
             let spread = ((i * 13) % 20) as f64 / 20.0;
             let dbc = 0.3f32 + 0.4 * ((i % 3) as f32) / 3.0;
-            entries.push(entry(10_000 + i, i % 20, true, 8.0 * spread, 0.3 * spread, dbc));
+            entries.push(entry(
+                10_000 + i,
+                i % 20,
+                true,
+                8.0 * spread,
+                0.3 * spread,
+                dbc,
+            ));
         }
         let q = compute_qvalues_qda(&entries);
         // Every target cell got a q-value; most should be small (well separated).
@@ -463,7 +482,14 @@ mod tests {
             let jitter = ((i * 7) % 11) as f64 / 11.0 - 0.5;
             entries.push(entry(i, i % 10, false, 0.2 * jitter, 0.01 * jitter, 0.9));
             let spread = ((i * 13) % 20) as f64 / 20.0;
-            entries.push(entry(10_000 + i, i % 10, true, 8.0 * spread, 0.3 * spread, 0.4));
+            entries.push(entry(
+                10_000 + i,
+                i % 10,
+                true,
+                8.0 * spread,
+                0.3 * spread,
+                0.4,
+            ));
         }
         let a = compute_qvalues_qda(&entries);
         let b = compute_qvalues_qda(&entries);

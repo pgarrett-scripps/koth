@@ -7,7 +7,7 @@ Two Rust binaries built together (`cargo build --release`):
 - **`koth_ff`** — per-run MS1 feature finder. `raw → [file] read/tolerances →
   [hills] chromatographic traces → [features] isotope chains (charge + averagine
   score) → [scoring] optional → hills + features output`. mzML, Bruker `.d`
-  (needs the `tdf` feature + sibling `../../d_noise` crate), and optional Thermo
+  (needs the default `tdf` feature, backed by the published `dnoise` crate), and optional Thermo
   `.raw` (`thermo` feature).
 - **`koth_align`** — cross-run alignment + LFQ. `koth_ff run dirs → [alignment]
   RANSAC RT warp + mass/IM drift → [lfq.consensus] group the same peptide across

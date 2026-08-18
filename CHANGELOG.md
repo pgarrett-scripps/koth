@@ -9,6 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Release builds now use the published `dnoise` 0.1.0 crate instead of requiring
+  a sibling source checkout. The minimum supported Rust version is 1.88 so the
+  optional Thermo dependency graph and the default Bruker build share one MSRV.
+- CI now checks formatting, Clippy, rustdoc, default and mzML-only builds across
+  Linux, macOS, and Windows. Tagged releases verify the tag/version match, test
+  and package the crate, then bundle both `koth_ff` and `koth_align` with SHA-256
+  checksums for all supported targets.
 - **The benchmark and the manuscript moved to their own repository**,
   [tacular-omics/koth-paper](https://github.com/tacular-omics/koth-paper), with
   their history. This repository is now the tool alone. Two consequences for

@@ -14,6 +14,19 @@ downstream statistical analysis.
 
 ## Install
 
+The project requires Rust 1.88 or newer. To install both command-line tools from
+a source checkout:
+
+```bash
+cargo install --locked --path koth_ff
+```
+
+Tagged releases also produce archives containing both `koth_ff` and
+`koth_align`, plus SHA-256 checksum files, for Linux x86_64, macOS x86_64 and
+arm64, and Windows x86_64.
+
+For a development build:
+
 ```bash
 cargo build --release
 # binaries are at target/release/koth_ff and target/release/koth_align

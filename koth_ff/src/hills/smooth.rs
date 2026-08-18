@@ -3,7 +3,7 @@
 /// After `ActiveHill::trim()` all leading/trailing zeros are gone, so every
 /// zero is an internal gap. Each gap run is filled by interpolating between the
 /// nearest non-zero neighbour on each side.
-pub fn fill_gaps(profile: &mut Vec<f32>) {
+pub fn fill_gaps(profile: &mut [f32]) {
     let n = profile.len();
     let mut i = 0;
     while i < n {
@@ -15,7 +15,11 @@ pub fn fill_gaps(profile: &mut Vec<f32>) {
             }
             let gap_end = i; // exclusive
 
-            let left_val = if gap_start > 0 { profile[gap_start - 1] } else { 0.0 };
+            let left_val = if gap_start > 0 {
+                profile[gap_start - 1]
+            } else {
+                0.0
+            };
             let right_val = if gap_end < n { profile[gap_end] } else { 0.0 };
             let span = (gap_end - gap_start + 1) as f32; // +1 to include the right anchor
 

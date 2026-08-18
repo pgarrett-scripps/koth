@@ -25,10 +25,17 @@ pub fn score_features(
         .collect();
 
     if log::log_enabled!(log::Level::Debug) {
-        let charged: Vec<&ScoredFeature> = all_scored.iter().filter(|sf| sf.feature.charge > 0).collect();
+        let charged: Vec<&ScoredFeature> = all_scored
+            .iter()
+            .filter(|sf| sf.feature.charge > 0)
+            .collect();
         if !charged.is_empty() {
-            let max_score = charged.iter().map(|sf| sf.combined_score).fold(f64::NEG_INFINITY, f64::max);
-            let mean_score = charged.iter().map(|sf| sf.combined_score).sum::<f64>() / charged.len() as f64;
+            let max_score = charged
+                .iter()
+                .map(|sf| sf.combined_score)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let mean_score =
+                charged.iter().map(|sf| sf.combined_score).sum::<f64>() / charged.len() as f64;
             let above = charged
                 .iter()
                 .filter(|sf| sf.isotope_score >= config.min_isotope_score_for_offset)
@@ -99,8 +106,11 @@ fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_offsets: &[i8]) -
 
     // `isotope_offset_enabled` = search neutron offsets [-1, +1]; disabled =
     // test only offset 0 (no monoisotopic reassignment).
-    let (offset_min, offset_max): (i8, i8) =
-        if config.isotope_offset_enabled { (-1, 1) } else { (0, 0) };
+    let (offset_min, offset_max): (i8, i8) = if config.isotope_offset_enabled {
+        (-1, 1)
+    } else {
+        (0, 0)
+    };
     for o in offset_min..=offset_max {
         // Shift obs: obs_aligned[j] = obs[j + o] (shift left by o)
         let mut obs_aligned = vec![0.0f64; k];
@@ -113,7 +123,12 @@ fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_offsets: &[i8]) -
 
         let sc = score_obs(&obs_aligned);
         // Bonus is used only to prefer offset=0 when scores are close; never stored.
-        let combined = sc + if o == 0 { config.offset_zero_bonus } else { 0.0 };
+        let combined = sc
+            + if o == 0 {
+                config.offset_zero_bonus
+            } else {
+                0.0
+            };
         if combined > best_combined {
             best_combined = combined;
             best_bc = sc;

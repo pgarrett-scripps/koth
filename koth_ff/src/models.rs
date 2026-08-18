@@ -165,11 +165,17 @@ impl Feature {
     }
 
     pub fn rt_start(&self) -> f64 {
-        self.hills.iter().map(|h| h.rt_start).fold(f64::INFINITY, f64::min)
+        self.hills
+            .iter()
+            .map(|h| h.rt_start)
+            .fold(f64::INFINITY, f64::min)
     }
 
     pub fn rt_end(&self) -> f64 {
-        self.hills.iter().map(|h| h.rt_end).fold(f64::NEG_INFINITY, f64::max)
+        self.hills
+            .iter()
+            .map(|h| h.rt_end)
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 
     pub fn im_apex(&self) -> f64 {
@@ -226,7 +232,10 @@ impl Feature {
     /// Isotope profile at the apex scan: one intensity per hill.
     pub fn isotope_profile_apex(&self) -> Vec<f64> {
         let apex = self.apex_scan();
-        self.hills.iter().map(|h| h.intensity_at_scan(apex)).collect()
+        self.hills
+            .iter()
+            .map(|h| h.intensity_at_scan(apex))
+            .collect()
     }
 
     /// Scan list for monoisotopic hill.

@@ -64,6 +64,22 @@ bruker_watershed_max_tof_offset = 10
 # aggressive. Omit to disable.
 # bruker_noise_sigma = 3.0
 
+# Opt into dnoise's single-pass streaming Bruker front-end. The default false
+# keeps the paper-validated local vertical-filter + watershed path.
+bruker_streaming = false
+
+# Streaming-only horizontal-halo filter and its reference-box parameters.
+bruker_halo = true
+bruker_halo_peak_fraction = 0.15
+bruker_halo_mz_idx_half_width = 80
+bruker_halo_scan_half_width = 2
+
+# Streaming-only ddaPASEF MS1 selection-polygon gate. It is a no-op when the
+# run contains no polygon. Pads expand the accepted polygon in Da and 1/K0.
+bruker_ms1_polygon = false
+bruker_ms1_polygon_mz_pad = 0.0
+bruker_ms1_polygon_im_pad = 0.0
+
 # Per-scan iterative noise filter. Estimates the noise floor by iteratively
 # sigma-clipping signal peaks, then discards any peak below
 # median + sigma * (1.4826 * MAD) of the noise. Omit to disable.
@@ -72,9 +88,9 @@ bruker_watershed_max_tof_offset = 10
 
 # Also detect MS2 hills, one channel per precursor isolation window
 # (DIA). Writes a second `hills_ms2.{tsv|parquet}` file alongside the MS1
-# hills. mzML only — Bruker .d MS2 frames are not yet supported.
+# hills. Supports DIA mzML and diaPASEF; DDA inputs produce no MS2 hills.
 # Can also be enabled at the command line with --ms2.
-ms2_hills_enabled = true
+ms2_hills_enabled = false
 
 # ID-free isotope-consistency m/z recalibration (Biosaur-style). A pass-1
 # feature detection collects the signed ppm deviation of every adjacent

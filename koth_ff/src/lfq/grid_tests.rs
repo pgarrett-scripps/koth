@@ -4,7 +4,14 @@ use std::sync::Arc;
 
 /// Minimal hill for grid tests: only the fields `build_grid` / `scan_rt` /
 /// `fill_row_from_hill` read are meaningful; the rest are inert.
-fn hill(mz: f64, rt_start: f64, rt_end: f64, im: f64, scan_start: usize, profile: Vec<f32>) -> Hill {
+fn hill(
+    mz: f64,
+    rt_start: f64,
+    rt_end: f64,
+    im: f64,
+    scan_start: usize,
+    profile: Vec<f32>,
+) -> Hill {
     let n = profile.len();
     let int_sum: f64 = profile.iter().map(|&x| x as f64).sum();
     let int_max: f64 = profile.iter().copied().fold(0.0f32, f32::max) as f64;
@@ -97,7 +104,11 @@ fn fill_row_skips_nonpositive_and_out_of_window_samples() {
     let mut row = vec![0.0f32; 2];
     let filled = fill_row_from_hill(&h, &mut row, 0.0, 1.0, 2, &scan_times);
     assert!(filled);
-    assert_eq!(row, vec![10.0, 0.0], "zero sample skipped, t=1.0 sample excluded");
+    assert_eq!(
+        row,
+        vec![10.0, 0.0],
+        "zero sample skipped, t=1.0 sample excluded"
+    );
 }
 
 fn grid_config() -> LfqConfig {
@@ -114,16 +125,30 @@ fn build_grid_matches_monoisotope_and_m1_rows() {
     let m1 = mono + C13_NEUTRON; // charge 1
     let scan_times = vec![0.0, 0.5, 1.0];
     let hills = vec![
-        hill(mono, 0.4, 0.6, 0.0, 1, vec![100.0]),        // -> iso 0
-        hill(m1, 0.4, 0.6, 0.0, 1, vec![80.0]),           // -> iso 1
-        hill(500.02, 0.4, 0.6, 0.0, 1, vec![999.0]),      // outside 10 ppm -> ignored
+        hill(mono, 0.4, 0.6, 0.0, 1, vec![100.0]),   // -> iso 0
+        hill(m1, 0.4, 0.6, 0.0, 1, vec![80.0]),      // -> iso 1
+        hill(500.02, 0.4, 0.6, 0.0, 1, vec![999.0]), // outside 10 ppm -> ignored
     ];
     let sorted = SortedHills::from_hills(&hills);
     let mut grid = XicGrid::empty(cfg.n_isotopes, cfg.grid_cols, 0.0, 1.0);
 
-    build_grid(&mut grid, &hills, &sorted, &scan_times, mono, 1, 0.5, 0.0, 0.5, &cfg);
+    build_grid(
+        &mut grid,
+        &hills,
+        &sorted,
+        &scan_times,
+        mono,
+        1,
+        0.5,
+        0.0,
+        0.5,
+        &cfg,
+    );
 
-    assert_eq!(grid.n_slots_filled, 2, "mono + M+1 rows filled, off-tol hill ignored");
+    assert_eq!(
+        grid.n_slots_filled, 2,
+        "mono + M+1 rows filled, off-tol hill ignored"
+    );
     // scan_start 1 -> scan_times[1] = 0.5 -> t=0.5 -> col 2 of 4.
     assert_eq!(grid.intensities[0][2], 100.0);
     assert_eq!(grid.intensities[1][2], 80.0);
@@ -145,8 +170,22 @@ fn build_grid_excludes_hills_outside_rt_window_and_im_tolerance() {
     let sorted = SortedHills::from_hills(&hills);
     let mut grid = XicGrid::empty(cfg.n_isotopes, cfg.grid_cols, 0.0, 1.0);
 
-    build_grid(&mut grid, &hills, &sorted, &scan_times, mono, 1, 0.5, 1.2, 0.5, &cfg);
+    build_grid(
+        &mut grid,
+        &hills,
+        &sorted,
+        &scan_times,
+        mono,
+        1,
+        0.5,
+        1.2,
+        0.5,
+        &cfg,
+    );
 
-    assert_eq!(grid.n_slots_filled, 0, "RT-out and IM-mismatch hills both rejected");
+    assert_eq!(
+        grid.n_slots_filled, 0,
+        "RT-out and IM-mismatch hills both rejected"
+    );
     assert!(grid.is_empty());
 }

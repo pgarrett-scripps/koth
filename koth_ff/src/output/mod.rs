@@ -1,6 +1,8 @@
 pub mod align_report;
 pub mod report;
-pub use align_report::{build_align_report, write_align_report, AlignReport, Timing as AlignTiming};
+pub use align_report::{
+    build_align_report, write_align_report, AlignReport, Timing as AlignTiming,
+};
 pub use report::{build_features_report, build_hills_report, write_report, RunReport};
 
 use std::path::Path;
@@ -78,6 +80,7 @@ const FEATURE_COLUMNS: &[&str] = &[
 ///     robust peak-top area that ignores noisy flanks/tails and dodges dips.
 ///   * `consec5` — max sum over contiguous windows of length min(5, n). The
 ///     contiguous-window analogue of `scattered5`.
+///
 /// These accompany the conventional `intensityApex` / `intensitySum` so the
 /// LFQ layer can compare quant readouts (see SI estimator comparison).
 fn quant_variants(profile: &[f64]) -> (f64, f64, f64) {
@@ -158,9 +161,7 @@ fn write_hills_tsv_inner(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut wtr = csv::WriterBuilder::new()
-        .delimiter(b'\t')
-        .from_path(path)?;
+    let mut wtr = csv::WriterBuilder::new().delimiter(b'\t').from_path(path)?;
 
     // Header
     let mut header: Vec<&str> = HILL_COLUMNS.to_vec();
@@ -221,10 +222,8 @@ fn write_hills_tsv_inner(
 /// List columns (elution_profile, isotope_profile, etc.) are JSON arrays.
 pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(), KothError> {
     // Sort by intensitySum descending, exclude charge=0
-    let mut scored: Vec<&ScoredFeature> = features
-        .iter()
-        .filter(|f| f.feature.charge > 0)
-        .collect();
+    let mut scored: Vec<&ScoredFeature> =
+        features.iter().filter(|f| f.feature.charge > 0).collect();
     scored.sort_by(|a, b| {
         b.feature
             .total_intensity()
@@ -232,9 +231,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
             .unwrap()
     });
 
-    let mut wtr = csv::WriterBuilder::new()
-        .delimiter(b'\t')
-        .from_path(path)?;
+    let mut wtr = csv::WriterBuilder::new().delimiter(b'\t').from_path(path)?;
 
     // Header
     wtr.write_record(FEATURE_COLUMNS)?;
@@ -302,11 +299,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
     }
 
     wtr.flush()?;
-    log::info!(
-        "Wrote {} features to {}",
-        scored.len(),
-        path.display()
-    );
+    log::info!("Wrote {} features to {}", scored.len(), path.display());
     Ok(())
 }
 
@@ -327,15 +320,18 @@ fn write_hills_parquet_inner(
     path: &Path,
     include_isolation_window: bool,
 ) -> Result<(), KothError> {
-    use std::sync::Arc;
     use arrow::array::{ArrayRef, Float64Array, Int64Array, StringArray, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
 
     let mut indices: Vec<usize> = (0..hills.len()).collect();
     indices.sort_by(|&a, &b| {
-        hills[b].intensity_sum.partial_cmp(&hills[a].intensity_sum).unwrap_or(std::cmp::Ordering::Equal)
+        hills[b]
+            .intensity_sum
+            .partial_cmp(&hills[a].intensity_sum)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Parquet element types, one per `HILL_COLUMNS` entry (same order). Names
@@ -374,31 +370,127 @@ fn write_hills_parquet_inner(
     }
     let schema = Arc::new(Schema::new(fields));
 
-    let profiles: Result<Vec<String>, serde_json::Error> = indices.iter()
+    let profiles: Result<Vec<String>, serde_json::Error> = indices
+        .iter()
         .map(|&i| serde_json::to_string(hills[i].intensity_profile.as_ref()))
         .collect();
     let profiles = profiles?;
 
     let mut columns: Vec<ArrayRef> = vec![
-        Arc::new(indices.iter().map(|&i| hills[i].hill_id).collect::<UInt64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].mz).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].mz_std).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].mz_se).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].rt).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].rt_start).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].rt_end).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].rt_width).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].im).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].im_std).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].scan_start as i64).collect::<Int64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].scan_apex as i64).collect::<Int64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].scan_end as i64).collect::<Int64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].n_scans as i64).collect::<Int64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].skipped_scans as i64).collect::<Int64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].intensity_sum).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].intensity_max).collect::<Float64Array>()),
-        Arc::new(indices.iter().map(|&i| hills[i].hill_score).collect::<Float64Array>()),
-        Arc::new(profiles.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].hill_id)
+                .collect::<UInt64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].mz)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].mz_std)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].mz_se)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].rt)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].rt_start)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].rt_end)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].rt_width)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].im)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].im_std)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].scan_start as i64)
+                .collect::<Int64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].scan_apex as i64)
+                .collect::<Int64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].scan_end as i64)
+                .collect::<Int64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].n_scans as i64)
+                .collect::<Int64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].skipped_scans as i64)
+                .collect::<Int64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].intensity_sum)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].intensity_max)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            indices
+                .iter()
+                .map(|&i| hills[i].hill_score)
+                .collect::<Float64Array>(),
+        ),
+        Arc::new(
+            profiles
+                .iter()
+                .map(|s| Some(s.as_str()))
+                .collect::<StringArray>(),
+        ),
     ];
     if include_isolation_window {
         let target: Float64Array = indices
@@ -424,8 +516,12 @@ fn write_hills_parquet_inner(
     let file = std::fs::File::create(path)?;
     let mut writer = ArrowWriter::try_new(file, schema, None)
         .map_err(|e| KothError::ParquetError(e.to_string()))?;
-    writer.write(&batch).map_err(|e| KothError::ParquetError(e.to_string()))?;
-    writer.close().map_err(|e| KothError::ParquetError(e.to_string()))?;
+    writer
+        .write(&batch)
+        .map_err(|e| KothError::ParquetError(e.to_string()))?;
+    writer
+        .close()
+        .map_err(|e| KothError::ParquetError(e.to_string()))?;
 
     log::info!("Wrote {} hills to {}", hills.len(), path.display());
     Ok(())
@@ -435,18 +531,19 @@ fn write_hills_parquet_inner(
 ///
 /// Schema mirrors features.tsv; list columns are stored as JSON strings.
 pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result<(), KothError> {
-    use std::sync::Arc;
-    use arrow::array::{ArrayRef, Float64Array, Int8Array, Int64Array, UInt8Array, StringArray};
+    use arrow::array::{ArrayRef, Float64Array, Int64Array, Int8Array, StringArray, UInt8Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::ArrowWriter;
+    use std::sync::Arc;
 
-    let mut scored: Vec<&ScoredFeature> = features
-        .iter()
-        .filter(|f| f.feature.charge > 0)
-        .collect();
+    let mut scored: Vec<&ScoredFeature> =
+        features.iter().filter(|f| f.feature.charge > 0).collect();
     scored.sort_by(|a, b| {
-        b.feature.total_intensity().partial_cmp(&a.feature.total_intensity()).unwrap_or(std::cmp::Ordering::Equal)
+        b.feature
+            .total_intensity()
+            .partial_cmp(&a.feature.total_intensity())
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Parquet element type + nullability, one per `FEATURE_COLUMNS` entry (same
@@ -486,29 +583,29 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
     ));
 
     let n = scored.len();
-    let mut mass_calib       = Vec::<Option<f64>>::with_capacity(n);
-    let mut mz               = Vec::<f64>::with_capacity(n);
-    let mut rt_apex          = Vec::<f64>::with_capacity(n);
-    let mut rt_start         = Vec::<f64>::with_capacity(n);
-    let mut rt_end           = Vec::<f64>::with_capacity(n);
-    let mut int_apex         = Vec::<f64>::with_capacity(n);
-    let mut int_sum          = Vec::<f64>::with_capacity(n);
-    let mut charge           = Vec::<u8>::with_capacity(n);
-    let mut n_isotopes       = Vec::<i64>::with_capacity(n);
-    let mut n_scans          = Vec::<i64>::with_capacity(n);
-    let mut im               = Vec::<f64>::with_capacity(n);
-    let mut cosine_score     = Vec::<f64>::with_capacity(n);
-    let mut ppm_err          = Vec::<f64>::with_capacity(n);
-    let mut neutron_offset   = Vec::<i8>::with_capacity(n);
-    let mut isotope_score    = Vec::<f64>::with_capacity(n);
-    let mut combined_score   = Vec::<f64>::with_capacity(n);
-    let mut theo_json        = Vec::<String>::with_capacity(n);
-    let mut iso_json         = Vec::<String>::with_capacity(n);
-    let mut elut_json        = Vec::<String>::with_capacity(n);
-    let mut hill_ids_json    = Vec::<String>::with_capacity(n);
-    let mut apex_parab_col   = Vec::<f64>::with_capacity(n);
-    let mut scattered5_col   = Vec::<f64>::with_capacity(n);
-    let mut consec5_col      = Vec::<f64>::with_capacity(n);
+    let mut mass_calib = Vec::<Option<f64>>::with_capacity(n);
+    let mut mz = Vec::<f64>::with_capacity(n);
+    let mut rt_apex = Vec::<f64>::with_capacity(n);
+    let mut rt_start = Vec::<f64>::with_capacity(n);
+    let mut rt_end = Vec::<f64>::with_capacity(n);
+    let mut int_apex = Vec::<f64>::with_capacity(n);
+    let mut int_sum = Vec::<f64>::with_capacity(n);
+    let mut charge = Vec::<u8>::with_capacity(n);
+    let mut n_isotopes = Vec::<i64>::with_capacity(n);
+    let mut n_scans = Vec::<i64>::with_capacity(n);
+    let mut im = Vec::<f64>::with_capacity(n);
+    let mut cosine_score = Vec::<f64>::with_capacity(n);
+    let mut ppm_err = Vec::<f64>::with_capacity(n);
+    let mut neutron_offset = Vec::<i8>::with_capacity(n);
+    let mut isotope_score = Vec::<f64>::with_capacity(n);
+    let mut combined_score = Vec::<f64>::with_capacity(n);
+    let mut theo_json = Vec::<String>::with_capacity(n);
+    let mut iso_json = Vec::<String>::with_capacity(n);
+    let mut elut_json = Vec::<String>::with_capacity(n);
+    let mut hill_ids_json = Vec::<String>::with_capacity(n);
+    let mut apex_parab_col = Vec::<f64>::with_capacity(n);
+    let mut scattered5_col = Vec::<f64>::with_capacity(n);
+    let mut consec5_col = Vec::<f64>::with_capacity(n);
 
     for sf in &scored {
         let f = &sf.feature;
@@ -561,10 +658,30 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         Arc::new(neutron_offset.into_iter().collect::<Int8Array>()),
         Arc::new(isotope_score.into_iter().collect::<Float64Array>()),
         Arc::new(combined_score.into_iter().collect::<Float64Array>()),
-        Arc::new(theo_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
-        Arc::new(iso_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
-        Arc::new(elut_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
-        Arc::new(hill_ids_json.iter().map(|s| Some(s.as_str())).collect::<StringArray>()),
+        Arc::new(
+            theo_json
+                .iter()
+                .map(|s| Some(s.as_str()))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            iso_json
+                .iter()
+                .map(|s| Some(s.as_str()))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            elut_json
+                .iter()
+                .map(|s| Some(s.as_str()))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            hill_ids_json
+                .iter()
+                .map(|s| Some(s.as_str()))
+                .collect::<StringArray>(),
+        ),
         Arc::new(apex_parab_col.into_iter().collect::<Float64Array>()),
         Arc::new(scattered5_col.into_iter().collect::<Float64Array>()),
         Arc::new(consec5_col.into_iter().collect::<Float64Array>()),
@@ -576,8 +693,12 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
     let file = std::fs::File::create(path)?;
     let mut writer = ArrowWriter::try_new(file, schema, None)
         .map_err(|e| KothError::ParquetError(e.to_string()))?;
-    writer.write(&batch).map_err(|e| KothError::ParquetError(e.to_string()))?;
-    writer.close().map_err(|e| KothError::ParquetError(e.to_string()))?;
+    writer
+        .write(&batch)
+        .map_err(|e| KothError::ParquetError(e.to_string()))?;
+    writer
+        .close()
+        .map_err(|e| KothError::ParquetError(e.to_string()))?;
 
     log::info!("Wrote {} features to {}", scored.len(), path.display());
     Ok(())

@@ -115,7 +115,10 @@ impl MzRecalBuilder {
     /// (e.g. a spacing that skipped an isotope) can't poison the medians. The
     /// medians are robust anyway; this mainly protects the marginal fallback.
     pub fn new(max_abs_ppm: f64) -> Self {
-        Self { samples: Vec::new(), max_abs_ppm: max_abs_ppm.max(0.0) }
+        Self {
+            samples: Vec::new(),
+            max_abs_ppm: max_abs_ppm.max(0.0),
+        }
     }
 
     #[inline]

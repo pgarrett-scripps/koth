@@ -56,7 +56,7 @@ const RANSAC_ITERS: usize = 4000;
 const RANSAC_REFINE_PASSES: usize = 4;
 
 /// Fit a RT warp by RANSAC inlier selection, then a median piecewise-linear fit
-/// (with isotonic monotonicity, via [`build_knots`]) on the inliers.
+/// (with isotonic monotonicity) on the inliers.
 ///
 /// Anchor matching is purely coordinate-based (charge + ppm + RT window), so a
 /// sizeable fraction of anchors are wrong-peptide matches scattered uniformly
@@ -139,7 +139,13 @@ pub fn fit_ransac_warp(anchors: &[AnchorPair], config: &AlignmentConfig) -> (RtW
     }
 
     let (kx, ky) = build_knots(anchors, &active, config.rt_warp_bandwidth);
-    (RtWarp { knot_x: kx, knot_y: ky }, active)
+    (
+        RtWarp {
+            knot_x: kx,
+            knot_y: ky,
+        },
+        active,
+    )
 }
 
 /// Pool-adjacent-violators (PAVA) isotonic regression: the least-squares

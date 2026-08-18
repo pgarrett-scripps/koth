@@ -112,8 +112,13 @@ pub fn score_grid(
     // trace across RT — "do the matched isotopes rise and fall together?". This
     // is the true inter-isotope cosine; it is orthogonal to the Bhattacharyya
     // pattern match. Rows with no signal are skipped; <2 signal rows → 1.0.
-    let coelution: f64 =
-        isotope_coelution(&grid.intensities, theory, n_rows, n_cols, config.lone_coelution);
+    let coelution: f64 = isotope_coelution(
+        &grid.intensities,
+        theory,
+        n_rows,
+        n_cols,
+        config.lone_coelution,
+    );
     scores.coelution = coelution as f32;
 
     // Averagine projection (opt-in, LfqConfig.averagine_projection): L2 norm of
@@ -274,7 +279,16 @@ mod spectral_tests {
         let mut cfg = LfqConfig::default();
         cfg.score_mode = ScoreMode::Spectral;
 
-        score_grid(&grid, &theory, &bc_template, &cfg, &mut scores, &mut col_totals, &mut obs, None);
+        score_grid(
+            &grid,
+            &theory,
+            &bc_template,
+            &cfg,
+            &mut scores,
+            &mut col_totals,
+            &mut obs,
+            None,
+        );
         let bc_center = scores.bhattacharyya[1];
 
         // The pattern match must penalise a lone monoisotope for the absent
@@ -335,7 +349,16 @@ mod spectral_tests {
         let mut scores = ColumnScores::new(3);
         let mut col_totals = vec![0.0f32; 3];
         let mut obs = vec![0.0f64; 3];
-        score_grid(grid, theory, &bc_template, &cfg, &mut scores, &mut col_totals, &mut obs, None);
+        score_grid(
+            grid,
+            theory,
+            &bc_template,
+            &cfg,
+            &mut scores,
+            &mut col_totals,
+            &mut obs,
+            None,
+        );
         integrate(grid, &scores, &col_totals, &cfg).intensity
     }
 
@@ -347,7 +370,10 @@ mod spectral_tests {
         let grid = centre_grid(50.0, 30.0, 20.0);
 
         let raw = integrate_grid(&grid, &theory, false);
-        assert_eq!(raw, 100.0, "flag off must report the raw box-sum (50+30+20)");
+        assert_eq!(
+            raw, 100.0,
+            "flag off must report the raw box-sum (50+30+20)"
+        );
 
         let proj = integrate_grid(&grid, &theory, true);
         // <[50,30,20], [0.5,0.3,0.2]> / ||[0.5,0.3,0.2]||₂ = 38 / 0.6164 ≈ 61.65
@@ -363,12 +389,15 @@ mod spectral_tests {
         let clean = centre_grid(50.0, 30.0, 20.0); // raw 100, on-pattern
         let contam = centre_grid(50.0, 30.0, 60.0); // raw 140, +40 off-pattern in M+2
 
-        let raw_ratio = integrate_grid(&contam, &theory, false)
-            / integrate_grid(&clean, &theory, false);
-        let proj_ratio = integrate_grid(&contam, &theory, true)
-            / integrate_grid(&clean, &theory, true);
+        let raw_ratio =
+            integrate_grid(&contam, &theory, false) / integrate_grid(&clean, &theory, false);
+        let proj_ratio =
+            integrate_grid(&contam, &theory, true) / integrate_grid(&clean, &theory, true);
 
-        assert!(raw_ratio > 1.35, "raw sum tracks the contamination (140/100), got {raw_ratio}");
+        assert!(
+            raw_ratio > 1.35,
+            "raw sum tracks the contamination (140/100), got {raw_ratio}"
+        );
         assert!(
             proj_ratio < raw_ratio,
             "projection must be less inflated by off-pattern signal (proj {proj_ratio} vs raw {raw_ratio})"

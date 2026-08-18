@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 version      = "0.1.0"
 edition      = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 license      = "MIT"
 repository   = "https://github.com/tacular-omics/koth_rust"
 
@@ -25,3 +25,15 @@ clap      = { version = "4", features = ["derive"] }
 arrow     = { version = "53", features = ["ipc"] }
 parquet   = { version = "53", features = ["arrow"] }
 rand      = "0.8"
+
+[workspace.lints.clippy]
+# Index-based loops are often clearer in the numerical kernels, and several
+# hot-path APIs intentionally pass their reusable scratch buffers separately.
+needless_range_loop = "allow"
+too_many_arguments = "allow"
+# Tests commonly start from production defaults and change only the value under
+# test; spelling every unrelated field in a struct update is less readable.
+field_reassign_with_default = "allow"
+# Existing format strings intentionally keep arguments visually aligned in
+# long diagnostic tables; this style is stable and harmless.
+uninlined_format_args = "allow"

@@ -53,9 +53,15 @@ fn thermo_dia_raw_ms2() {
     );
 
     // MS2 hills exist and every one carries a valid isolation window.
-    assert!(!with_ms2.ms2_hills.is_empty(), "DIA .raw must yield MS2 hills");
     assert!(
-        with_ms2.ms2_hills.iter().all(|h| h.isolation_window.is_some()),
+        !with_ms2.ms2_hills.is_empty(),
+        "DIA .raw must yield MS2 hills"
+    );
+    assert!(
+        with_ms2
+            .ms2_hills
+            .iter()
+            .all(|h| h.isolation_window.is_some()),
         "every MS2 hill must carry its isolation window"
     );
 
@@ -65,7 +71,11 @@ fn thermo_dia_raw_ms2() {
         with_ms2.ms2_hills.len(),
         windows.len()
     );
-    assert!(windows.len() >= 2, "expected multiple DIA windows, got {}", windows.len());
+    assert!(
+        windows.len() >= 2,
+        "expected multiple DIA windows, got {}",
+        windows.len()
+    );
     for (w, _) in &windows {
         assert!(w.lower <= w.target && w.target <= w.upper && w.lower <= w.upper);
     }

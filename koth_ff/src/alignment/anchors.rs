@@ -59,13 +59,16 @@ pub fn find_anchors(
         .features
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.combined_score >= config.min_anchor_combined_score && f.feature.charge > 0)
+        .filter(|(_, f)| {
+            f.combined_score >= config.min_anchor_combined_score && f.feature.charge > 0
+        })
         .collect();
     ref_sorted.sort_by(|a, b| {
-        a.1.feature
-            .charge
-            .cmp(&b.1.feature.charge)
-            .then(a.1.monoisotopic_mz().partial_cmp(&b.1.monoisotopic_mz()).unwrap())
+        a.1.feature.charge.cmp(&b.1.feature.charge).then(
+            a.1.monoisotopic_mz()
+                .partial_cmp(&b.1.monoisotopic_mz())
+                .unwrap(),
+        )
     });
 
     // Same for run features
@@ -73,13 +76,16 @@ pub fn find_anchors(
         .features
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.combined_score >= config.min_anchor_combined_score && f.feature.charge > 0)
+        .filter(|(_, f)| {
+            f.combined_score >= config.min_anchor_combined_score && f.feature.charge > 0
+        })
         .collect();
     run_sorted.sort_by(|a, b| {
-        a.1.feature
-            .charge
-            .cmp(&b.1.feature.charge)
-            .then(a.1.monoisotopic_mz().partial_cmp(&b.1.monoisotopic_mz()).unwrap())
+        a.1.feature.charge.cmp(&b.1.feature.charge).then(
+            a.1.monoisotopic_mz()
+                .partial_cmp(&b.1.monoisotopic_mz())
+                .unwrap(),
+        )
     });
 
     let mut anchors = Vec::new();
@@ -117,10 +123,8 @@ pub fn find_anchors(
             // Optional IM filter
             let ref_im = ref_feat.feature.im_apex();
             let run_im = run_feat.feature.im_apex();
-            if ref_im != 0.0 && run_im != 0.0 {
-                if (run_im - ref_im).abs() > config.im_tolerance {
-                    continue;
-                }
+            if ref_im != 0.0 && run_im != 0.0 && (run_im - ref_im).abs() > config.im_tolerance {
+                continue;
             }
             let ppm = (run_mz - ref_mz).abs() / ref_mz * 1e6;
             if best.is_none() || ppm < best.as_ref().unwrap().0 {
@@ -150,7 +154,14 @@ mod tests {
     use super::*;
 
     fn pair(ref_mz: f64, run_mz: f64, ref_im: f64, run_im: f64) -> AnchorPair {
-        AnchorPair { ref_rt_norm: 0.0, run_rt_norm: 0.0, ref_mz, run_mz, ref_im, run_im }
+        AnchorPair {
+            ref_rt_norm: 0.0,
+            run_rt_norm: 0.0,
+            ref_mz,
+            run_mz,
+            ref_im,
+            run_im,
+        }
     }
 
     #[test]

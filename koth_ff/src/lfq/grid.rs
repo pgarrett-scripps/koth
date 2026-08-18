@@ -58,6 +58,10 @@ impl SortedHills {
     pub fn len(&self) -> usize {
         self.keys.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
 }
 
 /// An extracted-ion-chromatogram grid for a single feature in a single run.
@@ -214,7 +218,7 @@ pub fn build_grid(
 /// Returns true if at least one sample fell within the window.
 fn fill_row_from_hill(
     hill: &Hill,
-    row: &mut Vec<f32>,
+    row: &mut [f32],
     rt_min: f64,
     rt_max: f64,
     n_cols: usize,
@@ -234,7 +238,7 @@ fn fill_row_from_hill(
 
         let rt = scan_rt(hill, i, scan_times);
         let t = (rt - rt_min) / rt_span;
-        if t < 0.0 || t >= 1.0 {
+        if !(0.0..1.0).contains(&t) {
             continue;
         }
 

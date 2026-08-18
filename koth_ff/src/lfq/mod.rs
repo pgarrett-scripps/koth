@@ -100,7 +100,7 @@ pub struct LfqConfig {
     pub normalize: String,
     /// Per-cell intensity estimator for the consensus matrix.
     /// "sum"  = integrated peak area (detected: feature `intensitySum`; MBR:
-    ///          summed XIC grid over [start,end]). Original behaviour.
+    ///          summed XIC grid over `start..=end`). Original behaviour.
     /// "apex" = peak height (detected: feature `intensityApex`; MBR: total
     ///          isotopologue intensity at the apex grid column). Removes the
     ///          integration-window variance that inflates replicate CV on
@@ -242,11 +242,17 @@ mod norm_tests {
         ];
         let mut d = vec![0.0f64; n_features * n_runs];
         let sf = apply_median_ratio_normalization(&mut t, &mut d, n_features, n_runs);
-        assert!((sf[1] - 1.0).abs() < 1e-9, "run 1 size factor should be +1 log2, got {}", sf[1]);
+        assert!(
+            (sf[1] - 1.0).abs() < 1e-9,
+            "run 1 size factor should be +1 log2, got {}",
+            sf[1]
+        );
         for feat in 0..n_features {
             let b = feat * n_runs;
-            assert!((t[b] - t[b + 1]).abs() < 1e-6 && (t[b] - t[b + 2]).abs() < 1e-6,
-                    "columns should equalize after removing the 2x scale");
+            assert!(
+                (t[b] - t[b + 1]).abs() < 1e-6 && (t[b] - t[b + 2]).abs() < 1e-6,
+                "columns should equalize after removing the 2x scale"
+            );
         }
     }
 
@@ -327,12 +333,14 @@ fn apply_median_ratio_normalization(
 /// integration outputs (intensity / scores), RT diagnostics, and the
 /// observed monoisotopic m/z + ion mobility of the winning M hill.
 ///
-/// Two ISOTOPE quality signals, kept strictly distinct (this is the pair that
+/// Two isotope-quality signals, kept strictly distinct (this is the pair that
 /// was historically conflated):
-///   - `spectral_bhattacharyya` = observed vs theoretical isotope *abundance
-///                                pattern* (penalises missing peaks).
-///   - `coelution`              = cosine between the matched isotopes' XIC
-///                                traces across RT ("do they co-elute?").
+///
+/// - `spectral_bhattacharyya` = observed vs theoretical isotope abundance
+///   pattern (penalises missing peaks).
+/// - `coelution` = cosine between the matched isotopes' XIC traces across RT
+///   ("do they co-elute?").
+///
 /// hybrid_score = (rt_score × int_score × spectral_bhattacharyya × coelution)^¼
 /// at the apex column. Neither is `Feature.cosine_score` (the feature-finder's
 /// chromatographic cosine between isotope hills).
@@ -436,11 +444,15 @@ impl IntensityMatrix {
 /// (charge, neutral mass ± ppm, aligned RT ± window, IM ± tolerance).
 /// The highest-scoring feature in each group seeds the LFQ extraction.
 /// For every consensus feature × run combination the function:
-///   1. Applies the alignment corrections to the seed's reference-space coordinates.
-///   2. Builds a 100-bin × n_isotopes XIC grid from the run's hills.
-///   3. Scores each column and integrates the best peak.
-///   4. Optionally repeats with a decoy feature for target-decoy q-values.
+///
+/// 1. Applies the alignment corrections to the seed's reference-space coordinates.
+/// 2. Builds a 100-bin × n_isotopes XIC grid from the run's hills.
+/// 3. Scores each column and integrates the best peak.
+/// 4. Optionally repeats with a decoy feature for target-decoy q-values.
+///
 /// `runs` carry only features (their `hills` may be empty); the full hills for
+/// each run are loaded on demand.
+///
 /// CPU-nanosecond accumulators for the three hot-loop phases, summed across all
 /// rayon tasks. Kept as a small struct so `quantify_cell` can be handed one
 /// reference instead of three loose atomics.
@@ -466,7 +478,8 @@ impl PhaseTimers {
         self.score.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
     }
     fn add_integrate(&self, d: std::time::Duration) {
-        self.integrate.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+        self.integrate
+            .fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
     }
 }
 
@@ -480,8 +493,8 @@ impl PhaseTimers {
 fn quantify_cell(
     grid: &mut XicGrid,
     scores: &mut ColumnScores,
-    col_totals: &mut Vec<f32>,
-    obs: &mut Vec<f64>,
+    col_totals: &mut [f32],
+    obs: &mut [f64],
     hills_vec: &[Hill],
     sorted: &SortedHills,
     scan_times: &[f64],
@@ -503,7 +516,16 @@ fn quantify_cell(
 ) -> LfqEntry {
     let t_b = Instant::now();
     build_grid(
-        grid, hills_vec, sorted, scan_times, mz, charge, rt, im, half_window, config,
+        grid,
+        hills_vec,
+        sorted,
+        scan_times,
+        mz,
+        charge,
+        rt,
+        im,
+        half_window,
+        config,
     );
     timers.add_build(t_b.elapsed());
     let slots = grid.n_slots_filled;
@@ -529,7 +551,11 @@ fn quantify_cell(
     let (apex_rt, peak_width) = peak_rt_stats(grid, config.grid_cols, &peak);
 
     let use_apex = config.quant_estimator.eq_ignore_ascii_case("apex");
-    let grid_intensity = if use_apex { peak.apex_intensity } else { peak.intensity };
+    let grid_intensity = if use_apex {
+        peak.apex_intensity
+    } else {
+        peak.intensity
+    };
     let intensity = intensity_override.unwrap_or(grid_intensity);
 
     LfqEntry {
@@ -626,7 +652,10 @@ fn assemble_matrix(
         }
     }
 
-    log::info!("[timing] intensity matrix assemble: {:.2?}", t_assemble.elapsed());
+    log::info!(
+        "[timing] intensity matrix assemble: {:.2?}",
+        t_assemble.elapsed()
+    );
 
     if config.normalize.eq_ignore_ascii_case("median_ratios") {
         let sf = apply_median_ratio_normalization(
@@ -661,10 +690,7 @@ fn assemble_matrix(
             .iter()
             .map(|f| runs[f.seed_run_idx].name.clone())
             .collect(),
-        feature_n_contributing_runs: consensus
-            .iter()
-            .map(|f| f.n_contributing_runs)
-            .collect(),
+        feature_n_contributing_runs: consensus.iter().map(|f| f.n_contributing_runs).collect(),
         hills_per_run,
         intensities,
         q_values: q_values_out,
@@ -697,17 +723,13 @@ pub fn quantify(
     };
 
     let t_consensus = Instant::now();
-    let consensus: Vec<ConsensusFeature> =
-        build_consensus(runs, alignment, config);
+    let consensus: Vec<ConsensusFeature> = build_consensus(runs, alignment, config);
     log::info!("[timing] build_consensus: {:.2?}", t_consensus.elapsed());
 
     let n_features = consensus.len();
     let n_runs = runs.len();
 
-    log::info!(
-        "LFQ: {} consensus features × {} runs",
-        n_features, n_runs
-    );
+    log::info!("LFQ: {} consensus features × {} runs", n_features, n_runs);
 
     // Full-length averagine Bhattacharyya templates, one per consensus feature.
     // Each depends only on `cf.neutral_mass`, so precompute here instead of
@@ -763,12 +785,8 @@ pub fn quantify(
     // `scan_times` is empty (it always is for the align pipeline), so calling it
     // inside the hot loop would cost ~10ms × n_features × n_runs.
     let t_rt = Instant::now();
-    let run_rt_ranges: Vec<(f64, f64)> =
-        runs.par_iter().map(|r| r.rt_range()).collect();
-    log::info!(
-        "[timing] run_rt_ranges precompute: {:.2?}",
-        t_rt.elapsed()
-    );
+    let run_rt_ranges: Vec<(f64, f64)> = runs.par_iter().map(|r| r.rt_range()).collect();
+    log::info!("[timing] run_rt_ranges precompute: {:.2?}", t_rt.elapsed());
 
     // Quantify RUN-MAJOR: load one run's hills, quantify every consensus feature
     // against it, then drop the hills before loading the next run. Peak memory is
@@ -788,7 +806,11 @@ pub fn quantify(
         let sorted = SortedHills::from_hills(&hills_vec);
         log::info!(
             "[lfq] run {}/{} '{}': {} hills loaded [{:.2?}]",
-            run_idx + 1, n_runs, run.name, hills_vec.len(), t_load.elapsed()
+            run_idx + 1,
+            n_runs,
+            run.name,
+            hills_vec.len(),
+            t_load.elapsed()
         );
 
         let run_entries: Vec<LfqEntry> = (0..n_features)
@@ -870,12 +892,27 @@ pub fn quantify(
                     })
                 };
                 entries.push(quantify_cell(
-                    &mut grid, &mut scores, &mut col_totals, &mut obs,
-                    &hills_vec, &sorted, &run.scan_times,
-                    &cf.theoretical_pattern, &bc_templates[feat_idx],
-                    config, &timers, feat_idx, run_idx, cf.charge,
-                    corr_mz, corr_rt, corr_im, half_window,
-                    rt_sigma_cols_at(corr_rt), false, contributed.is_none(),
+                    &mut grid,
+                    &mut scores,
+                    &mut col_totals,
+                    &mut obs,
+                    &hills_vec,
+                    &sorted,
+                    &run.scan_times,
+                    &cf.theoretical_pattern,
+                    &bc_templates[feat_idx],
+                    config,
+                    &timers,
+                    feat_idx,
+                    run_idx,
+                    cf.charge,
+                    corr_mz,
+                    corr_rt,
+                    corr_im,
+                    half_window,
+                    rt_sigma_cols_at(corr_rt),
+                    false,
+                    contributed.is_none(),
                     intensity_override,
                 ));
 
@@ -884,8 +921,8 @@ pub fn quantify(
                 // Reuses the same scratch buffers sequentially.
                 if config.run_tdc {
                     let dec_mz = corr_mz + config.decoy_mz_shift_da / cf.charge as f64;
-                    let dec_rt = corr_rt
-                        - config.decoy_rt_shift_pct * (run_rt_range.1 - run_rt_range.0);
+                    let dec_rt =
+                        corr_rt - config.decoy_rt_shift_pct * (run_rt_range.1 - run_rt_range.0);
                     // (Audit A2) Judge the decoy against the averagine envelope at
                     // its OWN shifted mass, not the target's, when the fix is on.
                     let (dec_pattern, dec_bc) = if config.decoy_own_template {
@@ -897,12 +934,28 @@ pub fn quantify(
                         (cf.theoretical_pattern.as_slice(), &bc_templates[feat_idx])
                     };
                     entries.push(quantify_cell(
-                        &mut grid, &mut scores, &mut col_totals, &mut obs,
-                        &hills_vec, &sorted, &run.scan_times,
-                        dec_pattern, dec_bc,
-                        config, &timers, feat_idx, run_idx, cf.charge,
-                        dec_mz, dec_rt, corr_im, half_window,
-                        rt_sigma_cols_at(dec_rt), true, false, None,
+                        &mut grid,
+                        &mut scores,
+                        &mut col_totals,
+                        &mut obs,
+                        &hills_vec,
+                        &sorted,
+                        &run.scan_times,
+                        dec_pattern,
+                        dec_bc,
+                        config,
+                        &timers,
+                        feat_idx,
+                        run_idx,
+                        cf.charge,
+                        dec_mz,
+                        dec_rt,
+                        corr_im,
+                        half_window,
+                        rt_sigma_cols_at(dec_rt),
+                        true,
+                        false,
+                        None,
                     ));
                 }
 
@@ -923,14 +976,21 @@ pub fn quantify(
     let ns_i = timers.integrate.load(Ordering::Relaxed);
     let total_ns = ns_b + ns_s + ns_i;
     let pct = |ns: u64| {
-        if total_ns == 0 { 0.0 } else { 100.0 * ns as f64 / total_ns as f64 }
+        if total_ns == 0 {
+            0.0
+        } else {
+            100.0 * ns as f64 / total_ns as f64
+        }
     };
     log::info!(
         "[timing] hot-loop breakdown (cpu-ns across all threads): \
          build_grid={:.2}s ({:.0}%), score_grid={:.2}s ({:.0}%), integrate={:.2}s ({:.0}%)",
-        ns_b as f64 / 1e9, pct(ns_b),
-        ns_s as f64 / 1e9, pct(ns_s),
-        ns_i as f64 / 1e9, pct(ns_i),
+        ns_b as f64 / 1e9,
+        pct(ns_b),
+        ns_s as f64 / 1e9,
+        pct(ns_s),
+        ns_i as f64 / 1e9,
+        pct(ns_i),
     );
 
     // Target-decoy q-values
@@ -949,7 +1009,10 @@ pub fn quantify(
     // Per-run detection summary
     let t_summary = Instant::now();
     log_detection_summary(&all_entries, runs, n_features, n_runs, config.run_tdc);
-    log::info!("[timing] per-run detection summary: {:.2?}", t_summary.elapsed());
+    log::info!(
+        "[timing] per-run detection summary: {:.2?}",
+        t_summary.elapsed()
+    );
 
     // Assemble output matrix
     assemble_matrix(

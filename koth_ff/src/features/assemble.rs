@@ -118,7 +118,6 @@ pub(super) fn build_charge_candidate(
 
     let step = config.neutron_mass / charge as f64;
     {
-
         // Per-charge averagine template, used to early-stop the chain when the
         // next theoretical isotope falls below the noise floor. The seed is
         // taken as monoisotopic — that is the assembler's contract, not a
@@ -126,7 +125,7 @@ pub(super) fn build_charge_candidate(
         let neutral_mass_seed_mono = seed_mz * charge as f64 - charge as f64 * PROTON_MASS;
         let template = averagine::lookup_template(neutral_mass_seed_mono);
         let template_mono = template[0].max(1e-12);
-        let seed_intensity = seed_hill.intensity_max as f64;
+        let seed_intensity = seed_hill.intensity_max;
 
         // Upward chain: M+1, M+2, ... (the only direction)
         let mut right_chain: Vec<usize> = Vec::new();
@@ -199,11 +198,7 @@ pub(super) fn build_charge_candidate(
                 .map(|&c| {
                     (
                         c,
-                        cosine_similarity(
-                            cos_ref_hill,
-                            sorted_hills[c],
-                            config.min_scan_overlap,
-                        ),
+                        cosine_similarity(cos_ref_hill, sorted_hills[c], config.min_scan_overlap),
                     )
                 })
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
@@ -219,8 +214,8 @@ pub(super) fn build_charge_candidate(
             // hills that co-elute (so pass cosine) but have wrong intensity
             // for a real isotope peak.
             if config.max_isotope_log2_ratio.is_finite() {
-                let pred_int = ref_hill.intensity_max as f64;
-                let cand_int = sorted_hills[best_c].intensity_max as f64;
+                let pred_int = ref_hill.intensity_max;
+                let cand_int = sorted_hills[best_c].intensity_max;
                 let theo_pred = template[iso - 1].max(1e-12);
                 let theo_cand = template[iso].max(1e-12);
                 if pred_int > 0.0 && cand_int > 0.0 {
@@ -272,11 +267,7 @@ fn rescore_chain(
     let hills: Vec<&Hill> = chain.iter().map(|&i| sorted_hills[i]).collect();
     let mut cos_sum = 0.0;
     for k in 0..hills.len() - 1 {
-        cos_sum += cosine_similarity(
-            hills[k],
-            hills[k + 1],
-            config.min_scan_overlap,
-        );
+        cos_sum += cosine_similarity(hills[k], hills[k + 1], config.min_scan_overlap);
     }
     let mean_cosine = cos_sum / (hills.len() - 1) as f64;
     let isotope_score = score_chain(&hills, charge, &config.sulfur_offsets);
@@ -473,7 +464,10 @@ fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_offsets: &[i8]) -> f64 
             .map(|(i, _)| i)
             .unwrap_or(0);
 
-    let obs: Vec<f64> = sorted.iter().map(|h| h.intensity_at_scan(apex_scan)).collect();
+    let obs: Vec<f64> = sorted
+        .iter()
+        .map(|h| h.intensity_at_scan(apex_scan))
+        .collect();
     let k = obs.len().min(10);
 
     if sulfur_offsets.is_empty() {

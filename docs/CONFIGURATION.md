@@ -66,8 +66,9 @@ ppm timsTOF).
   "required key"; omitted keys take the struct default. Because of
   `deny_unknown_fields`, you cannot leave a stale key lying around.
 - A handful of CLI flags on `koth_ff` override the config for that run:
-  `--no-scoring`, `--ms2-hills`, `--recalibrate` (→ `[file].mz_recalibration`),
-  `--filter-baseline` (→ `[hills].filter_large_baseline_hills`).
+  `--no-scoring`, `--ms2`, `--recalibrate` (→ `[file].mz_recalibration`),
+  `--filter-baseline-hills` (→ `[hills].filter_large_baseline_hills`), and
+  `--threads` (→ `[file].n_threads`).
 - This repository ships `example_config.toml` and `example_config_align.toml`,
   which list every knob at its struct default.
 - The canonical worked examples are the tuned configs `koth_ff.toml` /
@@ -108,7 +109,7 @@ Tolerances here are shared by **both** the hills and features stages.
 |---|---|---|---|
 | `noise_filter_sigma` | Option\<f64\> | `None` | Per-scan sigma-clip noise filter during hill detection (any format). Omit to disable (all shipped configs). Typical if used: `3.0`. |
 | `decoy_mode` | bool | `false` | Shuffle MS1 scans before detection → null/decoy feature set. `false` normally; `true` only for FDR null-building. (Skips `mz_recalibration`.) |
-| `ms2_hills_enabled` | bool | `false` | Also detect MS2 hills per isolation window (DIA), written to `hills_ms2.*`. `false` — shipped data is DDA. Bruker `.d` MS2 not yet supported. Overridable via `--ms2-hills`. |
+| `ms2_hills_enabled` | bool | `false` | Also detect MS2 hills per isolation window, written to `hills_ms2.*`. Supports DIA mzML and diaPASEF; DDA inputs yield no MS2 hills. Overridable via `--ms2`. |
 
 #### ID-free m/z recalibration + region-adaptive isotope tolerance
 Enabled in both production configs (**code default is off; the tuned configs turn
@@ -182,11 +183,14 @@ the acquisition differs.
 #### Bruker streaming path (experimental — see also [dnoise](#7-the-dnoise-integration-bruker-only))
 | Key | Type | Default | What it does / what to set |
 |---|---|---|---|
-| `bruker_streaming` | bool | `false` | **Experimental / opt-in.** `true` = run dnoise's full pipeline (vertical filter → halo → watershed) in-process, no denoised `.d` on disk. `false` = the historical local path (vertical + watershed, **no halo**) — **the paper's validated pipeline**. Keep `false` until re-validated on the Bruker cohort. |
+| `bruker_streaming` | bool | `false` | **Experimental / opt-in.** `true` = run dnoise's configured stages in-process (vertical filter → optional halo → optional MS1 polygon → watershed), with no denoised `.d` on disk. `false` = the historical local path (vertical + watershed, **no halo/polygon**) — **the paper's validated pipeline**. Keep `false` until re-validated on the Bruker cohort. |
 | `bruker_halo` | bool | `true` | Streaming-only: apply the horizontal-halo filter after the vertical filter. No effect unless `bruker_streaming = true`. |
 | `bruker_halo_peak_fraction` | f64 | `0.15` | Streaming-only: drop a peak below this fraction of the off-column box-max. |
 | `bruker_halo_mz_idx_half_width` | u32 | `80` | Streaming-only: halo reference-box half-width along TOF index. |
 | `bruker_halo_scan_half_width` | usize | `2` | Streaming-only: halo reference-box half-width along the IM scan axis. |
+| `bruker_ms1_polygon` | bool | `false` | Streaming-only: apply a run's ddaPASEF IMS selection polygon to MS1 points. No-op for diaPASEF or runs without a polygon. Keep off until cohort-validated. |
+| `bruker_ms1_polygon_mz_pad` | f64 | `0.0` | Expand each m/z edge of the selection polygon by this many Da, preserving isotope envelopes near an edge. |
+| `bruker_ms1_polygon_im_pad` | f64 | `0.0` | Expand each ion-mobility edge of the selection polygon by this many 1/K0 units. |
 
 ### 3.2 `[hills]` — chromatographic-trace detection
 
@@ -407,18 +411,18 @@ settings — is **identical across platforms**.
 
 ## 7. The dnoise integration (Bruker only)
 
-koth_ff depends on the sibling `dnoise` crate (`../../d_noise`, behind the `tdf`
-feature) for Bruker denoising. Two paths:
+koth_ff depends on the published `dnoise` 0.1 crate (behind the `tdf` feature)
+for Bruker denoising. Two paths:
 
 - **Default (paper-validated):** the `.d` is denoised **externally** by the
   `dnoise` CLI first, then koth_ff reads the denoised `.d` and applies its
   built-in vertical filter + watershed (`bruker_streaming = false`). koth_ff only
   exposes the vertical-filter (`bruker_filter_*`) and watershed
-  (`bruker_watershed_*`) knobs — **not** dnoise's full setting surface (halo,
-  smoothing, polygon gate, etc.).
+  (`bruker_watershed_*`) knobs.
 - **Streaming (opt-in):** `bruker_streaming = true` drives dnoise's `RunContext`
-  in-process (vertical → halo → watershed in one pass, no denoised `.d` on disk),
-  adding the `bruker_halo*` knobs. Keep off until cohort-re-validated.
+  in-process (vertical → optional halo → optional MS1 selection polygon →
+  watershed in one pass, no denoised `.d` on disk), adding the `bruker_halo*`
+  and `bruker_ms1_polygon*` knobs. Keep off until cohort-re-validated.
 
 ---
 

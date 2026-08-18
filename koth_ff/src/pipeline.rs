@@ -90,7 +90,10 @@ pub struct PipelineOptions {
 
 impl Default for PipelineOptions {
     fn default() -> Self {
-        Self { scoring: true, emit_ms2: false }
+        Self {
+            scoring: true,
+            emit_ms2: false,
+        }
     }
 }
 
@@ -147,7 +150,9 @@ pub fn group_ms2_hills_by_window(hills: Vec<Hill>) -> Vec<(IsolationWindow, Vec<
     // BTreeMap keyed on the stable integer window key → deterministic order.
     let mut groups: BTreeMap<(i64, i64, i64), (IsolationWindow, Vec<Hill>)> = BTreeMap::new();
     for h in hills {
-        let Some(iw) = h.isolation_window else { continue };
+        let Some(iw) = h.isolation_window else {
+            continue;
+        };
         groups
             .entry(iw.key())
             .or_insert_with(|| (iw, Vec::new()))
@@ -372,7 +377,10 @@ pub fn run_pipeline_with_ms2(
     config: &KothConfig,
     opts: &PipelineOptions,
 ) -> Result<FeatureFindingOutput, KothError> {
-    let opts = PipelineOptions { emit_ms2: true, ..opts.clone() };
+    let opts = PipelineOptions {
+        emit_ms2: true,
+        ..opts.clone()
+    };
     let mut sink = CollectingSink::default();
     run_pipeline_streaming(path, config, &opts, &mut sink)?;
     Ok(sink.out)

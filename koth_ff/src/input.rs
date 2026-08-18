@@ -354,7 +354,7 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
 }
 
 pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothError> {
-    use arrow::array::{Float64Array, Int8Array, Int64Array, UInt8Array, StringArray};
+    use arrow::array::{Float64Array, Int64Array, Int8Array, StringArray, UInt8Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let file = std::fs::File::open(path)?;

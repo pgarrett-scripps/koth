@@ -50,7 +50,14 @@ fn add_gaussian(p: &mut [f32], center: f32, sigma: f32, amp: f32) {
 ///  - multiplicative jitter (signal-proportional)
 ///  - a positive additive floor (|gauss|*floor) — this is what lifts valleys
 ///  - occasional sharp spikes (corrupts the global max)
-fn apply_noise(p: &mut [f32], rel: f32, floor: f32, spike_prob: f32, spike_mult: f32, rng: &mut Rng) {
+fn apply_noise(
+    p: &mut [f32],
+    rel: f32,
+    floor: f32,
+    spike_prob: f32,
+    spike_mult: f32,
+    rng: &mut Rng,
+) {
     for v in p.iter_mut() {
         let mult = 1.0 + rel * rng.gauss();
         let add = floor * rng.gauss().abs();
@@ -205,7 +212,10 @@ fn enforce_segments(peaks: &[usize], p: &[f32], min_scans: usize) -> usize {
         bounds.push(v);
     }
     bounds.push(p.len());
-    let segs = bounds.windows(2).filter(|w| w[1] - w[0] >= min_scans).count();
+    let segs = bounds
+        .windows(2)
+        .filter(|w| w[1] - w[0] >= min_scans)
+        .count();
     segs.max(1)
 }
 
@@ -283,7 +293,7 @@ fn algo_valley_ratio(p: &[f32], c: Cfg, ratio: f32) -> usize {
             let v = valley(&s, w[0], w[1]);
             let smaller = s[w[0]].min(s[w[1]]);
             let r = v / smaller.max(1e-6);
-            if worst.map_or(true, |(_, wr)| r > wr) {
+            if worst.is_none_or(|(_, wr)| r > wr) {
                 worst = Some((k, r));
             }
         }
@@ -325,7 +335,7 @@ fn algo_noise_aware(p: &[f32], c: Cfg, k: f32) -> usize {
         for (idx, w) in peaks.windows(2).enumerate() {
             let v = valley(&s, w[0], w[1]);
             let depth = s[w[0]].min(s[w[1]]) - v; // how far the notch drops below smaller peak
-            if worst.map_or(true, |(_, d)| depth < d) {
+            if worst.is_none_or(|(_, d)| depth < d) {
                 worst = Some((idx, depth));
             }
         }
@@ -377,12 +387,12 @@ fn best_peaks(p: &[f32], c: Cfg, k: f32) -> (Vec<usize>, Vec<f32>) {
 
     let cands = local_maxima(&s, min_h);
     let mut peaks = cands; // deliberately NO enforce_spacing
-    // A split between adjacent peaks is kept iff BOTH hold:
-    //   (relative) valley / smaller_peak <= ratio   -> fair to unequal duals,
-    //                                                   immune to spike inflation
-    //   (absolute) smaller_peak - valley >= k·σ     -> rejects noise notches
-    // The relative test kills noise-on-a-peak-top (valley sits near the apex);
-    // the absolute test kills shallow wiggles on a low baseline.
+                           // A split between adjacent peaks is kept iff BOTH hold:
+                           //   (relative) valley / smaller_peak <= ratio   -> fair to unequal duals,
+                           //                                                   immune to spike inflation
+                           //   (absolute) smaller_peak - valley >= k·σ     -> rejects noise notches
+                           // The relative test kills noise-on-a-peak-top (valley sits near the apex);
+                           // the absolute test kills shallow wiggles on a low baseline.
     let ratio = 0.70f32;
     loop {
         if peaks.len() <= 1 {
@@ -400,7 +410,7 @@ fn best_peaks(p: &[f32], c: Cfg, k: f32) -> (Vec<usize>, Vec<f32>) {
             if fails {
                 // badness: how far over the ratio, plus how far under the floor
                 let badness = (r - ratio).max(0.0) + (floor - depth).max(0.0) / floor;
-                if merge_at.map_or(true, |(_, b)| badness > b) {
+                if merge_at.is_none_or(|(_, b)| badness > b) {
                     merge_at = Some((idx, badness));
                 }
             }
@@ -562,9 +572,18 @@ fn main() {
     #[allow(clippy::type_complexity)]
     let algos: Vec<(&str, Box<dyn Fn(&[f32]) -> usize>)> = vec![
         ("current", Box::new(move |p: &[f32]| algo_current(p, c))),
-        ("smooth+rob", Box::new(move |p: &[f32]| algo_smooth_robust(p, c))),
-        ("valley", Box::new(move |p: &[f32]| algo_valley_ratio(p, c, 0.70))),
-        ("noise-aware", Box::new(move |p: &[f32]| algo_noise_aware(p, c, 4.0))),
+        (
+            "smooth+rob",
+            Box::new(move |p: &[f32]| algo_smooth_robust(p, c)),
+        ),
+        (
+            "valley",
+            Box::new(move |p: &[f32]| algo_valley_ratio(p, c, 0.70)),
+        ),
+        (
+            "noise-aware",
+            Box::new(move |p: &[f32]| algo_noise_aware(p, c, 4.0)),
+        ),
         ("BEST", Box::new(move |p: &[f32]| algo_best(p, c, 4.0))),
     ];
     let w = 12usize; // column width
@@ -595,7 +614,13 @@ fn main() {
         print!("{:<22} {:>4} ", case.name, case.expected);
         for (ai, h) in hits.iter().enumerate() {
             let pct = 100.0 * *h as f32 / SEEDS as f32;
-            let mark = if pct >= 90.0 { "✓" } else if pct >= 50.0 { "~" } else { "✗" };
+            let mark = if pct >= 90.0 {
+                "✓"
+            } else if pct >= 50.0 {
+                "~"
+            } else {
+                "✗"
+            };
             print!(" {:>w$}", format!("{:>3.0}% {}", pct, mark));
             totals[ai] += *h;
         }
@@ -606,14 +631,20 @@ fn main() {
     let denom = (SEEDS as u32) * cases().len() as u32;
     print!("{:<22} {:>4} ", "OVERALL", "");
     for t in &totals {
-        print!(" {:>w$}", format!("{:>3.0}%", 100.0 * *t as f32 / denom as f32));
+        print!(
+            " {:>w$}",
+            format!("{:>3.0}%", 100.0 * *t as f32 / denom as f32)
+        );
     }
     println!("\n\n  ✓ ≥90% correct   ~ ≥50%   ✗ <50%   (over {SEEDS} noise seeds)\n");
 
     // Optional: BEST_DEBUG=<case substring> dumps why BEST mis-counts that case.
     if let Ok(want) = std::env::var("BEST_DEBUG") {
         for case in cases().into_iter().filter(|c| c.name.contains(&want)) {
-            println!("--- debug BEST on '{}' (expected {}) ---", case.name, case.expected);
+            println!(
+                "--- debug BEST on '{}' (expected {}) ---",
+                case.name, case.expected
+            );
             for seed in 0..SEEDS {
                 let mut rng = Rng::new(seed.wrapping_mul(2654435761) ^ case.name.len() as u64);
                 let prof = (case.build)(&mut rng);

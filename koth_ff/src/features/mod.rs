@@ -44,7 +44,12 @@ pub fn detect_features_with_recal(
     log::info!("Detecting isotope features from {} hills", hills.len());
 
     let mut order: Vec<usize> = (0..hills.len()).collect();
-    order.sort_by(|&a, &b| hills[a].mz.partial_cmp(&hills[b].mz).unwrap_or(Ordering::Equal));
+    order.sort_by(|&a, &b| {
+        hills[a]
+            .mz
+            .partial_cmp(&hills[b].mz)
+            .unwrap_or(Ordering::Equal)
+    });
     let sorted_hills: Vec<&Hill> = order.iter().map(|&i| &hills[i]).collect();
     let mz_array: Vec<f64> = sorted_hills.iter().map(|h| h.mz).collect();
     let im_array: Vec<f64> = sorted_hills.iter().map(|h| h.im).collect();
@@ -95,8 +100,11 @@ pub fn detect_features_with_recal(
     let features: Vec<Feature> = accepted
         .into_iter()
         .map(|c| {
-            let mut chain_hills: Vec<Hill> =
-                c.hill_indices.iter().map(|&i| (*sorted_hills[i]).clone()).collect();
+            let mut chain_hills: Vec<Hill> = c
+                .hill_indices
+                .iter()
+                .map(|&i| (*sorted_hills[i]).clone())
+                .collect();
             chain_hills.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
 
             let cosine_sims: Vec<f64> = (0..chain_hills.len().saturating_sub(1))
@@ -133,7 +141,11 @@ pub fn detect_features_with_recal(
                 ppm_errors.iter().sum::<f64>() / ppm_errors.len() as f64
             };
 
-            let charge = if c.hill_indices.len() > 1 { c.charge } else { 0 };
+            let charge = if c.hill_indices.len() > 1 {
+                c.charge
+            } else {
+                0
+            };
 
             Feature {
                 hills: chain_hills,

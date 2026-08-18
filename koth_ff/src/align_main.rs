@@ -1,5 +1,5 @@
 use std::io::{BufWriter, Write as IoWrite};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -45,8 +45,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let log_filter = format!("koth_ff={}", args.log_level);
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter)).init();
 
     let config = match &args.config {
         Some(p) => AlignConfig::from_toml(p)
@@ -98,7 +97,10 @@ fn main() -> anyhow::Result<()> {
         let t = Instant::now();
 
         let features = read_features(&rp.features_path).with_context(|| {
-            format!("Failed to read features from {}", rp.features_path.display())
+            format!(
+                "Failed to read features from {}",
+                rp.features_path.display()
+            )
         })?;
 
         log::info!(
@@ -111,7 +113,7 @@ fn main() -> anyhow::Result<()> {
         runs.push(RunInput {
             name: rp.name.clone(),
             features,
-            hills: Vec::new(), // streamed per-run in quantify()
+            hills: Vec::new(),      // streamed per-run in quantify()
             scan_times: Vec::new(), // not stored in output files; grid uses rt interpolation
         });
     }
@@ -188,7 +190,10 @@ fn main() -> anyhow::Result<()> {
         if config.output.export_decoys {
             let t = Instant::now();
             write_decoy_matrix_tsv(&matrix, &out_dir)?;
-            log::info!("[timing] write decoy_intensity_matrix.tsv: {:.2?}", t.elapsed());
+            log::info!(
+                "[timing] write decoy_intensity_matrix.tsv: {:.2?}",
+                t.elapsed()
+            );
         }
     }
     if config.output.export_details {
@@ -266,7 +271,7 @@ fn write_feature_metadata_cols(
 /// the per-cell value/format and the log label.
 fn write_cell_matrix<F>(
     matrix: &IntensityMatrix,
-    out_dir: &PathBuf,
+    out_dir: &Path,
     filename: &str,
     log_label: &str,
     mut cell: F,
@@ -278,7 +283,10 @@ where
     let file = std::fs::File::create(&path)?;
     let mut f = BufWriter::with_capacity(1 << 20, file);
 
-    write!(f, "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs")?;
+    write!(
+        f,
+        "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs"
+    )?;
     for name in &matrix.run_names {
         write!(f, "\t{}", name)?;
     }
@@ -300,7 +308,7 @@ where
 /// Write `consensus_features.tsv` — one row per consensus feature.
 fn write_consensus_tsv(
     matrix: &IntensityMatrix,
-    out_dir: &PathBuf,
+    out_dir: &Path,
     max_qvalue: f64,
 ) -> anyhow::Result<()> {
     let path = out_dir.join("consensus_features.tsv");
@@ -315,8 +323,7 @@ fn write_consensus_tsv(
     for feat in 0..matrix.n_features {
         let n_detected = (0..matrix.n_runs)
             .filter(|&run| {
-                matrix.intensity(feat, run) > 0.0
-                    && matrix.q_value(feat, run) <= max_qvalue
+                matrix.intensity(feat, run) > 0.0 && matrix.q_value(feat, run) <= max_qvalue
             })
             .count();
 
@@ -342,7 +349,7 @@ fn write_consensus_tsv(
 
 /// Write `intensity_matrix.tsv` — features × runs, all intensities unfiltered.
 /// Use `qvalue_matrix.tsv` to apply an FDR threshold downstream.
-fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
+fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<()> {
     write_cell_matrix(
         matrix,
         out_dir,
@@ -362,7 +369,7 @@ fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Resu
 /// Write `qvalue_matrix.tsv` — same layout as intensity_matrix but cells are
 /// TDC q-values (1.0 = no signal / TDC not run, 0.0 = perfect score).
 /// Use this file to apply an FDR threshold to intensity_matrix.tsv downstream.
-fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
+fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<()> {
     write_cell_matrix(
         matrix,
         out_dir,
@@ -374,7 +381,7 @@ fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyho
 
 /// Write `decoy_intensity_matrix.tsv` — mirrors `intensity_matrix.tsv` but
 /// each cell holds the decoy-pass intensity for that (feature, run).
-fn write_decoy_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
+fn write_decoy_matrix_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<()> {
     write_cell_matrix(
         matrix,
         out_dir,
@@ -396,7 +403,7 @@ fn write_decoy_matrix_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow
 /// stats, RT diagnostics, and observed monoisotopic m/z + ion mobility.
 /// `q_value` is filled for target rows only (decoys get NaN since TDC ranks
 /// targets against decoys, not the other way round).
-fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &PathBuf) -> anyhow::Result<()> {
+fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<()> {
     let path = out_dir.join("lfq_details.tsv");
     let file = std::fs::File::create(&path)?;
     let mut f = BufWriter::with_capacity(1 << 20, file);

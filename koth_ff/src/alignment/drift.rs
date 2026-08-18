@@ -22,7 +22,10 @@ pub struct DriftFit {
 
 impl DriftFit {
     pub fn zero() -> Self {
-        Self { intercept: 0.0, slope: 0.0 }
+        Self {
+            intercept: 0.0,
+            slope: 0.0,
+        }
     }
 
     /// Predict the drift value at a given (normalised) RT.
@@ -83,13 +86,15 @@ fn fit_with_sigma_clip(pairs: &[(f64, f64)]) -> (DriftFit, Vec<bool>) {
         let residuals: Vec<f64> = pairs
             .iter()
             .zip(active.iter())
-            .filter_map(|((x, y), &ok)| {
-                if ok {
-                    Some(y - fit.predict(*x))
-                } else {
-                    None
-                }
-            })
+            .filter_map(
+                |((x, y), &ok)| {
+                    if ok {
+                        Some(y - fit.predict(*x))
+                    } else {
+                        None
+                    }
+                },
+            )
             .collect();
 
         if residuals.is_empty() {
@@ -144,7 +149,10 @@ fn ols(pairs: &[(f64, f64)]) -> DriftFit {
 
     let denom = n * sxx - sx * sx;
     if denom.abs() < 1e-12 {
-        return DriftFit { intercept: sy / n, slope: 0.0 };
+        return DriftFit {
+            intercept: sy / n,
+            slope: 0.0,
+        };
     }
     let slope = (n * sxy - sx * sy) / denom;
     let intercept = (sy - slope * sx) / n;

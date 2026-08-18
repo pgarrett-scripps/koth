@@ -65,7 +65,11 @@ mod tests {
     use crate::models::{Peak, Spectrum};
 
     fn peak(intensity: f32) -> Peak {
-        Peak { mz: 500.0, intensity, ion_mobility: 0.0 }
+        Peak {
+            mz: 500.0,
+            intensity,
+            ion_mobility: 0.0,
+        }
     }
 
     fn spectrum(intensities: &[f32]) -> Spectrum {

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use super::smooth;
 use crate::config::HillsConfig;
 use crate::models::Hill;
-use super::smooth;
 
 /// Build sub-hills by cutting `hill.intensity_profile` at the given (sorted,
 /// interior) split-point indices. Each segment's statistics are recomputed from
@@ -51,7 +51,10 @@ fn build_sub_hills(hill: &Hill, split_points: &[usize], min_scans: usize) -> Vec
         let rt_apex = hill.rt_start + (abs_apex - hill.scan_start) as f64 * rt_per_scan;
 
         let intensity_sum: f64 = segment_profile.iter().map(|&x| x as f64).sum();
-        let intensity_max = segment_profile.iter().map(|&x| x as f64).fold(0.0f64, f64::max);
+        let intensity_max = segment_profile
+            .iter()
+            .map(|&x| x as f64)
+            .fold(0.0f64, f64::max);
         let skipped = segment_profile.iter().filter(|&&x| x == 0.0).count();
         let hill_score = smooth::compute_hill_score(&segment_profile);
 
@@ -84,7 +87,11 @@ fn build_sub_hills(hill: &Hill, split_points: &[usize], min_scans: usize) -> Vec
         });
     }
 
-    if result.is_empty() { vec![hill.clone()] } else { result }
+    if result.is_empty() {
+        vec![hill.clone()]
+    } else {
+        result
+    }
 }
 
 /// Split points = the valley (minimum) index between each adjacent peak pair,
@@ -161,7 +168,7 @@ pub fn split_hill_persistence(
             let depth = smaller - v;
             if r > ratio || depth < floor {
                 let badness = (r - ratio).max(0.0) + (floor - depth).max(0.0) / floor;
-                if merge_at.map_or(true, |(_, b)| badness > b) {
+                if merge_at.is_none_or(|(_, b)| badness > b) {
                     merge_at = Some((idx, badness));
                 }
             }
@@ -323,7 +330,10 @@ mod tests {
     fn median3_kills_lone_spike() {
         let p = vec![10.0f32, 9.0, 500.0, 11.0, 10.0];
         let m = median3(&p);
-        assert!(m[2] < 12.0, "spike should be replaced by a neighbour: {m:?}");
+        assert!(
+            m[2] < 12.0,
+            "spike should be replaced by a neighbour: {m:?}"
+        );
     }
 
     #[test]

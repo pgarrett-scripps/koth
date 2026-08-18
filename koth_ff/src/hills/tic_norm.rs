@@ -221,13 +221,17 @@ mod tests {
         normalize_tic_in_place(&mut s, 11, 0.5, 3.0, RefMode::Median);
         // Apex scan median is 25 vs window median 20 → scale ≈ 0.8.
         // Apex peak 10000 should be barely changed (within ~25%).
-        assert!(s[10].peaks[3].intensity > 7000.0,
-                "apex peak should not be dragged down too much in median mode (got {})",
-                s[10].peaks[3].intensity);
+        assert!(
+            s[10].peaks[3].intensity > 7000.0,
+            "apex peak should not be dragged down too much in median mode (got {})",
+            s[10].peaks[3].intensity
+        );
         // Dropout scan median is 2 vs window median 20 → ratio 10×, clamped to 3.0.
         // Peak 3.0 should become 9.0.
-        assert!((s[15].peaks[2].intensity - 9.0).abs() < 0.5,
-                "dropout peak should be boosted ~3× (got {})",
-                s[15].peaks[2].intensity);
+        assert!(
+            (s[15].peaks[2].intensity - 9.0).abs() < 0.5,
+            "dropout peak should be boosted ~3× (got {})",
+            s[15].peaks[2].intensity
+        );
     }
 }

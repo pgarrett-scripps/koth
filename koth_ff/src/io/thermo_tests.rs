@@ -30,7 +30,11 @@ fn dda_windows(n: usize) -> Vec<IsolationWindow> {
     (0..n)
         .map(|i| {
             let center = 400.0 + i as f64 * 0.37; // scattered, unique per scan
-            IsolationWindow { target: center, lower: center - 0.35, upper: center + 0.35 }
+            IsolationWindow {
+                target: center,
+                lower: center - 0.35,
+                upper: center + 0.35,
+            }
         })
         .collect()
 }
@@ -122,7 +126,11 @@ fn recurrence_at_threshold_boundary() {
 
     // 4 windows x 2 cycles + 1 extra distinct = 9 scans / 5 windows = 1.8x.
     let mut under = dia_schedule(400.0, 25.0, 4, 2);
-    under.push(IsolationWindow { target: 999.0, lower: 990.0, upper: 1008.0 });
+    under.push(IsolationWindow {
+        target: 999.0,
+        lower: 990.0,
+        upper: 1008.0,
+    });
     let s = schedule_stats(&under);
     assert!(s.recurrence < MIN_RECURRENCE);
     assert!(!is_dia_schedule(&under));

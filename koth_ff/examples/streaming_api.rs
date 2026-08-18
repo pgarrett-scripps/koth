@@ -93,7 +93,9 @@ fn tracer_style(path: &std::path::Path, config: &KothConfig) {
         .expect("streaming pipeline");
     println!(
         "[tracer] streamed {} features (sum intensity {:.3e}) over {} indexed hills",
-        sink.n_features, sink.total_intensity, sink.hills.len()
+        sink.n_features,
+        sink.total_intensity,
+        sink.hills.len()
     );
 }
 

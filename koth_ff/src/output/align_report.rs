@@ -22,9 +22,7 @@ use serde::Serialize;
 /// bottleneck — see lfq/mod.rs for the matching loop-hoisting fix.
 const MAX_ANCHORS_PER_RUN: usize = 500;
 
-use crate::alignment::{
-    drift::DriftFit, warp::RtWarp, AlignmentResult, RunAlignment, RunInput,
-};
+use crate::alignment::{drift::DriftFit, warp::RtWarp, AlignmentResult, RunAlignment, RunInput};
 use crate::config::AlignConfig;
 use crate::error::KothError;
 use crate::lfq::IntensityMatrix;
@@ -254,7 +252,7 @@ fn build_anchors_block(al: &RunAlignment) -> AlignmentDiagnostics {
     // sample (helpful for diffing reports).
     let n_total = records.len();
     let sampled_records = if n_total > MAX_ANCHORS_PER_RUN {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(0xa11c_0_de);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x0a11_c0de);
         records.shuffle(&mut rng);
         records.truncate(MAX_ANCHORS_PER_RUN);
         records
@@ -393,7 +391,10 @@ pub fn build_align_report(
         runs: runs_out,
         timing,
     };
-    log::info!("[timing] build_align_report inner: {:.2?}", t_outer.elapsed());
+    log::info!(
+        "[timing] build_align_report inner: {:.2?}",
+        t_outer.elapsed()
+    );
     report
 }
 
@@ -413,4 +414,3 @@ pub fn write_align_report(report: &AlignReport, path: &Path) -> Result<(), KothE
     log::info!("Wrote align report to {}", path.display());
     Ok(())
 }
-

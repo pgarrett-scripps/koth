@@ -98,11 +98,11 @@ pub struct FileConfig {
     #[serde(default)]
     pub bruker_noise_sigma: Option<f64>,
     /// Use the in-process `dnoise` streaming API instead of the local two-stage
-    /// reader. When `true`, each raw frame is run through dnoise's own pipeline
-    /// (vertical-IM filter -> horizontal halo -> watershed) in a single pass with
-    /// no denoised `.d` written to disk, using the exact stage code the standalone
-    /// `dnoise` tool runs. When `false` (default), the historical local path runs
-    /// (vertical filter + watershed only, no halo) — this is the paper's validated
+    /// reader. When `true`, each raw frame is run through dnoise's configured
+    /// stages (vertical-IM filter -> optional horizontal halo -> optional MS1
+    /// polygon -> watershed) in a single pass with no denoised `.d` written to
+    /// disk. When `false` (default), the historical local path runs (vertical
+    /// filter + watershed only, no halo/polygon) — this is the paper's validated
     /// pipeline, so streaming is opt-in until re-validated on the Bruker cohort.
     #[serde(default)]
     pub bruker_streaming: bool,
@@ -123,6 +123,27 @@ pub struct FileConfig {
     /// Default 2.
     #[serde(default = "default_bruker_halo_scan_half_width")]
     pub bruker_halo_scan_half_width: usize,
+    /// Streaming path only: apply dnoise's ddaPASEF MS1 selection-polygon gate,
+    /// dropping MS1 points outside the run's IMS PolygonFilter — the (m/z, 1/K0)
+    /// region the acquisition method restricts precursor selection to. Signal
+    /// outside it was never a fragmentation candidate (background, the
+    /// singly-charged hump, out-of-range ions).
+    ///
+    /// Auto-detected: a no-op on diaPASEF and on any run that stores no polygon,
+    /// so enabling it cannot fail on data that has none. Default `false`, which
+    /// matches dnoise's own default and leaves every existing config's output
+    /// byte-identical. No effect unless `bruker_streaming` is set.
+    #[serde(default)]
+    pub bruker_ms1_polygon: bool,
+    /// Polygon gate: m/z leniency added to each side of the polygon interior, in
+    /// Daltons. Isotopes run to higher m/z, so a pad keeps an edge precursor's
+    /// envelope intact. Default 0.0 (the literal polygon).
+    #[serde(default)]
+    pub bruker_ms1_polygon_mz_pad: f64,
+    /// Polygon gate: ion-mobility leniency added to each side, in 1/K0.
+    /// Default 0.0 (the literal polygon).
+    #[serde(default)]
+    pub bruker_ms1_polygon_im_pad: f64,
     /// Per-scan iterative sigma-clipping noise filter. When set, peaks whose
     /// intensity falls below `median + sigma * (1.4826 * MAD)` of the estimated
     /// noise floor are discarded before hill detection.
@@ -134,8 +155,8 @@ pub struct FileConfig {
     #[serde(default)]
     pub decoy_mode: bool,
     /// If true, additionally detect MS2 hills (one set of hills per precursor
-    /// isolation window) from mzML inputs. Written to `hills_ms2.{ext}`.
-    /// Bruker .d MS2 frames are not yet supported.
+    /// isolation window) from DIA mzML or diaPASEF inputs. Written to
+    /// `hills_ms2.{ext}`. DDA inputs produce no MS2 hills.
     #[serde(default)]
     pub ms2_hills_enabled: bool,
     /// Enable ID-free isotope-consistency m/z recalibration. A pass-1 feature
@@ -205,6 +226,9 @@ impl Default for FileConfig {
             bruker_halo_peak_fraction: default_bruker_halo_peak_fraction(),
             bruker_halo_mz_idx_half_width: default_bruker_halo_mz_idx_half_width(),
             bruker_halo_scan_half_width: default_bruker_halo_scan_half_width(),
+            bruker_ms1_polygon: false,
+            bruker_ms1_polygon_mz_pad: 0.0,
+            bruker_ms1_polygon_im_pad: 0.0,
             noise_filter_sigma: None,
             decoy_mode: false,
             ms2_hills_enabled: false,

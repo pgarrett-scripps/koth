@@ -6,18 +6,18 @@ pub struct HillsConfig {
     pub min_scans: usize,
     pub max_gap: usize,
     pub split_hills: bool,
-    /// [persistence] A split between two adjacent peaks is kept only if the
+    /// Persistence: a split between two adjacent peaks is kept only if the
     /// valley between them drops to <= this fraction of the SMALLER peak.
     /// Scale-free and immune to spike inflation. Default 0.70.
     #[serde(default = "default_split_valley_ratio")]
     pub split_valley_ratio: f64,
-    /// [persistence] Absolute notch-depth floor as a multiple of the estimated
+    /// Persistence: absolute notch-depth floor as a multiple of the estimated
     /// noise sigma (MAD of the trace's first difference). Rejects shallow noise
     /// notches that the relative test alone would admit on a low baseline.
     /// Default 4.0.
     #[serde(default = "default_split_sigma_mult")]
     pub split_sigma_mult: f64,
-    /// [persistence] Minimum peak height as a fraction of the robust (95th-pct)
+    /// Persistence: minimum peak height as a fraction of the robust (95th-pct)
     /// max intensity. Lower catches faint minor co-eluting peaks (e.g. 10:1
     /// duals); higher rejects baseline bumps. Default 0.10.
     #[serde(default = "default_split_height_frac")]
@@ -223,6 +223,30 @@ impl HillsMs2Overrides {
     }
 }
 
+impl Default for HillsConfig {
+    fn default() -> Self {
+        Self {
+            min_scans: 3,
+            max_gap: 0,
+            split_hills: true,
+            split_valley_ratio: default_split_valley_ratio(),
+            split_sigma_mult: default_split_sigma_mult(),
+            split_height_frac: default_split_height_frac(),
+            lfc_weight: 0.5,
+            gap_fill_enabled: false,
+            smoothing_enabled: false,
+            smoothing_window: 1,
+            filter_large_baseline_hills: false,
+            large_hill_min_scans: default_large_hill_min_scans(),
+            large_hill_peak_factor: default_large_hill_peak_factor(),
+            tic_norm_window: 0,
+            tic_norm_min_scale: default_tic_norm_min_scale(),
+            tic_norm_max_scale: default_tic_norm_max_scale(),
+            tic_norm_mode: default_tic_norm_mode(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,29 +334,5 @@ mod tests {
         };
         let got = HillsMs2Overrides::default().apply_to(&base);
         assert_eq!(got.min_scans, 5);
-    }
-}
-
-impl Default for HillsConfig {
-    fn default() -> Self {
-        Self {
-            min_scans: 3,
-            max_gap: 0,
-            split_hills: true,
-            split_valley_ratio: default_split_valley_ratio(),
-            split_sigma_mult: default_split_sigma_mult(),
-            split_height_frac: default_split_height_frac(),
-            lfc_weight: 0.5,
-            gap_fill_enabled: false,
-            smoothing_enabled: false,
-            smoothing_window: 1,
-            filter_large_baseline_hills: false,
-            large_hill_min_scans: default_large_hill_min_scans(),
-            large_hill_peak_factor: default_large_hill_peak_factor(),
-            tic_norm_window: 0,
-            tic_norm_min_scale: default_tic_norm_min_scale(),
-            tic_norm_max_scale: default_tic_norm_max_scale(),
-            tic_norm_mode: default_tic_norm_mode(),
-        }
     }
 }

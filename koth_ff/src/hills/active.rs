@@ -2,7 +2,7 @@
 ///
 /// Profiles use f32 with f32::NAN to mark gap positions (scans where no
 /// peak was matched). Intensity at gaps is always 0.0. Using f32 cuts
-/// per-element storage from 16 bytes (Option<f64>) to 4 bytes.
+/// per-element storage from 16 bytes (`Option<f64>`) to 4 bytes.
 #[derive(Debug)]
 pub struct ActiveHill {
     /// Running mean mz (for fast distance comparison, updated online)
@@ -31,7 +31,14 @@ pub struct ActiveHill {
 }
 
 impl ActiveHill {
-    pub fn new(mz: f64, intensity: f64, rt: f64, im: f64, scan_index: usize, track_im: bool) -> Self {
+    pub fn new(
+        mz: f64,
+        intensity: f64,
+        rt: f64,
+        im: f64,
+        scan_index: usize,
+        track_im: bool,
+    ) -> Self {
         Self {
             running_mz_mean: mz,
             running_im_mean: im,
@@ -40,7 +47,11 @@ impl ActiveHill {
             mz_profile: vec![mz as f32],
             intensity_profile: vec![intensity as f32],
             rt_profile: vec![rt as f32],
-            im_profile: if track_im { vec![im as f32] } else { Vec::new() },
+            im_profile: if track_im {
+                vec![im as f32]
+            } else {
+                Vec::new()
+            },
             track_im,
             n_real: 1,
         }
@@ -48,6 +59,10 @@ impl ActiveHill {
 
     pub fn len(&self) -> usize {
         self.intensity_profile.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.intensity_profile.is_empty()
     }
 
     pub fn add_point(&mut self, mz: f64, intensity: f64, rt: f64, im: f64, scan_index: usize) {
@@ -147,14 +162,27 @@ impl ActiveHill {
         let mut accumulated = self.intensity_profile[apex] as f64;
 
         while accumulated < target {
-            let left_val = if left > 0 { self.intensity_profile[left - 1] as f64 } else { 0.0 };
-            let right_val =
-                if right + 1 < n { self.intensity_profile[right + 1] as f64 } else { 0.0 };
+            let left_val = if left > 0 {
+                self.intensity_profile[left - 1] as f64
+            } else {
+                0.0
+            };
+            let right_val = if right + 1 < n {
+                self.intensity_profile[right + 1] as f64
+            } else {
+                0.0
+            };
 
             if left_val == 0.0 && right_val == 0.0 {
                 // Both neighbours are gaps; still extend to capture any intensity
                 // that lies beyond consecutive zeros, but only if there is room.
-                if left > 0 { left -= 1; } else if right + 1 < n { right += 1; } else { break; }
+                if left > 0 {
+                    left -= 1;
+                } else if right + 1 < n {
+                    right += 1;
+                } else {
+                    break;
+                }
             } else if left_val >= right_val && left > 0 {
                 left -= 1;
                 accumulated += left_val;
@@ -268,7 +296,7 @@ impl ActiveHill {
     }
 
     /// Intensity-weighted mean ion mobility over real (non-gap) scans only.
-    /// See [`mz_weighted_mean`] for why the denominator must filter NaN.
+    /// See [`Self::mz_weighted_mean`] for why the denominator must filter NaN.
     pub fn im_weighted_mean(&self) -> f64 {
         let mut sum_iw = 0.0f64;
         let mut sum_w = 0.0f64;

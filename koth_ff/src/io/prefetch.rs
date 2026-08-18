@@ -40,7 +40,10 @@ where
             }
         })
         .expect("failed to spawn prefetch thread");
-    Prefetch { rx: Some(rx), handle: Some(handle) }
+    Prefetch {
+        rx: Some(rx),
+        handle: Some(handle),
+    }
 }
 
 /// Iterator over spectra produced by a background reader thread.

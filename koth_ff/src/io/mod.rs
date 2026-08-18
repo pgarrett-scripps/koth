@@ -92,7 +92,8 @@ fn read_thermo_inner(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 #[cfg(not(feature = "thermo"))]
 fn read_thermo_inner(_path: &Path) -> Result<Vec<Spectrum>, KothError> {
     Err(KothError::UnsupportedFormat(
-        "Thermo .raw support requires the 'thermo' feature flag. Rebuild with --features thermo.".into(),
+        "Thermo .raw support requires the 'thermo' feature flag. Rebuild with --features thermo."
+            .into(),
     ))
 }
 

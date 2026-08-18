@@ -27,19 +27,14 @@
 /// This is what `--version` reports on both binaries, and what the benchmark's
 /// pin check reads. `KOTH_GIT_SHA` is set by `build.rs`; it is `unknown` when the
 /// crate is built from a source archive with no git directory.
-pub const VERSION: &str = concat!(
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("KOTH_GIT_SHA"),
-    ")"
-);
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("KOTH_GIT_SHA"), ")");
 
 pub mod alignment;
 pub mod config;
-pub mod input;
 pub mod error;
 pub mod features;
 pub mod hills;
+pub mod input;
 pub mod io;
 pub mod lfq;
 pub mod mem;
@@ -101,10 +96,14 @@ pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) 
 }
 
 /// Stage 1 (streaming): Detect hills by reading the mzML/Bruker file directly,
-/// processing one spectrum at a time without building a Vec<Spectrum>.
+/// processing one spectrum at a time without building a `Vec<Spectrum>`.
 /// This is the preferred API for large files — peak memory is O(active_hills)
 /// rather than O(total_peaks).
-pub fn run_hills_streaming(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
+pub fn run_hills_streaming(
+    path: &Path,
+    config: &HillsConfig,
+    file: &FileConfig,
+) -> Result<Vec<Hill>, KothError> {
     hills_streaming_inner(path, config, file)
 }
 
@@ -117,7 +116,7 @@ pub fn run_hills_streaming(path: &Path, config: &HillsConfig, file: &FileConfig)
 /// frames' quadrupole settings and each window segment is IM-collapsed into an
 /// MS2 spectrum (see [`io::bruker::read_bruker_ms2`]). On a DIA `.raw` each MS2
 /// scan becomes one MS2 spectrum stamped with its precursor isolation window
-/// (see [`io::thermo::read_thermo_ms2`]). ddaPASEF `.d` and DDA `.raw` are
+/// (see `io::thermo::read_thermo_ms2`). ddaPASEF `.d` and DDA `.raw` are
 /// unsupported for MS2 (precursor reconstruction is out of scope): they yield an
 /// empty set plus a warning, leaving MS1 unaffected.
 pub fn run_ms2_hills_streaming(
@@ -185,7 +184,11 @@ pub fn run_ms2_hills_streaming(
     Ok(hills::detect_ms2_hills_from_iter(iter, config, file))
 }
 
-fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -> Result<Vec<Hill>, KothError> {
+fn hills_streaming_inner(
+    path: &Path,
+    config: &HillsConfig,
+    file: &FileConfig,
+) -> Result<Vec<Hill>, KothError> {
     let fmt = io::detect_format(path);
 
     #[cfg(feature = "tdf")]
@@ -210,7 +213,11 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
     if file.decoy_mode {
         let spectra = shuffle_if_decoy(iter.collect(), file);
         log::info!("Streaming hill detection from {} (decoy)", path.display());
-        Ok(hills::detect_hills_from_iter(spectra.into_iter(), config, file))
+        Ok(hills::detect_hills_from_iter(
+            spectra.into_iter(),
+            config,
+            file,
+        ))
     } else {
         log::info!("Streaming hill detection from {}", path.display());
         // Decode the mzML (decompress + XML parse + peak extraction) on a
@@ -227,7 +234,11 @@ fn hills_streaming_inner(path: &Path, config: &HillsConfig, file: &FileConfig) -
 const PREFETCH_CAPACITY: usize = 64;
 
 /// Stage 2: Detect isotope features from hills.
-pub fn run_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Result<Vec<Feature>, KothError> {
+pub fn run_features(
+    hills: &[Hill],
+    config: &FeaturesConfig,
+    file: &FileConfig,
+) -> Result<Vec<Feature>, KothError> {
     if file.mz_recalibration {
         if file.decoy_mode {
             log::info!(
@@ -242,7 +253,12 @@ pub fn run_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) 
                         model.global_offset(),
                         model.global_sigma,
                     );
-                    return Ok(features::detect_features_with_recal(hills, config, file, Some(&model)));
+                    return Ok(features::detect_features_with_recal(
+                        hills,
+                        config,
+                        file,
+                        Some(&model),
+                    ));
                 }
                 None => {
                     log::warn!(
@@ -268,11 +284,7 @@ pub fn run_scoring(
     scoring_cfg: &ScoringConfig,
     features_cfg: &FeaturesConfig,
 ) -> Vec<ScoredFeature> {
-    let mut scored = scoring::score_features(
-        features,
-        scoring_cfg,
-        &features_cfg.sulfur_offsets,
-    );
+    let mut scored = scoring::score_features(features, scoring_cfg, &features_cfg.sulfur_offsets);
     let any_filter = features_cfg.min_isotope_score > 0.0
         || features_cfg.min_cosine_score > 0.0
         || features_cfg.min_combined_score > 0.0;

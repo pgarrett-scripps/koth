@@ -127,12 +127,18 @@ mod config_parse_tests {
 
     #[test]
     fn shipped_koth_configs_parse() {
-        parse_koth("example_config.toml", include_str!("../../../example_config.toml"));
+        parse_koth(
+            "example_config.toml",
+            include_str!("../../../example_config.toml"),
+        );
     }
 
     #[test]
     fn shipped_align_configs_parse() {
-        parse_align("example_config_align.toml", include_str!("../../../example_config_align.toml"));
+        parse_align(
+            "example_config_align.toml",
+            include_str!("../../../example_config_align.toml"),
+        );
     }
 }
 
@@ -169,15 +175,20 @@ mod hills_ms2_tests {
         // does not depend on HillsConfig deriving PartialEq.
         let a = toml::to_string(&cfg.hills).unwrap();
         let b = toml::to_string(&ms2).unwrap();
-        assert_eq!(a, b, "ms2_hills() must equal [hills] when [hills_ms2] absent");
+        assert_eq!(
+            a, b,
+            "ms2_hills() must equal [hills] when [hills_ms2] absent"
+        );
     }
 
     /// (b) A partial `[hills_ms2]` overrides only the named fields and inherits
     /// every other field from `[hills]` (NOT from HillsConfig::default()).
     #[test]
     fn partial_hills_ms2_overrides_named_inherits_rest() {
-        let toml_src =
-            format!("{}\n[hills_ms2]\nmin_scans = 2\nsplit_hills = true\n", base_config_toml());
+        let toml_src = format!(
+            "{}\n[hills_ms2]\nmin_scans = 2\nsplit_hills = true\n",
+            base_config_toml()
+        );
         let cfg: KothConfig = toml::from_str(&toml_src).expect("parse");
         assert!(cfg.hills_ms2.is_some());
         let ms2 = cfg.ms2_hills();

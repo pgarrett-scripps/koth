@@ -38,7 +38,10 @@ fn zero_fit_predicts_zero_everywhere() {
 
 #[test]
 fn predict_is_affine() {
-    let f = DriftFit { intercept: 2.0, slope: 3.0 };
+    let f = DriftFit {
+        intercept: 2.0,
+        slope: 3.0,
+    };
     assert!((f.predict(4.0) - 14.0).abs() < 1e-12);
     assert!((f.predict(0.0) - 2.0).abs() < 1e-12);
 }
@@ -46,10 +49,16 @@ fn predict_is_affine() {
 #[test]
 fn ols_recovers_exact_line() {
     // y = 1.5 + 4.0 x, sampled without noise.
-    let pairs: Vec<(f64, f64)> =
-        (0..10).map(|i| i as f64 / 10.0).map(|x| (x, 1.5 + 4.0 * x)).collect();
+    let pairs: Vec<(f64, f64)> = (0..10)
+        .map(|i| i as f64 / 10.0)
+        .map(|x| (x, 1.5 + 4.0 * x))
+        .collect();
     let fit = ols(&pairs);
-    assert!((fit.intercept - 1.5).abs() < 1e-9, "intercept {}", fit.intercept);
+    assert!(
+        (fit.intercept - 1.5).abs() < 1e-9,
+        "intercept {}",
+        fit.intercept
+    );
     assert!((fit.slope - 4.0).abs() < 1e-9, "slope {}", fit.slope);
 }
 
@@ -64,26 +73,44 @@ fn std_dev_matches_sample_formula() {
 #[test]
 fn mass_drift_recovers_clean_linear_trend() {
     // ppm = 2.0 + 5.0 * rt_norm over the unit interval.
-    let anchors: Vec<AnchorPair> =
-        (0..11).map(|i| i as f64 / 10.0).map(|x| anchor_ppm(x, 2.0 + 5.0 * x)).collect();
+    let anchors: Vec<AnchorPair> = (0..11)
+        .map(|i| i as f64 / 10.0)
+        .map(|x| anchor_ppm(x, 2.0 + 5.0 * x))
+        .collect();
     let (fit, active) = fit_mass_drift(&anchors);
-    assert!((fit.intercept - 2.0).abs() < 1e-6, "intercept {}", fit.intercept);
+    assert!(
+        (fit.intercept - 2.0).abs() < 1e-6,
+        "intercept {}",
+        fit.intercept
+    );
     assert!((fit.slope - 5.0).abs() < 1e-6, "slope {}", fit.slope);
-    assert!(active.iter().all(|&ok| ok), "clean anchors should all stay active");
+    assert!(
+        active.iter().all(|&ok| ok),
+        "clean anchors should all stay active"
+    );
 }
 
 #[test]
 fn mass_drift_sigma_clips_gross_outlier() {
     // 20 clean points on ppm = 5 x, plus one 500-ppm flyer at index 20.
-    let mut anchors: Vec<AnchorPair> =
-        (0..20).map(|i| i as f64 / 20.0).map(|x| anchor_ppm(x, 5.0 * x)).collect();
+    let mut anchors: Vec<AnchorPair> = (0..20)
+        .map(|i| i as f64 / 20.0)
+        .map(|x| anchor_ppm(x, 5.0 * x))
+        .collect();
     anchors.push(anchor_ppm(0.5, 5.0 * 0.5 + 500.0)); // outlier
     let (fit, active) = fit_mass_drift(&anchors);
 
     assert!(!active[20], "the 500-ppm outlier must be clipped");
-    assert!(active[..20].iter().all(|&ok| ok), "clean anchors must survive");
+    assert!(
+        active[..20].iter().all(|&ok| ok),
+        "clean anchors must survive"
+    );
     // With the outlier removed the fit collapses back onto the true line.
-    assert!((fit.intercept - 0.0).abs() < 1e-6, "intercept {}", fit.intercept);
+    assert!(
+        (fit.intercept - 0.0).abs() < 1e-6,
+        "intercept {}",
+        fit.intercept
+    );
     assert!((fit.slope - 5.0).abs() < 1e-6, "slope {}", fit.slope);
 }
 
@@ -123,7 +150,11 @@ fn im_drift_fits_and_masks_non_im_anchors() {
         }
     }
     let (fit, active) = fit_im_drift(&anchors);
-    assert!((fit.intercept - 0.1).abs() < 1e-6, "intercept {}", fit.intercept);
+    assert!(
+        (fit.intercept - 0.1).abs() < 1e-6,
+        "intercept {}",
+        fit.intercept
+    );
     assert!((fit.slope - 0.3).abs() < 1e-6, "slope {}", fit.slope);
     for (i, &ok) in active.iter().enumerate() {
         assert_eq!(ok, im_indices.contains(&i), "mask mismatch at {i}");

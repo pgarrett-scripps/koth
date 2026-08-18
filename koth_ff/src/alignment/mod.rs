@@ -94,8 +94,16 @@ impl RunInput {
     /// Overall RT span of this run, derived from scan_times if available.
     pub fn rt_range(&self) -> (f64, f64) {
         if !self.scan_times.is_empty() {
-            let min = self.scan_times.iter().cloned().fold(f64::INFINITY, f64::min);
-            let max = self.scan_times.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min = self
+                .scan_times
+                .iter()
+                .cloned()
+                .fold(f64::INFINITY, f64::min);
+            let max = self
+                .scan_times
+                .iter()
+                .cloned()
+                .fold(f64::NEG_INFINITY, f64::max);
             return (min, max);
         }
         // Derive from feature RT extents as fallback
@@ -167,7 +175,10 @@ fn build_rt_sigma_model(anchors: &[AnchorPair], active: &[bool], warp: &RtWarp) 
         res.push(a.ref_rt_norm - pred);
     }
     if res.len() < 2 {
-        return RtSigmaModel { bins: Vec::new(), global: 0.0 };
+        return RtSigmaModel {
+            bins: Vec::new(),
+            global: 0.0,
+        };
     }
 
     let var = |v: &[f64]| -> f64 {
@@ -181,7 +192,10 @@ fn build_rt_sigma_model(anchors: &[AnchorPair], active: &[bool], warp: &RtWarp) 
     let global_var = var(&res);
     let global = global_var.sqrt();
     if global <= 0.0 {
-        return RtSigmaModel { bins: Vec::new(), global: 0.0 };
+        return RtSigmaModel {
+            bins: Vec::new(),
+            global: 0.0,
+        };
     }
     let floor = RT_SIGMA_FLOOR_FRAC * global;
 
@@ -231,7 +245,8 @@ pub struct RunAlignment {
 impl RunAlignment {
     /// Map an absolute run RT → absolute reference RT.
     pub fn warp_rt(&self, run_rt: f64) -> f64 {
-        self.rt_warp.apply(run_rt, self.run_rt_range, self.ref_rt_range)
+        self.rt_warp
+            .apply(run_rt, self.run_rt_range, self.ref_rt_range)
     }
 
     /// Apply mass-PPM drift correction to a run mz value.
@@ -289,7 +304,7 @@ pub struct AlignmentResult {
 /// Compute alignment parameters for all runs relative to an auto-selected reference.
 ///
 /// The reference is the run with the most features whose `combined_score`
-/// >= `config.min_anchor_combined_score`.
+/// \>= `config.min_anchor_combined_score`.
 pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResult {
     let ref_idx = runs
         .iter()

@@ -140,7 +140,11 @@ mod tests {
         // 1 carbon should match SINGLE_C exactly.
         let d = c.distribution(1, 0, 0, 0, 0);
         for i in 0..K_PATTERN {
-            assert!((d[i] - SINGLE_C[i]).abs() < 1e-12, "1 C: pos {i}, got {}", d[i]);
+            assert!(
+                (d[i] - SINGLE_C[i]).abs() < 1e-12,
+                "1 C: pos {i}, got {}",
+                d[i]
+            );
         }
     }
 
@@ -196,11 +200,15 @@ mod tests {
         }
         // Normalize for comparison (in case of tiny float drift)
         let s: f64 = expected.iter().sum();
-        for x in &mut expected { *x /= s; }
+        for x in &mut expected {
+            *x /= s;
+        }
         for i in 0..K_PATTERN {
             assert!(
                 (two_c[i] - expected[i]).abs() < 1e-12,
-                "pos {i}: {} vs {}", two_c[i], expected[i]
+                "pos {i}: {} vs {}",
+                two_c[i],
+                expected[i]
             );
         }
     }

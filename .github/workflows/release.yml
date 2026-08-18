@@ -1,4 +1,4 @@
-name: Release CLI binary
+name: Release CLI binaries
 
 on:
   push:
@@ -8,9 +8,39 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  verify:
+    name: Verify release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check tag matches Cargo version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "koth_ff") | .version')
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Check package contents
+        run: cargo package -p koth_ff --locked
+
   build:
     name: Build ${{ matrix.target }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -18,7 +48,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -27,41 +57,62 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.88.0
           targets: ${{ matrix.target }}
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.target }}
 
-      - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p koth_ff
+      - name: Build both release binaries
+        run: cargo build --release --locked --target ${{ matrix.target }} -p koth_ff --bins
 
-      - name: Package binary (Unix)
+      - name: Package binaries (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
-          BIN=target/${{ matrix.target }}/release/koth_ff
-          ARCHIVE=koth_ff-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-          tar czf "$ARCHIVE" -C "$(dirname $BIN)" "$(basename $BIN)"
-          echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
+          archive="koth_ff-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          stage="koth_ff-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/koth_ff" "$stage/"
+          cp "target/${{ matrix.target }}/release/koth_align" "$stage/"
+          cp README.md CHANGELOG.md LICENSE "$stage/"
+          tar czf "$archive" "$stage"
+          shasum -a 256 "$archive" > "$archive.sha256"
 
-      - name: Package binary (Windows)
+      - name: Package binaries (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $bin = "target\${{ matrix.target }}\release\koth_ff.exe"
-          $archive = "koth_ff-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          Compress-Archive -Path $bin -DestinationPath $archive
-          "ASSET=$archive" | Out-File -Append $env:GITHUB_ENV
+          $archive = "koth_ff-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
+          $stage = "koth_ff-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory $stage | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\koth_ff.exe" $stage
+          Copy-Item "target\${{ matrix.target }}\release\koth_align.exe" $stage
+          Copy-Item README.md, CHANGELOG.md, LICENSE $stage
+          Compress-Archive -Path $stage -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Set-Content "$archive.sha256"
 
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.ASSET }}
+          name: koth_ff-${{ matrix.target }}
+          path: |
+            koth_ff-${{ github.ref_name }}-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
