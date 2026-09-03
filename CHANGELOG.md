@@ -192,6 +192,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - `koth-ff` PyO3 Python bindings (`koth_ff_py` crate) and the wheel-publish
   workflow. Use the `koth_ff` CLI instead.
 
+## [0.2.0] — 2026-09-03
+
+### Added
+- Multi-CV FAIMS support for MS1 feature detection. mzML and native Thermo
+  readers carry compensation voltage into independent, channel-local hill and
+  feature pipelines; the feature TSV and Parquet schemas expose a nullable
+  `FAIMS` column. Non-FAIMS inputs retain the existing single-channel detection
+  path.
+
 ## [0.1.0] — 2026-04-07
 
 Initial release.
