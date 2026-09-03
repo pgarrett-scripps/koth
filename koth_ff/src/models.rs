@@ -55,6 +55,9 @@ pub struct Spectrum {
     pub ms_level: u8,
     /// Precursor isolation window (only set for MS2 spectra)
     pub isolation_window: Option<IsolationWindow>,
+    /// FAIMS compensation voltage for this scan, in volts. `None` when the
+    /// acquisition does not use FAIMS or the source format does not expose it.
+    pub faims_cv: Option<f32>,
 }
 
 impl Spectrum {
@@ -99,6 +102,9 @@ pub struct Hill {
     /// Isolation window the hill was built from (None for MS1 hills,
     /// Some for MS2/DIA hills).
     pub isolation_window: Option<IsolationWindow>,
+    /// FAIMS compensation voltage shared by every scan in this hill.
+    /// `None` for non-FAIMS data and for formats without FAIMS metadata.
+    pub faims_cv: Option<f32>,
 }
 
 impl Hill {
@@ -144,6 +150,13 @@ impl Feature {
 
     pub fn monoisotopic_mz(&self) -> f64 {
         self.hills[0].mz
+    }
+
+    /// FAIMS compensation voltage of this feature, inherited from its
+    /// monoisotopic hill. Feature assembly guarantees all member hills share
+    /// this value.
+    pub fn faims_cv(&self) -> Option<f32> {
+        self.hills.first().and_then(|h| h.faims_cv)
     }
 
     /// Neutral monoisotopic mass (mass = mz * z - z * proton_mass)

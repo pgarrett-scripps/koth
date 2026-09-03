@@ -57,6 +57,7 @@ pub use pipeline::{
 // crate (koth_tracer, uno) can name them without depending on the module layout.
 pub use models::{Feature, Hill, IsolationWindow, ScoredFeature, Spectrum};
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use config::{FeaturesConfig, FileConfig, HillsConfig, ScoringConfig};
@@ -239,6 +240,38 @@ pub fn run_features(
     config: &FeaturesConfig,
     file: &FileConfig,
 ) -> Result<Vec<Feature>, KothError> {
+    if has_multiple_faims_channels(hills.iter().map(|h| h.faims_cv)) {
+        let mut groups: HashMap<Option<u32>, (Option<f32>, Vec<Hill>)> = HashMap::new();
+        for hill in hills {
+            let cv = hills::canonical_faims_cv(hill.faims_cv);
+            groups
+                .entry(cv.map(f32::to_bits))
+                .or_insert_with(|| (cv, Vec::new()))
+                .1
+                .push(hill.clone());
+        }
+        let mut groups: Vec<_> = groups.into_values().collect();
+        groups.sort_by(|a, b| hills::cmp_faims_cv(a.0, b.0));
+
+        let mut out = Vec::new();
+        for (cv, group) in groups {
+            log::info!(
+                "Detecting features for FAIMS CV {} ({} hills)",
+                cv.map_or_else(|| "missing".to_string(), |v| v.to_string()),
+                group.len()
+            );
+            out.extend(run_features_one_channel(&group, config, file)?);
+        }
+        return Ok(out);
+    }
+    run_features_one_channel(hills, config, file)
+}
+
+fn run_features_one_channel(
+    hills: &[Hill],
+    config: &FeaturesConfig,
+    file: &FileConfig,
+) -> Result<Vec<Feature>, KothError> {
     if file.mz_recalibration {
         if file.decoy_mode {
             log::info!(
@@ -284,6 +317,40 @@ pub fn run_scoring(
     scoring_cfg: &ScoringConfig,
     features_cfg: &FeaturesConfig,
 ) -> Vec<ScoredFeature> {
+    if has_multiple_faims_channels(features.iter().map(Feature::faims_cv)) {
+        let mut groups: HashMap<Option<u32>, (Option<f32>, Vec<Feature>)> = HashMap::new();
+        for feature in features {
+            let cv = hills::canonical_faims_cv(feature.faims_cv());
+            debug_assert!(
+                feature
+                    .hills
+                    .iter()
+                    .all(|h| hills::canonical_faims_cv(h.faims_cv) == cv),
+                "feature contains hills from different FAIMS CV channels"
+            );
+            groups
+                .entry(cv.map(f32::to_bits))
+                .or_insert_with(|| (cv, Vec::new()))
+                .1
+                .push(feature.clone());
+        }
+        let mut groups: Vec<_> = groups.into_values().collect();
+        groups.sort_by(|a, b| hills::cmp_faims_cv(a.0, b.0));
+
+        let mut out = Vec::new();
+        for (_cv, group) in groups {
+            out.extend(run_scoring_one_channel(&group, scoring_cfg, features_cfg));
+        }
+        return out;
+    }
+    run_scoring_one_channel(features, scoring_cfg, features_cfg)
+}
+
+fn run_scoring_one_channel(
+    features: &[Feature],
+    scoring_cfg: &ScoringConfig,
+    features_cfg: &FeaturesConfig,
+) -> Vec<ScoredFeature> {
     let mut scored = scoring::score_features(features, scoring_cfg, &features_cfg.sulfur_offsets);
     let any_filter = features_cfg.min_isotope_score > 0.0
         || features_cfg.min_cosine_score > 0.0
@@ -307,6 +374,19 @@ pub fn run_scoring(
     scored
 }
 
+fn has_multiple_faims_channels(values: impl Iterator<Item = Option<f32>>) -> bool {
+    let mut first: Option<Option<u32>> = None;
+    for value in values {
+        let key = hills::canonical_faims_cv(value).map(f32::to_bits);
+        match first {
+            None => first = Some(key),
+            Some(first_key) if first_key != key => return true,
+            Some(_) => {}
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod shuffle_tests {
     use super::*;
@@ -320,6 +400,7 @@ mod shuffle_tests {
                 peaks: Vec::new(),
                 ms_level: 1,
                 isolation_window: None,
+                faims_cv: None,
             })
             .collect()
     }

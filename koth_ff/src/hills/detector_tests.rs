@@ -16,6 +16,7 @@ fn spec(scan_index: usize, rt: f64, mzs: &[f32]) -> Spectrum {
             .collect(),
         ms_level: 1,
         isolation_window: None,
+        faims_cv: None,
     }
 }
 

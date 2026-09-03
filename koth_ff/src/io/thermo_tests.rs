@@ -6,6 +6,14 @@
 
 use super::*;
 
+#[test]
+fn parses_faims_cv_trailer_values() {
+    assert_eq!(parse_faims_cv("-80"), Some(-80.0));
+    assert_eq!(parse_faims_cv("-65.0 V"), Some(-65.0));
+    assert_eq!(parse_faims_cv("NaN"), None);
+    assert_eq!(parse_faims_cv("not-a-voltage"), None);
+}
+
 /// Build a set of per-MS2-scan windows for a fixed DIA schedule of `n_windows`
 /// evenly-tiled `width`-Th windows starting at `start`, repeated for `cycles`
 /// (i.e. `n_windows * cycles` MS2 scans, each window recurring `cycles` times).

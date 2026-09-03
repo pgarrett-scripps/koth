@@ -175,6 +175,7 @@ mod tests {
                 })
                 .collect(),
             isolation_window: None,
+            faims_cv: None,
         }
     }
 

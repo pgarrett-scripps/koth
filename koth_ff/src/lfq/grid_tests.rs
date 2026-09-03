@@ -36,6 +36,7 @@ fn hill(
         hill_score: 1.0,
         intensity_profile: Arc::from(profile.as_slice()),
         isolation_window: None,
+        faims_cv: None,
     }
 }
 

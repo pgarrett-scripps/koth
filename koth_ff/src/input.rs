@@ -118,6 +118,7 @@ pub fn read_hills_tsv(path: &Path) -> Result<Vec<Hill>, KothError> {
             hill_score: row.hill_score,
             intensity_profile: Arc::from(profile.as_slice()),
             isolation_window,
+            faims_cv: None,
         });
     }
     Ok(hills)
@@ -135,6 +136,8 @@ struct FeatureRow {
     rt_start: f64,
     #[serde(rename = "rtEnd")]
     rt_end: f64,
+    #[serde(rename = "FAIMS", default, deserialize_with = "de_opt_float")]
+    faims_cv: Option<f64>,
     #[serde(rename = "intensityApex")]
     intensity_apex: f64,
     #[serde(rename = "intensitySum")]
@@ -197,6 +200,7 @@ fn scored_feature_from_row(row: FeatureRow, theoretical_pattern: Vec<f64>) -> Sc
         hill_score: 1.0,
         intensity_profile: Arc::from(&[] as &[f32]),
         isolation_window: None,
+        faims_cv: row.faims_cv.map(|v| v as f32),
     };
 
     ScoredFeature {
@@ -346,6 +350,7 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
                 hill_score: score_col.value(i),
                 intensity_profile: Arc::from(profile.as_slice()),
                 isolation_window,
+                faims_cv: None,
             });
         }
     }
@@ -354,7 +359,7 @@ pub fn read_hills_parquet(path: &Path) -> Result<Vec<Hill>, KothError> {
 }
 
 pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothError> {
-    use arrow::array::{Float64Array, Int64Array, Int8Array, StringArray, UInt8Array};
+    use arrow::array::{Array, Float64Array, Int64Array, Int8Array, StringArray, UInt8Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let file = std::fs::File::open(path)?;
@@ -390,6 +395,9 @@ pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothErro
         let ppm_col = f64_col!("ppm_error");
         let isotope_col = f64_col!("isotope_score");
         let combined_col = f64_col!("combined_score");
+        let faims_col = batch
+            .column_by_name("FAIMS")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
 
         let charge_col = batch
             .column_by_name("charge")
@@ -450,6 +458,9 @@ pub fn read_features_parquet(path: &Path) -> Result<Vec<ScoredFeature>, KothErro
                 hill_score: 1.0,
                 intensity_profile: Arc::from(&[] as &[f32]),
                 isolation_window: None,
+                faims_cv: faims_col
+                    .filter(|c| !c.is_null(i))
+                    .map(|c| c.value(i) as f32),
             };
 
             features.push(ScoredFeature {

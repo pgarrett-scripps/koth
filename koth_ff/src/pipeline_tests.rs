@@ -17,8 +17,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::config::KothConfig;
+use crate::input::{read_features_parquet, read_features_tsv};
 use crate::models::{IsolationWindow, Peak, Spectrum};
-use crate::output::{write_features_tsv, write_hills_tsv, write_ms2_hills_tsv};
+use crate::output::{
+    write_features_parquet, write_features_tsv, write_hills_tsv, write_ms2_hills_tsv,
+};
 
 /// One synthetic isotope envelope: `n_isotopes` peaks spaced by neutron/`charge`
 /// starting at `mono_mz`, each following the shared elution shape across scans.
@@ -85,6 +88,7 @@ fn synthetic_run(n_scans: usize) -> Vec<Spectrum> {
                 peaks,
                 ms_level: 1,
                 isolation_window: None,
+                faims_cv: None,
             }
         })
         .collect()
@@ -145,6 +149,7 @@ fn synthetic_dia_run(n_scans: usize) -> Vec<Spectrum> {
                 peaks,
                 ms_level: 2,
                 isolation_window: Some(*iw),
+                faims_cv: None,
             });
         }
     }
@@ -162,13 +167,18 @@ fn ms2_hills_tsv(hills: &[Hill]) -> String {
 
 /// Unique temp path so parallel test threads never collide.
 fn tmp_path(tag: &str) -> PathBuf {
+    tmp_path_with_extension(tag, "tsv")
+}
+
+fn tmp_path_with_extension(tag: &str, extension: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "koth_pipeline_parity_{}_{}_{}.tsv",
+        "koth_pipeline_parity_{}_{}_{}.{}",
         std::process::id(),
         n,
-        tag
+        tag,
+        extension,
     ))
 }
 
@@ -188,6 +198,84 @@ fn features_tsv(features: &[ScoredFeature]) -> String {
     let s = std::fs::read_to_string(&p).expect("read features tsv");
     let _ = std::fs::remove_file(&p);
     s
+}
+
+#[test]
+fn feature_tsv_emits_nullable_faims_column() {
+    let config = KothConfig::default();
+    let mut faims_spectra = synthetic_run(11);
+    for spectrum in &mut faims_spectra {
+        spectrum.faims_cv = Some(-50.0);
+    }
+    let faims = run_pipeline_from_spectra(
+        faims_spectra.into_iter(),
+        &config,
+        &PipelineOptions::default(),
+    )
+    .expect("FAIMS pipeline");
+    let text = features_tsv(&faims.features);
+    let mut rows = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_reader(text.as_bytes());
+    let header = rows.headers().expect("header").clone();
+    let faims_col = header
+        .iter()
+        .position(|name| name == "FAIMS")
+        .expect("FAIMS column");
+    let records = rows
+        .records()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("records");
+    assert!(!records.is_empty());
+    assert!(records.iter().all(|row| row.get(faims_col) == Some("-50")));
+
+    let non_faims = run_pipeline_from_spectra(
+        synthetic_run(11).into_iter(),
+        &config,
+        &PipelineOptions::default(),
+    )
+    .expect("non-FAIMS pipeline");
+    let text = features_tsv(&non_faims.features);
+    let mut rows = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .from_reader(text.as_bytes());
+    let header = rows.headers().expect("header").clone();
+    let faims_col = header.iter().position(|name| name == "FAIMS").unwrap();
+    assert!(rows
+        .records()
+        .map(|row| row.expect("record"))
+        .all(|row| row.get(faims_col) == Some("")));
+}
+
+#[test]
+fn feature_readers_round_trip_faims() {
+    let config = KothConfig::default();
+    let mut spectra = synthetic_run(11);
+    for spectrum in &mut spectra {
+        spectrum.faims_cv = Some(-65.0);
+    }
+    let output =
+        run_pipeline_from_spectra(spectra.into_iter(), &config, &PipelineOptions::default())
+            .expect("FAIMS pipeline");
+    assert!(!output.features.is_empty());
+
+    let tsv_path = tmp_path_with_extension("faims_features", "tsv");
+    write_features_tsv(&output.features, &tsv_path).expect("write features tsv");
+    let tsv_features = read_features_tsv(&tsv_path).expect("read features tsv");
+    let _ = std::fs::remove_file(&tsv_path);
+    assert!(!tsv_features.is_empty());
+    assert!(tsv_features
+        .iter()
+        .all(|feature| feature.feature.faims_cv() == Some(-65.0)));
+
+    let parquet_path = tmp_path_with_extension("faims_features", "parquet");
+    write_features_parquet(&output.features, &parquet_path).expect("write features parquet");
+    let parquet_features = read_features_parquet(&parquet_path).expect("read features parquet");
+    let _ = std::fs::remove_file(&parquet_path);
+    assert!(!parquet_features.is_empty());
+    assert!(parquet_features
+        .iter()
+        .all(|feature| feature.feature.faims_cv() == Some(-65.0)));
 }
 
 /// The manual staged path the binary runs (default config, scoring on).

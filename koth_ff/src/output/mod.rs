@@ -40,14 +40,16 @@ const HILL_COLUMNS: &[&str] = &[
 const HILL_ISO_COLUMNS: &[&str] = &["iso_target_mz", "iso_lower_mz", "iso_upper_mz"];
 
 /// Scored-feature output columns, in emission order. Shared by the TSV header
-/// and the Parquet schema. `massCalib` is nullable in Parquet; the remaining
-/// columns are non-nullable (types/nullability supplied at the schema site).
+/// and the Parquet schema. `massCalib` and `FAIMS` are nullable in Parquet; the
+/// remaining columns are non-nullable (types/nullability supplied at the
+/// schema site).
 const FEATURE_COLUMNS: &[&str] = &[
     "massCalib",
     "mz",
     "rtApex",
     "rtStart",
     "rtEnd",
+    "FAIMS",
     "intensityApex",
     "intensitySum",
     "charge",
@@ -218,8 +220,9 @@ fn write_hills_tsv_inner(
 
 /// Write scored features to a TSV file.
 ///
-/// Column order matches the Python zenith_feature_finder features.tsv exactly.
-/// List columns (elution_profile, isotope_profile, etc.) are JSON arrays.
+/// Column order is biosaur2-compatible through `FAIMS`, followed by koth's
+/// scoring and diagnostic columns. List columns (elution_profile,
+/// isotope_profile, etc.) are JSON arrays.
 pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(), KothError> {
     // Sort by intensitySum descending, exclude charge=0
     let mut scored: Vec<&ScoredFeature> =
@@ -248,6 +251,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
         let rt_apex = f.rt_apex();
         let rt_start = f.rt_start();
         let rt_end = f.rt_end();
+        let faims_cv = f.faims_cv().map(|cv| cv.to_string()).unwrap_or_default();
         let intensity_apex = f.total_intensity_at_apex();
         let intensity_sum = f.total_intensity();
         let n_isotopes = f.hills.len();
@@ -277,6 +281,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
             format!("{:.6}", rt_apex),
             format!("{:.6}", rt_start),
             format!("{:.6}", rt_end),
+            faims_cv,
             format!("{:.5e}", intensity_apex),
             format!("{:.5e}", intensity_sum),
             f.charge.to_string(),
@@ -549,12 +554,13 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
     // Parquet element type + nullability, one per `FEATURE_COLUMNS` entry (same
     // order). Names come from the shared const so the TSV header and Parquet
     // schema stay in lock-step.
-    let feature_types: [(DataType, bool); 23] = [
+    let feature_types: [(DataType, bool); 24] = [
         (DataType::Float64, true),  // massCalib
         (DataType::Float64, false), // mz
         (DataType::Float64, false), // rtApex
         (DataType::Float64, false), // rtStart
         (DataType::Float64, false), // rtEnd
+        (DataType::Float64, true),  // FAIMS
         (DataType::Float64, false), // intensityApex
         (DataType::Float64, false), // intensitySum
         (DataType::UInt8, false),   // charge
@@ -588,6 +594,7 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
     let mut rt_apex = Vec::<f64>::with_capacity(n);
     let mut rt_start = Vec::<f64>::with_capacity(n);
     let mut rt_end = Vec::<f64>::with_capacity(n);
+    let mut faims_cv = Vec::<Option<f64>>::with_capacity(n);
     let mut int_apex = Vec::<f64>::with_capacity(n);
     let mut int_sum = Vec::<f64>::with_capacity(n);
     let mut charge = Vec::<u8>::with_capacity(n);
@@ -614,6 +621,7 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         rt_apex.push(f.rt_apex());
         rt_start.push(f.rt_start());
         rt_end.push(f.rt_end());
+        faims_cv.push(f.faims_cv().map(f64::from));
         int_apex.push(f.total_intensity_at_apex());
         int_sum.push(f.total_intensity());
         charge.push(f.charge);
@@ -647,6 +655,7 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
         Arc::new(rt_apex.into_iter().collect::<Float64Array>()),
         Arc::new(rt_start.into_iter().collect::<Float64Array>()),
         Arc::new(rt_end.into_iter().collect::<Float64Array>()),
+        Arc::new(faims_cv.into_iter().collect::<Float64Array>()),
         Arc::new(int_apex.into_iter().collect::<Float64Array>()),
         Arc::new(int_sum.into_iter().collect::<Float64Array>()),
         Arc::new(charge.into_iter().collect::<UInt8Array>()),

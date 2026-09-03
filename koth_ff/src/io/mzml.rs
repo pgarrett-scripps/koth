@@ -89,6 +89,7 @@ fn collect_ms1(reader: BoxedRawIter) -> Vec<Spectrum> {
         if spectrum.ms_level() != 1 {
             continue;
         }
+        let faims_cv = extract_faims_cv(&spectrum);
         let peaks = extract_peaks(&mut spectrum);
         if peaks.is_empty() {
             continue;
@@ -99,6 +100,7 @@ fn collect_ms1(reader: BoxedRawIter) -> Vec<Spectrum> {
             peaks,
             ms_level: 1,
             isolation_window: None,
+            faims_cv,
         });
     }
     out
@@ -127,6 +129,7 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
         }
 
         let retention_time = spectrum.start_time();
+        let faims_cv = extract_faims_cv(&spectrum);
         let peaks = extract_peaks(&mut spectrum);
 
         if ms1_count == 0 {
@@ -148,6 +151,7 @@ fn ms1_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
             peaks,
             ms_level: 1,
             isolation_window: None,
+            faims_cv,
         })
     })
 }
@@ -224,8 +228,29 @@ fn ms2_stream(reader: BoxedRawIter) -> impl Iterator<Item = Spectrum> {
             peaks,
             ms_level: 2,
             isolation_window: Some(iw),
+            faims_cv: None,
         })
     })
+}
+
+/// Read the PSI-MS FAIMS compensation-voltage parameter.
+///
+/// Converters emit MS:1001581 either directly on the spectrum (including the
+/// ThermoRawFileParser mzML used by the benchmark) or on the first acquisition
+/// scan event. Accept both encodings. Treat malformed and non-finite values as
+/// absent so they cannot become unstable detector-channel keys.
+fn extract_faims_cv(spectrum: &MultiLayerSpectrum) -> Option<f32> {
+    spectrum
+        .get_param_by_accession("MS:1001581")
+        .or_else(|| {
+            spectrum
+                .acquisition()
+                .first_scan()
+                .and_then(|scan| scan.get_param_by_accession("MS:1001581"))
+        })
+        .and_then(|param| param.value().to_f32().ok())
+        .filter(|cv| cv.is_finite())
+        .map(|cv| if cv == 0.0 { 0.0 } else { cv })
 }
 
 /// Extract peaks from a spectrum, centroiding on the fly if profile-mode.
@@ -273,4 +298,52 @@ fn extract_peaks(spectrum: &mut MultiLayerSpectrum) -> Vec<Peak> {
     }
 
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mzdata::params::{ControlledVocabulary, Param};
+    use mzdata::spectrum::ScanEvent;
+
+    fn faims_param(value: f64) -> Param {
+        Param::builder()
+            .name("FAIMS compensation voltage")
+            .value(value)
+            .controlled_vocabulary(ControlledVocabulary::MS)
+            .accession(1001581)
+            .build()
+    }
+
+    #[test]
+    fn extracts_spectrum_level_faims_compensation_voltage() {
+        let mut spectrum = MultiLayerSpectrum::default();
+        spectrum.add_param(faims_param(-50.0));
+
+        assert_eq!(extract_faims_cv(&spectrum), Some(-50.0));
+    }
+
+    #[test]
+    fn extracts_scan_level_faims_compensation_voltage() {
+        let mut spectrum = MultiLayerSpectrum::default();
+        spectrum.description.acquisition.scans.push(ScanEvent {
+            params: Some(Box::new(vec![faims_param(-65.0)])),
+            ..ScanEvent::default()
+        });
+
+        assert_eq!(extract_faims_cv(&spectrum), Some(-65.0));
+    }
+
+    #[test]
+    fn missing_or_non_finite_faims_voltage_is_absent() {
+        let spectrum = MultiLayerSpectrum::default();
+        assert_eq!(extract_faims_cv(&spectrum), None);
+
+        let mut spectrum = MultiLayerSpectrum::default();
+        spectrum.description.acquisition.scans.push(ScanEvent {
+            params: Some(Box::new(vec![faims_param(f64::NAN)])),
+            ..ScanEvent::default()
+        });
+        assert_eq!(extract_faims_cv(&spectrum), None);
+    }
 }

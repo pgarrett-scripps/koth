@@ -145,6 +145,7 @@ pub mod inner {
                     peaks,
                     ms_level: 1,
                     isolation_window: None,
+                    faims_cv: None,
                 };
                 if let Some(sigma) = noise_sigma {
                     noise::filter_spectrum(&mut spectrum, sigma);
@@ -219,6 +220,7 @@ pub mod inner {
                         peaks: out_peaks,
                         ms_level: 1,
                         isolation_window: None,
+                        faims_cv: None,
                     };
 
                     if let Some(sigma) = noise_sigma {
@@ -446,6 +448,7 @@ pub mod inner {
                             peaks,
                             ms_level: 2,
                             isolation_window: Some(window),
+                            faims_cv: None,
                         };
                         if let Some(sigma) = noise_sigma {
                             noise::filter_spectrum(&mut spectrum, sigma);

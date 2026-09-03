@@ -28,6 +28,7 @@ fn hill(mz: f64, scan_start: usize, profile: Vec<f32>) -> Hill {
         hill_score: 1.0,
         intensity_profile: Arc::from(profile.as_slice()),
         isolation_window: None,
+        faims_cv: None,
     }
 }
 
@@ -37,6 +38,35 @@ fn z2_config() -> FeaturesConfig {
         max_charge: 2,
         ..Default::default()
     }
+}
+
+#[test]
+fn public_pipeline_never_assembles_isotopes_across_faims_channels() {
+    let step = FeaturesConfig::default().neutron_mass / 2.0;
+    let profile = vec![100.0, 500.0, 1_000.0, 500.0, 100.0];
+    let mut mono = hill(500.0, 0, profile.clone());
+    mono.faims_cv = Some(-50.0);
+    let mut isotope = hill(500.0 + step, 0, profile);
+    isotope.faims_cv = Some(-65.0);
+
+    let features = crate::run_features(
+        &[mono.clone(), isotope.clone()],
+        &z2_config(),
+        &FileConfig::default(),
+    )
+    .expect("feature detection");
+    assert!(
+        features.iter().all(|f| f.hills.len() == 1),
+        "isotope-spaced hills from different CVs formed a feature"
+    );
+
+    isotope.faims_cv = mono.faims_cv;
+    let same_cv = crate::run_features(&[mono, isotope], &z2_config(), &FileConfig::default())
+        .expect("same-CV feature detection");
+    assert!(
+        same_cv.iter().any(|f| f.charge == 2 && f.hills.len() == 2),
+        "same-CV isotope pair should still assemble"
+    );
 }
 
 /// A clean, un-contested 3-hill charge-2 envelope is assembled into a single

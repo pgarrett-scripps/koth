@@ -84,6 +84,7 @@ fn build_sub_hills(hill: &Hill, split_points: &[usize], min_scans: usize) -> Vec
             hill_score,
             intensity_profile: Arc::from(segment_profile.as_slice()),
             isolation_window: hill.isolation_window,
+            faims_cv: hill.faims_cv,
         });
     }
 
@@ -314,6 +315,7 @@ mod tests {
             hill_score: 1.0,
             intensity_profile: Arc::from(profile.as_slice()),
             isolation_window: None,
+            faims_cv: None,
         }
     }
 

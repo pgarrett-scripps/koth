@@ -94,6 +94,11 @@ pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
         if peaks.is_empty() {
             continue;
         }
+        let faims_cv = reader.get_raw_trailers_for(i).and_then(|trailers| {
+            trailers
+                .get_label("FAIMS CV")
+                .and_then(|v| parse_faims_cv(v.value))
+        });
 
         spectra.push(Spectrum {
             scan_index: 0,               // assigned after the RT sort below
@@ -101,6 +106,7 @@ pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
             peaks,
             ms_level: 1,
             isolation_window: None,
+            faims_cv,
         });
     }
 
@@ -120,6 +126,14 @@ pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 
     log::info!("Read {} MS1 spectra from Thermo .raw", spectra.len());
     Ok(spectra)
+}
+
+/// Parse the Thermo `FAIMS CV` trailer value. Trailer values normally contain
+/// just the number, but accepting a trailing unit is harmless and robust.
+fn parse_faims_cv(value: &str) -> Option<f32> {
+    let token = value.split_whitespace().next()?;
+    let cv = token.parse::<f32>().ok()?;
+    cv.is_finite().then_some(if cv == 0.0 { 0.0 } else { cv })
 }
 
 /// Convert a spectrum's centroid arrays to koth [`Peak`]s: filter to positive
@@ -356,6 +370,7 @@ pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
             peaks,
             ms_level: 2,
             isolation_window: Some(window),
+            faims_cv: None,
         });
     }
 

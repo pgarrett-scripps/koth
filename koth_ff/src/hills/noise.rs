@@ -79,6 +79,7 @@ mod tests {
             peaks: intensities.iter().map(|&i| peak(i)).collect(),
             ms_level: 1,
             isolation_window: None,
+            faims_cv: None,
         }
     }
 

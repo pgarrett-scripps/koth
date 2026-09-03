@@ -25,6 +25,9 @@ pub struct HillDetector {
     /// Isolation window tag applied to every hill emitted by this detector.
     /// `None` for MS1; `Some` when running MS2 hill detection for a DIA channel.
     isolation_window: Option<crate::models::IsolationWindow>,
+    /// FAIMS compensation voltage applied to every hill emitted by this
+    /// detector. One detector processes exactly one CV channel.
+    faims_cv: Option<f32>,
     active_hills: FxHashMap<usize, ActiveHill>,
     next_id: usize,
     finalized: Vec<Hill>,
@@ -76,6 +79,7 @@ impl HillDetector {
             smoothing_enabled: config.smoothing_enabled,
             smoothing_window: config.smoothing_window,
             isolation_window: None,
+            faims_cv: None,
             active_hills: FxHashMap::default(),
             next_id: 0,
             finalized: Vec::new(),
@@ -94,6 +98,12 @@ impl HillDetector {
     /// Tag every finalized hill with this isolation window (used for MS2/DIA).
     pub fn with_isolation_window(mut self, iw: crate::models::IsolationWindow) -> Self {
         self.isolation_window = Some(iw);
+        self
+    }
+
+    /// Tag every finalized hill with this detector's FAIMS channel.
+    pub fn with_faims_cv(mut self, faims_cv: Option<f32>) -> Self {
+        self.faims_cv = faims_cv;
         self
     }
 
@@ -135,6 +145,7 @@ impl HillDetector {
                 self.smoothing_enabled,
                 self.smoothing_window,
                 self.isolation_window,
+                self.faims_cv,
             ) {
                 self.finalized.push(h);
             }
@@ -291,6 +302,7 @@ impl HillDetector {
                 self.smoothing_enabled,
                 self.smoothing_window,
                 self.isolation_window,
+                self.faims_cv,
             ) {
                 self.finalized.push(h);
             }
@@ -299,7 +311,7 @@ impl HillDetector {
         log::info!(
             "Finalized {} hills (~{:.1} MB in Hill structs)",
             hill_count,
-            hill_count as f64 * 136.0 / 1_048_576.0
+            hill_count as f64 * std::mem::size_of::<Hill>() as f64 / 1_048_576.0
         );
         self.finalized.shrink_to_fit();
         self.finalized
@@ -323,6 +335,7 @@ impl HillDetector {
         smoothing_enabled: bool,
         smoothing_window: usize,
         isolation_window: Option<crate::models::IsolationWindow>,
+        faims_cv: Option<f32>,
     ) -> Option<Hill> {
         hill.trim();
         hill.trim_to_coverage(intensity_coverage);
@@ -381,6 +394,7 @@ impl HillDetector {
             hill_score,
             intensity_profile: Arc::from(hill.intensity_profile.as_slice()),
             isolation_window,
+            faims_cv,
         })
     }
 }
