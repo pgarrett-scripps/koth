@@ -202,7 +202,7 @@ the acquisition differs.
 | `split_hills` | bool | `true` | Split merged traces at valleys (persistence splitter). `true` everywhere. |
 | `split_valley_ratio` | f64 | `0.60` | A split survives only if the valley drops to ≤ this fraction of the *smaller* peak. `0.60` = precision-optimal; `0.70` leans recall. |
 | `split_sigma_mult` | f64 | `5.0` | Notch-depth floor as a multiple of noise σ; rejects shallow noise notches. `5.0` = precision-optimal. |
-| `split_height_frac` | f64 | `0.10` → **`0.13`** | Min peak height as fraction of the robust (95th-pct) max. `0.13` shipped; `0.05` leans recall (catches faint 10:1 co-eluters). |
+| `split_height_frac` | f64 | `0.10` | Min peak height as fraction of the robust (95th-pct) max. `0.10` shipped; `0.05` leans recall (catches faint 10:1 co-eluters). |
 | `lfc_weight` | f64 | `0.3` | Weight of the intensity log-fold-change term when matching a peak to a hill. `0.3` (helps noisy timsTOF). |
 | `gap_fill_enabled` | bool | `false` | Interpolate intensity through internal zero gaps. **Keep `false`** on real configs (on+smoothing adds ~20% features for ~0.7 pp recall, worse redundancy). `relaxed` sets `true`. Warning: can create artificial maxima the splitter treats as new peaks. |
 | `smoothing_enabled` | bool | `false` | Running-average the intensity profile. `false` on Orbitrap/Bruker; `true` in `relaxed`. |
