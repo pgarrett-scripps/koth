@@ -8,13 +8,13 @@ pub struct HillsConfig {
     pub split_hills: bool,
     /// Persistence: a split between two adjacent peaks is kept only if the
     /// valley between them drops to <= this fraction of the SMALLER peak.
-    /// Scale-free and immune to spike inflation. Default 0.70.
+    /// Scale-free and immune to spike inflation. Default 0.60.
     #[serde(default = "default_split_valley_ratio")]
     pub split_valley_ratio: f64,
     /// Persistence: absolute notch-depth floor as a multiple of the estimated
     /// noise sigma (MAD of the trace's first difference). Rejects shallow noise
     /// notches that the relative test alone would admit on a low baseline.
-    /// Default 4.0.
+    /// Default 5.0.
     #[serde(default = "default_split_sigma_mult")]
     pub split_sigma_mult: f64,
     /// Persistence: minimum peak height as a fraction of the robust (95th-pct)
@@ -23,8 +23,9 @@ pub struct HillsConfig {
     #[serde(default = "default_split_height_frac")]
     pub split_height_frac: f64,
     /// Weight for the intensity LFC term in the hill-candidate distance score.
-    /// 0.0 disables it. ~0.5 gives intensity consistency roughly half the
-    /// influence of m/z proximity when selecting which peak extends a hill.
+    /// 0.0 disables it. Default 0.3; ~0.5 gives intensity consistency roughly
+    /// half the influence of m/z proximity when selecting which peak extends a
+    /// hill.
     pub lfc_weight: f64,
     /// Linear-interpolate intensity through internal zero-gap scans during
     /// hill finalization. Independent of `smoothing_enabled`. Default false.
@@ -115,11 +116,11 @@ fn default_tic_norm_mode() -> String {
 }
 
 fn default_split_valley_ratio() -> f64 {
-    0.70
+    0.60
 }
 
 fn default_split_sigma_mult() -> f64 {
-    4.0
+    5.0
 }
 
 fn default_split_height_frac() -> f64 {
@@ -227,12 +228,12 @@ impl Default for HillsConfig {
     fn default() -> Self {
         Self {
             min_scans: 3,
-            max_gap: 0,
+            max_gap: 1,
             split_hills: true,
             split_valley_ratio: default_split_valley_ratio(),
             split_sigma_mult: default_split_sigma_mult(),
             split_height_frac: default_split_height_frac(),
-            lfc_weight: 0.5,
+            lfc_weight: 0.3,
             gap_fill_enabled: false,
             smoothing_enabled: false,
             smoothing_window: 1,

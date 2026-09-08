@@ -187,7 +187,7 @@ A candidate partner must satisfy:
 - m/z within `mz_tolerance` of the expected isotope position.
 - Scan range overlaps with the reference hill.
 - If IM data is present, IM within `im_tolerance` of the reference hill.
-- `intensity_max >= ref_hill.intensity_max * right_max_decrease` (prevents linking to an
+- `intensity_max >= ref_hill.intensity_max * min_isotope_step_ratio` (prevents linking to an
   implausibly weak signal).
 - Cosine of the elution profile against the `cosine_anchor` reference hill (the seed by
   default) is at least `min_chain_cosine`.

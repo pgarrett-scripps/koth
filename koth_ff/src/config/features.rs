@@ -35,10 +35,13 @@ pub struct FeaturesConfig {
     /// this to be added; otherwise chain extension stops in that direction.
     pub min_chain_cosine: f64,
     /// Minimum intensity a candidate isotope hill must retain relative to its
-    /// chain predecessor, as a fraction. Chain extension runs upward only
-    /// (the seed IS the monoisotope hypothesis), so there is no downward
-    /// counterpart to this knob.
-    pub right_max_decrease: f64,
+    /// chain predecessor, as a fraction: a heavier isotope must be at least
+    /// this fraction of its predecessor's intensity or the chain stops. Chain
+    /// extension runs upward only (the seed IS the monoisotope hypothesis), so
+    /// there is no downward counterpart to this knob. Default 0.01. The
+    /// pre-0.3.0 name `right_max_decrease` is still accepted.
+    #[serde(alias = "right_max_decrease")]
+    pub min_isotope_step_ratio: f64,
     pub max_isotopes: usize,
     /// Per-extension intensity-ratio gate. After a candidate hill clears
     /// `min_chain_cosine`, also check that its apex intensity vs the
@@ -60,7 +63,7 @@ pub struct FeaturesConfig {
     /// predicted-intensity break is skipped and chain extension is terminated
     /// purely by *evidence*:
     /// a missing hill (`find_neighbors` empty), `min_chain_cosine`, the
-    /// `max_isotope_log2_ratio` intensity-ratio gate, `right_max_decrease`
+    /// `max_isotope_log2_ratio` intensity-ratio gate, `min_isotope_step_ratio`
     /// (found hill must be ≥ this fraction of the predecessor), and the
     /// averagine-template-length / `max_isotopes` caps. Setting this false
     /// recovers dim 2+/3+ features that have both isotope hills present but
@@ -139,7 +142,7 @@ pub struct FeaturesConfig {
     /// Neutron (C13) mass in Da
     pub neutron_mass: f64,
     /// Drop features whose **isotope_score** (Bhattacharyya vs averagine) is
-    /// below this. 0.0 = keep all.
+    /// below this. 0.0 = keep all. Default 0.5.
     pub min_isotope_score: f64,
     /// Drop features whose **cosine_score** (mean chromatographic cosine of
     /// adjacent isotope hills) is below this. 0.0 = keep all.
@@ -199,10 +202,10 @@ pub(crate) fn default_sulfur_offsets() -> Vec<i8> {
 impl Default for FeaturesConfig {
     fn default() -> Self {
         Self {
-            min_charge: 1,
-            max_charge: 7,
-            min_chain_cosine: 0.5,
-            right_max_decrease: 0.05,
+            min_charge: 2,
+            max_charge: 6,
+            min_chain_cosine: 0.4,
+            min_isotope_step_ratio: 0.01,
             max_isotopes: 6,
             max_isotope_log2_ratio: 1.5,
             chain_predicted_intensity_gate: false,
@@ -212,7 +215,7 @@ impl Default for FeaturesConfig {
             cosine_anchor: default_cosine_anchor(),
             sulfur_offsets: default_sulfur_offsets(),
             neutron_mass: 1.003_354_835,
-            min_isotope_score: 0.0,
+            min_isotope_score: 0.5,
             min_cosine_score: 0.0,
             min_combined_score: 0.0,
         }

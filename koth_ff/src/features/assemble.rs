@@ -145,7 +145,7 @@ pub(super) fn build_charge_candidate(
             // low-abundance monos from ever chaining -> they collapse to
             // charge 0. When disabled, extension is terminated purely by
             // evidence (find_neighbors empty / cosine / intensity-ratio gate /
-            // right_max_decrease / template caps) — see `find_neighbors` and the
+            // min_isotope_step_ratio / template caps) — see `find_neighbors` and the
             // intensity-ratio gate below.
             if config.chain_predicted_intensity_gate {
                 let expected = seed_intensity * (template[iso] / template_mono);
@@ -169,7 +169,7 @@ pub(super) fn build_charge_candidate(
                 target_mz,
                 mz_tol,
                 ref_hill,
-                config.right_max_decrease,
+                config.min_isotope_step_ratio,
                 &exclude,
             );
             if cands.is_empty() {

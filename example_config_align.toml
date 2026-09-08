@@ -1,4 +1,5 @@
 # koth_align configuration
+# All values shown are defaults. Modify as needed.
 # Usage: koth_align <batch_dir> --config example_config_align.toml
 #
 # <batch_dir> must contain one subdirectory per run, each with:
@@ -46,6 +47,13 @@ min_anchor_count = 10
 # Larger = smoother warp curve; smaller = more local correction.
 rt_warp_bandwidth = 0.1
 
+# Warp model. "ransac" is the only supported value.
+rt_warp_kind = "ransac"
+
+# RANSAC inlier half-band in normalised RT units (0.01 ≈ 1.4 min on a
+# 142-min gradient).
+rt_warp_ransac_thresh = 0.01
+
 # ── LFQ ───────────────────────────────────────────────────────────────────────
 [lfq]
 
@@ -53,8 +61,8 @@ rt_warp_bandwidth = 0.1
 mz_ppm = 10.0
 
 # Half-window for XIC grid extraction as a fraction of the run's RT span.
-# 0.02 = ±2% of gradient → 4% total window, 100 bins → ~2.4 s/bin per 120 min run.
-rt_window_pct = 0.02
+# 0.01 = ±1% of gradient → 2% total window, 100 bins → ~1.4 s/bin per 120 min run.
+rt_window_pct = 0.01
 
 # Ion mobility tolerance for hill matching in LFQ (1/K0 units)
 im_tolerance = 0.05
@@ -83,7 +91,35 @@ run_tdc = true
 # Experimental (default off): replace the raw RT-closeness term with a
 # region-aware, σ-normalised Gaussian RT likelihood from the per-run post-warp
 # RT-residual spread.
-# rt_spread_scoring = false
+rt_spread_scoring = false
+
+# Experimental (default off): project each column onto the averagine
+# envelope before scoring.
+averagine_projection = false
+
+# Cross-run matrix normalisation: "none" or "median_ratios" (DESeq-style size
+# factors). "none" when a downstream pipeline normalises for you.
+normalize = "none"
+
+# Per-cell intensity estimator over the integrated grid peak: "sum" or "apex".
+quant_estimator = "sum"
+
+# Quantify EVERY consensus cell (detected and match-between-runs alike) by the
+# same grid re-integration so the whole matrix sits on one intensity scale.
+# Set false only to reproduce older mixed-scale matrices that trusted the
+# per-run feature's own intensity for detected cells.
+detected_use_grid = true
+
+# Score the decoy against an averagine template computed from its OWN shifted
+# mass rather than the target's, so a mis-massed decoy gets no free
+# target-template match.
+decoy_own_template = true
+
+# Co-elution value for a grid cell with fewer than two isotope rows carrying
+# signal (a lone monoisotope — nothing to co-elute). Applied identically to
+# target and decoy cells. 0.5 is neutral; 1.0 hands lone-hill decoys a free
+# target-like score.
+lone_coelution = 0.5
 
 # Decoy m/z shift in Da. The decoy grid is centred at
 #   decoy_mz = target_mz + decoy_mz_shift_da / charge.
@@ -93,9 +129,9 @@ decoy_mz_shift_da = 11.0
 
 # Decoy RT shift, as a fraction of the run's RT span. The decoy grid is
 # centred at decoy_rt = target_rt − decoy_rt_shift_pct · rt_span.
-# With the default 0.01 and `rt_window_pct = 0.02` the decoy window still
-# partially overlaps the target window; raise to ≥ 2 × `rt_window_pct` for
-# fully disjoint decoy windows.
+# With the default 0.01 and `rt_window_pct = 0.01` the decoy window abuts the
+# target window; raise to ≥ 2 × `rt_window_pct` for a fully disjoint decoy
+# window.
 decoy_rt_shift_pct = 0.01
 
 # ── Consensus grouping ────────────────────────────────────────────────────────
@@ -107,17 +143,17 @@ decoy_rt_shift_pct = 0.01
 # Pre-grouping filter on individual features (uses `combined_score`).
 # Features below are excluded entirely — they cannot seed a group AND do not
 # count toward `n_contributing_runs`. 0.0 = keep everything.
-min_member_combined_score = 0.0
+min_member_combined_score = 0.5
 
 # Post-grouping filter on detection count. A group must have features from
-# at least this many distinct runs to survive. 1 = MBR on (single-run
-# detections kept). 2+ = require reproducibility.
-min_group_size = 1
+# at least this many distinct runs to survive. 1 = keep single-run
+# detections. 2+ = require reproducibility.
+min_group_size = 2
 
 # Post-grouping filter on the seed's `combined_score`. Drops groups whose
 # top feature is too weak to trust, even when other members are present.
-# 0.0 = keep everything. Suggested: 0.1–0.3 to drop noise rows.
-min_seed_combined_score = 0.0
+# 0.0 = keep everything.
+min_seed_combined_score = 0.75
 
 # ── Output ────────────────────────────────────────────────────────────────────
 [output]

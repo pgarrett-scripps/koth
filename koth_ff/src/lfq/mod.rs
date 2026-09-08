@@ -46,7 +46,8 @@ pub struct LfqConfig {
     /// m/z tolerance for hill lookup (ppm)
     pub mz_ppm: f64,
     /// Half-window size as a fraction of the run's total RT span.
-    /// 0.005 = ±0.5% of gradient → 1% total window, centred on the feature RT.
+    /// 0.01 = ±1% of gradient → 2% total window, centred on the feature RT.
+    /// Default 0.01.
     pub rt_window_pct: f64,
     /// Ion mobility tolerance for hill lookup (absolute 1/K0 units)
     pub im_tolerance: f64,
@@ -110,9 +111,13 @@ pub struct LfqConfig {
     /// Quantify EVERY consensus cell (detected and MBR) by the same grid
     /// re-integration, instead of using the per-run feature's own intensity for
     /// detected cells. Keeps detected and MBR cells on one commensurate scale —
-    /// important on timsTOF, where the feature integrates the ion-mobility
-    /// dimension but the 2-D XIC grid does not, so mixing the two inflates CV.
-    #[serde(default)]
+    /// essential on timsTOF, where the feature integrates the ion-mobility
+    /// dimension but the 2-D XIC grid does not, so mixing the two inflates CV,
+    /// and validated as a win on Orbitrap too (PXD003881: gated matrix CV
+    /// 14.27 → 12.31 %, ECOLI bias −0.067 → −0.020, HUMAN IQR 0.219 → 0.194).
+    /// Default TRUE since 2026-08-27: one estimator, one scale, everywhere.
+    /// Set false only to reproduce pre-2026-08-27 mixed-scale matrices.
+    #[serde(default = "default_detected_use_grid")]
     pub detected_use_grid: bool,
     /// Replace the raw RT closeness term in the hybrid score with a
     /// σ-normalised Gaussian RT likelihood `exp(−½ z²)`, where
@@ -147,22 +152,20 @@ pub struct LfqConfig {
     /// (Experiment B / audit A2) Score each **decoy** cell against an averagine
     /// isotope template and theoretical pattern computed from the DECOY's own
     /// shifted mass (`neutral_mass + decoy_mz_shift_da`) rather than the target's
-    /// mass. Default-off reuses the target's template for the decoy —
-    /// byte-identical to the shipped paper q-values. When true the +11 Da decoy
-    /// is judged against the isotope envelope it actually sits on, removing the
-    /// target-template freebie a mis-massed decoy currently inherits on the
-    /// Bhattacharyya (QDA feature 2) and the co-elution theory weighting
-    /// (feature 3). Applies only to the TDC decoy grid; target scoring and all
-    /// reported intensities are unchanged. Default false.
-    #[serde(default)]
+    /// mass. When false the decoy reuses the target's template. When true
+    /// (the default) the +11 Da decoy is judged against the isotope envelope it
+    /// actually sits on, removing the target-template freebie a mis-massed
+    /// decoy otherwise inherits on the Bhattacharyya (QDA feature 2) and the
+    /// co-elution theory weighting (feature 3). Applies only to the TDC decoy
+    /// grid; target scoring and all reported intensities are unchanged.
+    #[serde(default = "default_decoy_own_template")]
     pub decoy_own_template: bool,
     /// (Experiment B / audit A4) Co-elution value assigned to a grid cell with
     /// fewer than two isotope rows carrying signal (a lone monoisotope — nothing
-    /// to co-elute). Applied identically to target and decoy cells. Default 1.0
-    /// (byte-identical paper: an un-judgeable cell gets the maximal, target-like
+    /// to co-elute). Applied identically to target and decoy cells. Default 0.5
+    /// (neutral). 1.0 gives an un-judgeable cell the maximal, target-like
     /// score, which hands noise-grabbing lone-hill decoys a free target-like
-    /// coordinate on QDA feature index 3). Lower it (e.g. 0.5) to make an
-    /// un-co-elutable cell neutral/penalised instead of a freebie.
+    /// coordinate on QDA feature index 3.
     #[serde(default = "default_lone_coelution")]
     pub lone_coelution: f64,
 }
@@ -172,7 +175,11 @@ fn default_min_spectral_bhattacharyya() -> f64 {
 }
 
 fn default_lone_coelution() -> f64 {
-    1.0
+    0.5
+}
+
+fn default_decoy_own_template() -> bool {
+    true
 }
 
 fn default_normalize() -> String {
@@ -181,6 +188,10 @@ fn default_normalize() -> String {
 
 fn default_quant_estimator() -> String {
     "sum".to_string()
+}
+
+fn default_detected_use_grid() -> bool {
+    true
 }
 
 fn default_decoy_mz_shift_da() -> f64 {
@@ -204,7 +215,7 @@ impl Default for LfqConfig {
     fn default() -> Self {
         Self {
             mz_ppm: 10.0,
-            rt_window_pct: 0.02,
+            rt_window_pct: 0.01,
             im_tolerance: 0.05,
             n_isotopes: 3,
             grid_cols: 100,
@@ -216,10 +227,10 @@ impl Default for LfqConfig {
             consensus: ConsensusConfig::default(),
             normalize: default_normalize(),
             quant_estimator: default_quant_estimator(),
-            detected_use_grid: false,
+            detected_use_grid: default_detected_use_grid(),
             rt_spread_scoring: false,
             averagine_projection: false,
-            decoy_own_template: false,
+            decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),
         }
     }

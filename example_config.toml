@@ -101,11 +101,12 @@ ms2_hills_enabled = false
 # proportional, m/z-/RT-dependent component of the mass error (the dominant
 # Orbitrap mode); a constant Da offset is unobservable without IDs/lock mass.
 # Skipped in decoy mode and when too few isotope-spacing samples are collected.
-# Costs one extra (cheap) feature-assembly pass over the same hills.
-# mz_recalibration = false
-# mz_recalibration_mz_bins = 20
-# mz_recalibration_rt_bins = 8
-# mz_recalibration_min_samples = 50
+# Costs one extra (cheap) feature-assembly pass over the same hills. Default
+# on; set false (or omit --recalibrate) to run with the fixed tolerance only.
+mz_recalibration = true
+mz_recalibration_mz_bins = 20
+mz_recalibration_rt_bins = 8
+mz_recalibration_min_samples = 50
 
 # When mz_recalibration is enabled it also makes the isotope-match tolerance
 # region-adaptive, built on the surface above: instead of a fixed ppm window,
@@ -118,29 +119,29 @@ ms2_hills_enabled = false
 # 15-min timsTOF cohort (fixed 15 ppm vs learned σ≈2.8 ppm) gains +1.06 pp PSM
 # recall AND better CV/MV. No regression found on either platform. Only honoured
 # for ppm tolerances.
-# mz_recalibration_tol_sigma_mult = 4.0
-# mz_recalibration_tol_floor_ppm = 1.0
+mz_recalibration_tol_sigma_mult = 4.0
+mz_recalibration_tol_floor_ppm = 1.0
 
 [hills]
 # Minimum number of scans a hill must span
 min_scans = 3
 # Maximum gap (in scans) allowed within a hill
-max_gap = 0
+max_gap = 1
 
 # Whether to split hills at co-eluting local minima (persistence splitter:
 # despike + smooth + robust-max threshold + valley merge). The `split_*` knobs
-# below tune it; all have defaults, so they may be omitted.
+# below tune it.
 split_hills = true
-# split_valley_ratio = 0.70   # valley must drop to <= this fraction of the smaller peak
-# split_sigma_mult   = 4.0    # absolute notch depth floor, in noise sigma
-# split_height_frac  = 0.10   # min peak height as a fraction of the robust (95th-pct) max
+split_valley_ratio = 0.60   # valley must drop to <= this fraction of the smaller peak
+split_sigma_mult   = 5.0    # absolute notch depth floor, in noise sigma
+split_height_frac  = 0.10   # min peak height as a fraction of the robust (95th-pct) max
 
 # Weight for the intensity log₂-fold-change term in the hill-candidate distance
 # score. When multiple peaks fall within the m/z tolerance window, this biases
 # selection toward the peak whose intensity is most consistent with the hill's
 # last observed intensity, reducing noise-peak capture. 0.0 disables it.
-# For data with a lot of noisy peaks, like timsTOF PASEF, a value around 0.5 can help. 
-lfc_weight = 0.5
+# For data with a lot of noisy peaks, like timsTOF PASEF, a value around 0.5 can help.
+lfc_weight = 0.3
 
 # Linear-interpolate intensity through internal zero-gap scans during hill
 # finalization. Independent of `smoothing_enabled`. Default false.
@@ -180,17 +181,19 @@ smoothing_window = 1
 
 [features]
 # Charge state range to consider
-min_charge = 1
-max_charge = 7
+min_charge = 2
+max_charge = 6
 
 # Per-extension threshold (CHROMATOGRAPHIC cosine, in scan/RT space) used
 # while building an isotope chain. A candidate hill's cosine vs the seed hill
 # must clear this to extend the chain. NOT a final-quality filter — see the
 # three score thresholds below for that.
-min_chain_cosine = 0.5
+min_chain_cosine = 0.4
 
-# Maximum allowed intensity decrease on the left/right flanks (0.0–1.0)
-right_max_decrease = 0.05
+# A heavier isotope must be at least this fraction of its predecessor's
+# intensity or the chain stops (0.0–1.0). Formerly `right_max_decrease`, which
+# is still accepted as an alias.
+min_isotope_step_ratio = 0.01
 
 # Maximum number of isotope peaks to consider
 max_isotopes = 6
@@ -212,7 +215,7 @@ neutron_mass = 1.003354835
 #   combined_score — isotope_score × cosine_score
 # 0.0 = keep all. Use combined_score alone for the simplest quality knob,
 # or split when you want to gate on isotope quality and co-elution separately.
-min_isotope_score = 0.0
+min_isotope_score = 0.5
 min_cosine_score  = 0.0
 min_combined_score = 0.0
 

@@ -78,9 +78,10 @@ ppm timsTOF).
   alongside the benchmark that produced them. Prefer them over the templates
   when reproducing published results.
 
-**Notation below:** `key` (type, `default` → `shipped`) where "shipped" is the
-value in the production Orbitrap config when it differs from the struct default.
-Platform differences are called out inline.
+**Notation below:** `key` (type, `default`). Since 0.3.0 the struct defaults
+*are* the benchmark's operating point, so the production Orbitrap config
+differs from them only where a row says `default` → **`shipped`**. Platform
+differences are called out inline.
 
 ---
 
@@ -102,7 +103,7 @@ Tolerances here are shared by **both** the hills and features stages.
 | `global_min_mz` | f64 | `0.0` | Ignore peaks below this m/z. Left at default. |
 | `global_max_mz` | f64 | `inf` | Ignore peaks above this m/z. Left at default. |
 | `intensity_coverage` | f64 | `1.0` | Fraction of hill intensity to retain. **Keep `1.0`** — validated strictly dominant (0.95→1.0 gave +2.9 pp recall at +0.5% features; 0.95 clips low-abundance apices). Only the AlphaPept-comparator config uses 0.95. |
-| `n_threads` | Option\<usize\> | `None` (all cores) | Worker threads. Shipped 4 (Orbitrap) / 8 (Bruker) for benchmark reproducibility; omit for max throughput. |
+| `n_threads` | Option\<usize\> | `None` (all cores) | Worker threads. **Unset in both shipped benchmark configs** (since 2026-08-27): v0.1.0 parsed this key but ignored it (always all cores), and every published timing ran uncapped. Current builds DO honor it, so a leftover value would silently cap a re-run. Set it only for deliberate throughput limiting. |
 
 #### General noise / mode toggles
 | Key | Type | Default | What it does / what to set |
@@ -120,7 +121,7 @@ the learned offset and replaces the fixed isotope-match tolerance with
 
 | Key | Type | Default | What it does / what to set |
 |---|---|---|---|
-| `mz_recalibration` | bool | `false` → **`true`** | Master switch. The **region-adaptive tolerance is the real win** (position-only recal is a documented no-op on well-calibrated instruments). It is a **precision** mechanism, not a recall one — see the measured ablation below. Overridable via `--recalibrate`. |
+| `mz_recalibration` | bool | `true` | Master switch. The **region-adaptive tolerance is the real win** (position-only recal is a documented no-op on well-calibrated instruments). It is a **precision** mechanism, not a recall one — see the measured ablation below. Overridable via `--recalibrate`. |
 | `mz_recalibration_mz_bins` | usize | `20` | m/z bins in the recalibration surface. Default. |
 | `mz_recalibration_rt_bins` | usize | `8` | RT bins in the recalibration surface. Default. |
 | `mz_recalibration_min_samples` | usize | `50` | Min residuals a cell needs before its own median is trusted (else falls back to marginal → global median). Default. |
@@ -197,12 +198,12 @@ the acquisition differs.
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
 | `min_scans` | usize | `3` | Discard hills shorter than this. `3` on both. Interacts with `features.min_scan_overlap` (a 2-scan hill can't reach a 3-scan overlap). |
-| `max_gap` | usize | `0` → **`1`** | Max internal scan gap within a hill. Every tuned config uses `1`. |
+| `max_gap` | usize | `1` | Max internal scan gap within a hill. Every tuned config uses `1`. |
 | `split_hills` | bool | `true` | Split merged traces at valleys (persistence splitter). `true` everywhere. |
-| `split_valley_ratio` | f64 | `0.70` → **`0.60`** | A split survives only if the valley drops to ≤ this fraction of the *smaller* peak. `0.60` = precision-optimal; `0.70` leans recall. |
-| `split_sigma_mult` | f64 | `4.0` → **`5.0`** | Notch-depth floor as a multiple of noise σ; rejects shallow noise notches. `5.0` = precision-optimal. |
+| `split_valley_ratio` | f64 | `0.60` | A split survives only if the valley drops to ≤ this fraction of the *smaller* peak. `0.60` = precision-optimal; `0.70` leans recall. |
+| `split_sigma_mult` | f64 | `5.0` | Notch-depth floor as a multiple of noise σ; rejects shallow noise notches. `5.0` = precision-optimal. |
 | `split_height_frac` | f64 | `0.10` → **`0.13`** | Min peak height as fraction of the robust (95th-pct) max. `0.13` shipped; `0.05` leans recall (catches faint 10:1 co-eluters). |
-| `lfc_weight` | f64 | `0.5` → **`0.3`** | Weight of the intensity log-fold-change term when matching a peak to a hill. `0.3` (helps noisy timsTOF). |
+| `lfc_weight` | f64 | `0.3` | Weight of the intensity log-fold-change term when matching a peak to a hill. `0.3` (helps noisy timsTOF). |
 | `gap_fill_enabled` | bool | `false` | Interpolate intensity through internal zero gaps. **Keep `false`** on real configs (on+smoothing adds ~20% features for ~0.7 pp recall, worse redundancy). `relaxed` sets `true`. Warning: can create artificial maxima the splitter treats as new peaks. |
 | `smoothing_enabled` | bool | `false` | Running-average the intensity profile. `false` on Orbitrap/Bruker; `true` in `relaxed`. |
 | `smoothing_window` | usize | `1` | Half-width of the smoothing window (total = 2·w+1). `1`. Ignored when smoothing off. |
@@ -246,10 +247,10 @@ min_scans = 2
 
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
-| `min_charge` | u8 | `1` → **`2`** | Min precursor charge. `2` (tryptic peptides are 2–5). |
-| `max_charge` | u8 | `7` → **`6`** | Max precursor charge. `6`. |
-| `min_chain_cosine` | f64 | `0.5` → **`0.40`** | Per-extension chromatographic-cosine gate while building a chain (vs the `cosine_anchor` reference). `0.40` recovers +1.24 pp recall at +19% features, neutral quant. **Not the contaminant filter** (co-eluters score ~0.74) — that's `min_isotope_score`. `relaxed` = 0.0; `alphapept_like` = 0.6. |
-| `right_max_decrease` | f64 | `0.05` → **`0.01`** | Heavier isotope must be ≥ this fraction of its predecessor (chain-termination evidence). `0.01` (production). Chains extend **upward only**, so there is no `left_max_decrease` counterpart (removed 2026-07-28). |
+| `min_charge` | u8 | `2` | Min precursor charge. `2` (tryptic peptides are 2–5). |
+| `max_charge` | u8 | `6` | Max precursor charge. `6`. |
+| `min_chain_cosine` | f64 | `0.40` | Per-extension chromatographic-cosine gate while building a chain (vs the `cosine_anchor` reference). `0.40` recovers +1.24 pp recall at +19% features, neutral quant. **Not the contaminant filter** (co-eluters score ~0.74) — that's `min_isotope_score`. `relaxed` = 0.0; `alphapept_like` = 0.6. |
+| `min_isotope_step_ratio` | f64 | `0.01` | Heavier isotope must be ≥ this fraction of its predecessor (chain-termination evidence). Chains extend **upward only**, so there is no downward counterpart (removed 2026-07-28). Named `right_max_decrease` before 0.3.0; the old key is still accepted as an alias. |
 | `max_isotopes` | usize | `6` | Max isotope peaks added above the monoisotopic seed, so the envelope is at most `max_isotopes + 1` hills. `6`. (Before the downward walk was removed this bounded each direction separately, allowing envelopes up to `2·max_isotopes + 1`.) |
 | `max_isotope_log2_ratio` | f64 | `1.5` | Intensity-ratio gate: after passing cosine, apex ratio vs predecessor must match averagine within ±this many log2 (≈2.83×). **This catches co-eluting contaminants** cosine misses. Default (not overridden). |
 | `chain_predicted_intensity_gate` | bool | **`false`** | **Behavior-changing.** `true`: stop the chain when the averagine-*predicted* next-isotope intensity falls below the noise floor. `false` (default since the downward walk was removed, 2026-07-28): purely evidence-based termination. The gate only ever guarded the upward direction, so while the downward walk existed a dim monoisotope killed by it was still recovered by seeding its M+1 and stepping down. With one direction there is no second route, and leaving it on silently drops those features. |
@@ -263,7 +264,7 @@ min_scans = 2
 #### Final retention filters (AND-ed; drop the whole feature)
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
-| `min_isotope_score` | f64 | `0.0` → **`0.5`** | Drop features whose isotope (Bhattacharyya-vs-averagine) score is below this. **`0.5` is the real contaminant filter.** `0.0` in `relaxed`. |
+| `min_isotope_score` | f64 | `0.5` | Drop features whose isotope (Bhattacharyya-vs-averagine) score is below this. **`0.5` is the real contaminant filter.** `0.0` in `relaxed`. |
 | `min_cosine_score` | f64 | `0.0` | Drop features whose mean chromatographic-cosine score is below this. `0.0` (keep all). |
 | `min_combined_score` | f64 | `0.0` | Drop features whose `isotope × cosine` combined score is below this. `0.0` (keep all). |
 
@@ -288,9 +289,11 @@ Skippable entirely with `--no-scoring`.
 
 Sections: `[alignment]`, `[lfq]`, `[lfq.consensus]` (nested), `[output]`.
 
-> **The only Orbitrap-vs-Bruker differences in the whole align config are two
-> `[lfq]` keys:** Bruker sets `quant_estimator = "apex"` and
-> `detected_use_grid = true`. Everything else is identical.
+> **The align config is now IDENTICAL on Orbitrap and Bruker** (since
+> 2026-08-27): `detected_use_grid = true` and `quant_estimator = "sum"` on both
+> platforms. The former split (Bruker `apex` + all-grid, Orbitrap `sum` +
+> detected-feature intensities) is gone — all-grid quantification was validated
+> as a win on Orbitrap too, and sum-vs-apex is a wash on Bruker under all-grid.
 
 ### 4.1 `[alignment]` — RT/mass/IM alignment to an auto-selected reference
 Anchor matching is coordinate-only (charge + ppm + RT window, no peptide ID), so
@@ -319,7 +322,7 @@ and (if `run_tdc`) repeat with a decoy.
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
 | `mz_ppm` | f64 | `10.0` | ppm tolerance for hill lookup per isotopologue. `10.0` both. **Also reused by consensus grouping at 2× (20 ppm)** to absorb alignment drift. |
-| `rt_window_pct` | f64 | `0.02` → **`0.01`** | XIC grid half-window as a fraction of RT span. **Shipped `0.01` (±~1.2 min), halved from the code default:** the generous ±2.4 min window summed contaminant hills (+11.5% MBR bias, 2× scatter); `0.01` cuts bias to −2.1% and matrix CV 16.17→15.33 with no MV loss; `0.005` over-tightens (−24%). Also reused by consensus grouping at 2×. |
+| `rt_window_pct` | f64 | `0.01` | XIC grid half-window as a fraction of RT span. **`0.01` (±~1.2 min), halved from the pre-0.3.0 default of `0.02`:** the generous ±2.4 min window summed contaminant hills (+11.5% MBR bias, 2× scatter); `0.01` cuts bias to −2.1% and matrix CV 16.17→15.33 with no MV loss; `0.005` over-tightens (−24%). Also reused by consensus grouping at 2×. |
 | `im_tolerance` | f64 | `0.05` | IM tolerance (1/K0) for hill lookup. Inert on Orbitrap. Reused by consensus grouping at 1×. |
 | `n_isotopes` | usize | `3` | Grid isotope rows (1=M, 2=M+M1, 3=M+M1+M2). `3`. Clamped to ≥1. |
 | `grid_cols` | usize | `100` | RT bins per grid. `100`. Clamped to ≥1. More = finer RT at higher cost. |
@@ -328,11 +331,11 @@ and (if `run_tdc`) repeat with a decoy.
 | `run_tdc` | bool | `true` | Run target-decoy competition + compute per-cell q-values. `true`. `false` → q-values all 1.0, decoys zero. |
 | `decoy_mz_shift_da` | f64 | `11.0` | Decoy m/z = target + `shift/charge`; must clear any real isotopologue/adduct. `11.0`. Tunable null-model knob (not shipped explicitly). |
 | `decoy_rt_shift_pct` | f64 | `0.01` | Decoy RT = target − `shift × rt_span`. At `0.01` the decoy window still overlaps the target; increase to separate. Tunable null-model knob. |
-| `decoy_own_template` | bool | `false` (code) / **`true` (shipped)** | Score the +`decoy_mz_shift_da` decoy against **its own** averagine template (from the shifted mass), not the target's. Correctness fix (audit A2); measured neutral on its own but paired with `lone_coelution`. Code default `false` for byte-safety; enabled in the shipped `koth_align.toml`. Target scoring + reported intensities unchanged. |
-| `lone_coelution` | f64 | `1.0` (code) / **`0.5` (shipped)** | Co-elution value for a cell with <2 isotope rows carrying signal (a lone monoisotope — nothing to co-elute), applied identically to target and decoy. `1.0` hands noise-grabbing lone-hill decoys a free target-like coordinate on the QDA co-elution feature; **`0.5` neutralises that freebie** — validated q-calibration win (audit A4: q-AUROC 0.934→0.938, +141 PSMs at q≤0.05, no quant cost). Code default `1.0` (byte-safe); shipped `0.5`. |
+| `decoy_own_template` | bool | `true` | Score the +`decoy_mz_shift_da` decoy against **its own** averagine template (from the shifted mass), not the target's. Correctness fix (audit A2); measured neutral on its own but paired with `lone_coelution`. Target scoring + reported intensities unchanged. `false` reproduces pre-0.3.0 q-values. |
+| `lone_coelution` | f64 | `0.5` | Co-elution value for a cell with <2 isotope rows carrying signal (a lone monoisotope — nothing to co-elute), applied identically to target and decoy. `1.0` (the pre-0.3.0 default) hands noise-grabbing lone-hill decoys a free target-like coordinate on the QDA co-elution feature; **`0.5` neutralises that freebie** — validated q-calibration win (audit A4: q-AUROC 0.934→0.938, +141 PSMs at q≤0.05, no quant cost). |
 | `normalize` | String | `"none"` | Cross-run matrix normalisation. **`"none"` for the paper** (the benchmark normalises every tool identically downstream, so an in-binary median-of-ratios would double-normalise unfairly). `"median_ratios"` = DESeq/edgeR size factors — a **validated option for standalone use** where you consume the matrix directly. |
-| `quant_estimator` | String | `"sum"` → **Bruker `"apex"`** | Per-cell estimator. **Orbitrap `"sum"`** (integrated area — best fold-change accuracy; `"apex"` cuts CV but wrecks IQR 0.227→0.413 because MBR apex columns sit at the jittery consensus RT). **Bruker `"apex"`** — *for comparator fairness* (AlphaPept's `.d` output exposes only apex), not quality. |
-| `detected_use_grid` | bool | `false` → **Bruker `true`** | Quantify **every** cell (detected + MBR) by the same grid re-integration. **Bruker-specific validated win** (CV 38→13.7%): on timsTOF the per-run feature integrates IM but the 2-D grid doesn't, so mixing scales inflates CV. Orbitrap `false` (trust the detected feature's own intensity). |
+| `quant_estimator` | String | `"sum"` (both platforms) | Per-cell estimator over the grid. Under all-grid quantification `"sum"` beats `"apex"` on Orbitrap (CV 12.31 vs 13.19 %, HUMAN IQR 0.194 vs 0.206) and the two are a wash on Bruker (CV 9.06 vs 9.19 %). The old "apex wrecks IQR 0.227→0.413" result was measured in the mixed detected-feature/grid regime and no longer applies. |
+| `detected_use_grid` | bool | `true` (both platforms; **code default flipped 2026-08-27**) | Quantify **every** cell (detected + MBR) by the same grid re-integration — one estimator, one scale. Essential on timsTOF (feature integrates IM, 2-D grid doesn't; mixed scales inflated CV 38→13.7%) and a validated win on Orbitrap too (gated CV 14.27→12.31 %, ECOLI bias −0.067→−0.020, HUMAN IQR 0.219→0.194). `false` only reproduces pre-2026-08-27 mixed-scale matrices. |
 | `rt_spread_scoring` | bool | `false` | Replace the raw RT term with a σ-normalised Gaussian likelihood using the per-run post-warp RT-residual spread (region-aware; strict where alignment is confident). Applied to target+decoy so TDC stays calibrated. **Validated but default-off**; omit unless experimenting. |
 | `averagine_projection` | bool | `false` | Report the averagine matched-filter projection per cell instead of the raw box-sum (keeps on-pattern signal, rejects orthogonal contamination). **Tested negative on Orbitrap** (CV +3.1 pp, IQR +0.036, FFCR +1.9 pp, recall flat — see [§5](#5-experimental-knob-status-do-not-re-litigate)); untested on Bruker (its background-floor regime is where it might help). Byte-identical when off. **Keep `false`.** |
 
@@ -355,9 +358,9 @@ and single-linkage grouped by (charge, neutral mass, aligned RT, IM).
 
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
-| `min_member_combined_score` | f64 | `0.0` → **`0.5`** | Pre-grouping filter: a feature's `combined_score` must clear this to join/seed a group (else excluded, doesn't count toward `n_contributing_runs`). **Required key when the `[lfq.consensus]` table is present** (no serde default). Shipped `0.5`. |
-| `min_group_size` | usize | `1` → **`2`** | Min distinct runs that must detect a feature to keep the group. **`2`** (of 20) shipped. `1` = full MBR; raise for stricter reproducibility. |
-| `min_seed_combined_score` | f64 | `0.0` → **`0.75`** | Post-grouping filter: drop a group whose best member (seed) is below this. Shipped `0.75`. |
+| `min_member_combined_score` | f64 | `0.5` | Pre-grouping filter: a feature's `combined_score` must clear this to join/seed a group (else excluded, doesn't count toward `n_contributing_runs`). `0.0` keeps everything. |
+| `min_group_size` | usize | `2` | Min distinct runs that must detect a feature to keep the group. `2` (of 20) in the benchmark. `1` = keep single-run detections; raise for stricter reproducibility. |
+| `min_seed_combined_score` | f64 | `0.75` | Post-grouping filter: drop a group whose best member (seed) is below this. `0.0` keeps all groups. |
 
 ### 4.4 `[output]`
 | Key | Type | Default → shipped | What it does |
@@ -376,8 +379,8 @@ unless you are deliberately re-opening the experiment (and re-benchmarking).
 
 | Knob | Section | Verdict | Default |
 |---|---|---|---|
-| `mz_recalibration` (adaptive tol) | `[file]` | ✅ **Validated win**, both platforms (the adaptive tolerance, not position-only) | on in shipped configs |
-| `detected_use_grid` | `[lfq]` | ✅ **Validated win on timsTOF** (CV 38→13.7%) | Bruker on, Orbitrap off |
+| `mz_recalibration` (adaptive tol) | `[file]` | ✅ **Validated win**, both platforms (the adaptive tolerance, not position-only) | on; code default `true` since 0.3.0 |
+| `detected_use_grid` | `[lfq]` | ✅ **Validated win on both platforms** (timsTOF CV 38→13.7%; Orbitrap gated CV 14.27→12.31%) | On everywhere; code default `true` |
 | `normalize = "median_ratios"` | `[lfq]` | ✅ Valid for **standalone** use; off in paper for fairness | `"none"` |
 | `rt_spread_scoring` | `[lfq]` | ✅ Validated, but kept **default-off** | off |
 | `cosine_anchor = "seed"` | `[features]` | ✅ **Won**, now the default (+0.31 pp) | `"seed"` |
@@ -398,10 +401,10 @@ Start from the shipped configs; the deltas are minimal.
 | Setting | Orbitrap (`koth_ff.toml` / `koth_align.toml`) | Bruker/timsTOF (`*_bruker.toml`) | Why |
 |---|---|---|---|
 | `[file].mz_tolerance` | `8.0` | `15.0` | timsTOF MS1 mass accuracy is looser |
-| `[file].n_threads` | `4` | `8` | (benchmark reproducibility only) |
+| `[file].n_threads` | unset | unset | all cores on both platforms; v0.1.0 ignored the key, current builds honor it |
 | `[file].bruker_*` front-end | inert (mzML) | active (`.d` filter + watershed) | Bruker raw-frame denoising |
-| `[lfq].quant_estimator` | `"sum"` | `"apex"` | match what comparators expose per platform |
-| `[lfq].detected_use_grid` | `false` | `true` | IM-vs-2D-grid scale commensurability |
+| `[lfq].quant_estimator` | `"sum"` | `"sum"` | identical since 2026-08-27 (sum-vs-apex is a wash under all-grid) |
+| `[lfq].detected_use_grid` | `true` | `true` | identical since 2026-08-27; all-grid everywhere |
 
 Everything else — splitter params, `min_chain_cosine=0.40`, recalibration,
 `sulfur_offsets`, `min_isotope_score=0.5`, all alignment/consensus/TDC

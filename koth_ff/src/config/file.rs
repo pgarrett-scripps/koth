@@ -174,8 +174,8 @@ pub struct FileConfig {
     /// `tol_ppm = clamp(tol_sigma_mult × σ(m/z,RT), tol_floor_ppm, mz_tolerance)`.
     /// Tightens the search window where the instrument is precise (rejecting
     /// false isotope matches) and relaxes it — never beyond `mz_tolerance` —
-    /// where it is noisy. Only honoured for ppm tolerances.
-    #[serde(default)]
+    /// where it is noisy. Only honoured for ppm tolerances. Default true.
+    #[serde(default = "default_mz_recalibration")]
     pub mz_recalibration: bool,
     /// Number of m/z bins in the recalibration surface. Bin extents are
     /// derived from the observed sample range. Default 20.
@@ -232,7 +232,7 @@ impl Default for FileConfig {
             noise_filter_sigma: None,
             decoy_mode: false,
             ms2_hills_enabled: false,
-            mz_recalibration: false,
+            mz_recalibration: default_mz_recalibration(),
             mz_recalibration_mz_bins: default_mz_recalibration_mz_bins(),
             mz_recalibration_rt_bins: default_mz_recalibration_rt_bins(),
             mz_recalibration_min_samples: default_mz_recalibration_min_samples(),
@@ -240,6 +240,10 @@ impl Default for FileConfig {
             mz_recalibration_tol_floor_ppm: default_mz_recalibration_tol_floor_ppm(),
         }
     }
+}
+
+fn default_mz_recalibration() -> bool {
+    true
 }
 
 fn default_mz_recalibration_mz_bins() -> usize {

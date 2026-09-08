@@ -15,27 +15,38 @@ pub struct ConsensusConfig {
     /// Pre-grouping filter: a feature's `combined_score` must clear this to
     /// be eligible as a group member or seed. Features below are excluded
     /// from the projection entirely (don't count toward `n_contributing_runs`).
+    /// Default 0.5.
+    #[serde(default = "default_min_member_combined_score")]
     pub min_member_combined_score: f64,
     /// Minimum number of distinct runs that must have detected a feature in
-    /// a group for it to survive. 1 = MBR on (single-run detections kept).
+    /// a group for it to survive. 1 = keep single-run detections; default 2
+    /// requires a second run to have detected it.
     #[serde(default = "default_min_group_size")]
     pub min_group_size: usize,
     /// Post-grouping filter: drop groups whose seed (best-`combined_score`
-    /// member) is below this. 0.0 = keep all groups.
-    #[serde(default)]
+    /// member) is below this. 0.0 = keep all groups. Default 0.75.
+    #[serde(default = "default_min_seed_combined_score")]
     pub min_seed_combined_score: f64,
 }
 
+fn default_min_member_combined_score() -> f64 {
+    0.5
+}
+
 fn default_min_group_size() -> usize {
-    1
+    2
+}
+
+fn default_min_seed_combined_score() -> f64 {
+    0.75
 }
 
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            min_member_combined_score: 0.0,
-            min_group_size: 1,
-            min_seed_combined_score: 0.0,
+            min_member_combined_score: default_min_member_combined_score(),
+            min_group_size: default_min_group_size(),
+            min_seed_combined_score: default_min_seed_combined_score(),
         }
     }
 }

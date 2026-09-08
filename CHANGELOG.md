@@ -192,6 +192,47 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - `koth-ff` PyO3 Python bindings (`koth_ff_py` crate) and the wheel-publish
   workflow. Use the `koth_ff` CLI instead.
 
+## [0.3.0] — 2026-09-08
+
+### Changed
+- **Benchmark operating point is now the default.** Every struct default (and
+  every serde `default = ...` fallback) now equals the value the published
+  benchmark configs set, so a run with no `--config` reproduces the paper's
+  operating point and `example_config*.toml` really do show the defaults.
+  Old → new:
+  - `[hills]`: `max_gap` 0 → 1; `lfc_weight` 0.5 → 0.3; `split_valley_ratio`
+    0.70 → 0.60; `split_sigma_mult` 4.0 → 5.0 (`split_height_frac` stays 0.10).
+  - `[features]`: `min_charge` 1 → 2; `max_charge` 7 → 6; `min_chain_cosine`
+    0.5 → 0.4; `min_isotope_score` 0.0 → 0.5; `min_isotope_step_ratio`
+    (née `right_max_decrease`) 0.05 → 0.01.
+  - `[file]`: `mz_recalibration` false → true (the `--recalibrate` flag is now
+    a no-op unless a config turned it off).
+  - `[lfq]`: `rt_window_pct` 0.02 → 0.01; `lone_coelution` 1.0 → 0.5;
+    `decoy_own_template` false → true; `detected_use_grid` false → true (see
+    below).
+  - `[lfq.consensus]`: `min_group_size` 1 → 2; `min_member_combined_score`
+    0.0 → 0.5 (now has a serde default, so it is no longer a required key);
+    `min_seed_combined_score` 0.0 → 0.75.
+  - `[alignment].rt_warp_kind` already defaulted to `"ransac"`; unchanged.
+  A TOML that pinned the previous values still parses and behaves as before;
+  only unset keys move.
+- **`[features].right_max_decrease` is renamed `min_isotope_step_ratio`.** The
+  semantics are unchanged: a heavier isotope must be at least this fraction of
+  its predecessor's intensity or the chain stops. The old key is accepted as a
+  serde alias, so existing configs keep working.
+- **`koth_align` now defaults to `detected_use_grid = true`**: every consensus
+  cell — detected and match-between-runs alike — is quantified by the same XIC
+  grid re-integration, so the whole matrix sits on one intensity scale. The old
+  default trusted the per-run feature's own intensity for detected cells, which
+  mixes scales (on timsTOF the feature integrates ion mobility while the 2-D
+  grid does not; replicate CV inflated ~38 → 13.7 %). All-grid quantification
+  is also a measured win on Orbitrap (PXD003881: gated matrix CV 14.27 →
+  12.31 %, ECOLI bias −0.067 → −0.020, HUMAN IQR 0.219 → 0.194; recall and
+  missingness unchanged). Under all-grid, `quant_estimator = "sum"` beats
+  `"apex"` on Orbitrap and ties it on timsTOF, so the shipped configs use
+  `"sum"` on both platforms and the per-platform `[lfq]` split is gone. Set
+  `detected_use_grid = false` only to reproduce older mixed-scale matrices.
+
 ## [0.2.0] — 2026-09-03
 
 ### Added
