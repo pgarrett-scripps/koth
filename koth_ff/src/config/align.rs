@@ -4,7 +4,7 @@ use super::OutputFormat;
 
 /// Output settings for the alignment + LFQ stage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct AlignOutputConfig {
     /// "tsv" or "parquet"
     pub format: OutputFormat,

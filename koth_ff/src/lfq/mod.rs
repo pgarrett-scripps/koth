@@ -41,7 +41,7 @@ fn peak_rt_stats(grid: &XicGrid, n_cols: usize, peak: &PeakResult) -> (f64, f64)
 
 /// Configuration for LFQ grid extraction and peak integration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct LfqConfig {
     /// m/z tolerance for hill lookup (ppm)
     pub mz_ppm: f64,

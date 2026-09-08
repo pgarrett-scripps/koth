@@ -29,7 +29,7 @@ pub enum OutputFormat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct KothConfig {
     pub file: FileConfig,
     pub hills: HillsConfig,
@@ -46,7 +46,7 @@ pub struct KothConfig {
 
 /// Top-level configuration for the `koth_align` binary.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct AlignConfig {
     pub alignment: AlignmentConfig,
     pub lfq: LfqConfig,

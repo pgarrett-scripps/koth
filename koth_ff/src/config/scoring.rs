@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::OutputFormat;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ScoringConfig {
     /// Whether to test the ±1 neutron-offset monoisotope reassignment during
     /// scoring. `false` (default) tests only offset 0 (no reassignment);
@@ -31,7 +31,7 @@ impl Default for ScoringConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct OutputConfig {
     /// Output format for hills and features files: "tsv" or "parquet"
     pub format: OutputFormat,

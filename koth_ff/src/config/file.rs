@@ -18,7 +18,7 @@ pub enum ImToleranceType {
 ///
 /// Tolerances defined here are used by both hill detection and feature finding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
     /// m/z tolerance (shared by hills and features stages)
     pub mz_tolerance: f64,

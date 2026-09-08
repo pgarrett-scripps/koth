@@ -36,7 +36,7 @@ fn default_ransac_thresh() -> f64 {
 
 /// Configuration for multi-run alignment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct AlignmentConfig {
     /// PPM tolerance for finding anchor feature pairs
     pub anchor_mass_ppm: f64,

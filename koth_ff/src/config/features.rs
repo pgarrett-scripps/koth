@@ -26,7 +26,7 @@ impl CosineAnchor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct FeaturesConfig {
     pub min_charge: u8,
     pub max_charge: u8,
