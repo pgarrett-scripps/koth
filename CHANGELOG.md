@@ -8,6 +8,126 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.0] — 2026-09-08
+
+### Changed
+- **Benchmark operating point is now the default.** Every struct default (and
+  every serde `default = ...` fallback) now equals the value the published
+  benchmark configs set, so a run with no `--config` reproduces the paper's
+  operating point and `example_config*.toml` really do show the defaults.
+  Old → new:
+  - `[hills]`: `max_gap` 0 → 1; `lfc_weight` 0.5 → 0.3; `split_valley_ratio`
+    0.70 → 0.60; `split_sigma_mult` 4.0 → 5.0 (`split_height_frac` stays 0.10).
+  - `[features]`: `min_charge` 1 → 2; `max_charge` 7 → 6; `min_chain_cosine`
+    0.5 → 0.4; `min_isotope_score` 0.0 → 0.5; `min_isotope_step_ratio`
+    (née `right_max_decrease`) 0.05 → 0.01.
+  - `[file]`: `mz_recalibration` false → true (the `--recalibrate` flag is now
+    a no-op unless a config turned it off).
+  - `[lfq]`: `rt_window_pct` 0.02 → 0.01; `lone_coelution` 1.0 → 0.5;
+    `decoy_own_template` false → true; `detected_use_grid` false → true (see
+    below).
+  - `[lfq.consensus]`: `min_group_size` 1 → 2; `min_member_combined_score`
+    0.0 → 0.5 (now has a serde default, so it is no longer a required key);
+    `min_seed_combined_score` 0.0 → 0.75.
+  - `[alignment].rt_warp_kind` already defaulted to `"ransac"`; unchanged.
+  A TOML that pinned the previous values still parses and behaves as before;
+  only unset keys move.
+- **`[features].right_max_decrease` is renamed `min_isotope_step_ratio`.** The
+  semantics are unchanged: a heavier isotope must be at least this fraction of
+  its predecessor's intensity or the chain stops. The old key is accepted as a
+  serde alias, so existing configs keep working.
+- **`koth_align` now defaults to `detected_use_grid = true`**: every consensus
+  cell — detected and match-between-runs alike — is quantified by the same XIC
+  grid re-integration, so the whole matrix sits on one intensity scale. The old
+  default trusted the per-run feature's own intensity for detected cells, which
+  mixes scales (on timsTOF the feature integrates ion mobility while the 2-D
+  grid does not; replicate CV inflated ~38 → 13.7 %). All-grid quantification
+  is also a measured win on Orbitrap (PXD003881: gated matrix CV 14.27 →
+  12.31 %, ECOLI bias −0.067 → −0.020, HUMAN IQR 0.219 → 0.194; recall and
+  missingness unchanged). Under all-grid, `quant_estimator = "sum"` beats
+  `"apex"` on Orbitrap and ties it on timsTOF, so the shipped configs use
+  `"sum"` on both platforms and the per-platform `[lfq]` split is gone. Set
+  `detected_use_grid = false` only to reproduce older mixed-scale matrices.
+
+## [0.2.0] — 2026-09-03
+
+### Added
+- Multi-CV FAIMS support for MS1 feature detection. mzML and native Thermo
+  readers carry compensation voltage into independent, channel-local hill and
+  feature pipelines; the feature TSV and Parquet schemas expose a nullable
+  `FAIMS` column. Non-FAIMS inputs retain the existing single-channel detection
+  path.
+
+## [0.1.0] — 2026-08-18
+
+Initial release, tagged from `992d2f4`. The sections below cover the whole
+pre-release development history from 2026-04-07 to that tag, so *Changed*,
+*Fixed* and *Removed / renamed* are relative to earlier development builds
+rather than to any published version.
+
+### Added
+- `koth_ff` CLI for streaming hill detection, isotope-feature detection, and
+  averagine scoring on mzML files and Bruker timsTOF `.d` directories.
+- **Native Thermo Fisher `.raw` input** behind the opt-in `thermo` cargo
+  feature (`cargo build -p koth_ff --features thermo`). Wraps Thermo's
+  `RawFileReader` via a self-hosted .NET 8 runtime (required at build and run
+  time; auto-detects `DOTNET_ROOT` under `~/.dotnet`, `/usr/share/dotnet`, …),
+  so a `.raw` file can be fed to `koth_ff` directly with no mzML conversion.
+  Off by default; `.raw` scans are read as MS1 centroids, matching the mzML
+  path. A default (non-`thermo`) build gives a clear "rebuild with
+  `--features thermo`" error for `.raw` input.
+- **ID-free isotope-consistency m/z recalibration** (`[file] mz_recalibration`,
+  default off; CLI `--recalibrate`). A pass-1 feature detection collects the
+  signed ppm deviation of every adjacent isotope-hill spacing from its
+  theoretical `neutron_mass / z` step and bins the residuals over (m/z, RT).
+  Pass 2 shifts the *expected* isotope position during chain extension by the
+  learned per-region median offset (hierarchical fallback: cell → m/z-marginal
+  → global), so isotope hills are searched at their recalibrated location.
+  Corrects the proportional, m/z-/RT-dependent mass-error component (dominant
+  Orbitrap mode) without IDs or a lock mass; a constant Da offset stays
+  unobservable by design. Deterministic (robust medians, fixed binning),
+  skipped in decoy mode, and costs one extra cheap feature-assembly pass over
+  the same hills. Tunable via `mz_recalibration_mz_bins` (20),
+  `mz_recalibration_rt_bins` (8), `mz_recalibration_min_samples` (50).
+  Inspired by Biosaur's per-isotope "smart" calibration and AlphaPept's
+  multi-dimensional recalibration, adapted to koth_ff's ID-free feature stage.
+  Benchmarked as a no-op on its own — well-calibrated instruments have little
+  proportional error left to correct — but it is the scaffolding for the
+  region-adaptive tolerance below, which *is* a win and is now applied together
+  with it.
+- **Region-adaptive isotope-match tolerance** — enabled automatically whenever
+  `[file] mz_recalibration` is on (the former separate
+  `mz_recalibration_adaptive_tol` flag and the `--adaptive-tol` / `--kish` CLI
+  flags have been removed; see *Removed / renamed*). Replaces the fixed
+  isotope-match ppm window with
+  `clamp(tol_sigma_mult × σ(m/z, RT), tol_floor_ppm, mz_tolerance)`, where σ
+  comes from the recalibration surface's per-region residual spread —
+  tightening the search where the instrument is precise (rejecting false
+  isotope matches) and relaxing it, up to the configured ceiling, where it
+  isn't. **Validated on both benchmark platforms and shipped in
+  `benchmark/config/koth_ff.toml` and `koth_ff_bruker.toml`:** on PXD003881
+  (20-run Orbitrap cohort) it drops features −5.8% (spurious matches at the
+  over-wide fixed 8 ppm window) at flat PSM recall, while median CV improves
+  23.76→23.25%, MV 0.615→0.568%, CV@q≤0.05 20.64→20.47%, +70 complete-quant
+  features @q≤0.05; on the 18-run timsTOF 15-min cohort (fixed 15 ppm vs a
+  learned real spread of σ≈2.8 ppm) it improves PSM recall +1.06 pp
+  (79.34→80.40%) *and* quant (median CV 13.89→13.76%, MV 3.12→3.08%,
+  CV@q≤0.05 11.74→11.69%, +285 complete-quant features), with −0.2% features.
+  No regression found on either platform or metric. Tunable via
+  `mz_recalibration_tol_sigma_mult` (3.0) and `mz_recalibration_tol_floor_ppm`
+  (1.0).
+- `[lfq] rt_spread_scoring` (default `false`, experimental) — replaces the raw
+  RT-closeness term with a σ-normalised Gaussian likelihood using the per-run
+  post-warp RT-residual spread (region-aware RT scoring).
+- New per-cell columns in `lfq_details.tsv`: `spectral_bhattacharyya`,
+  `coelution`, `rt_score`, `int_score` — the individual hybrid components,
+  exposed for downstream rescoring.
+- `[lfq] decoy_mz_shift_da` and `[lfq] decoy_rt_shift_pct` config knobs that
+  control the decoy grid offsets (previously hard-coded to 11 Da/charge and
+  1 % of the RT span). Defaults preserve previous behaviour.
+
 ### Changed
 - Release builds now use the published `dnoise` 0.1.0 crate instead of requiring
   a sibling source checkout. The minimum supported Rust version is 1.88 so the
@@ -79,65 +199,6 @@ and this project uses [Semantic Versioning](https://semver.org/).
   (~8000 ppm on Orbitrap data) instead of a real measurement error, which
   broke target/decoy comparability for downstream rescorers.
 
-### Added
-- **Native Thermo Fisher `.raw` input** behind the opt-in `thermo` cargo
-  feature (`cargo build -p koth_ff --features thermo`). Wraps Thermo's
-  `RawFileReader` via a self-hosted .NET 8 runtime (required at build and run
-  time; auto-detects `DOTNET_ROOT` under `~/.dotnet`, `/usr/share/dotnet`, …),
-  so a `.raw` file can be fed to `koth_ff` directly with no mzML conversion.
-  Off by default; `.raw` scans are read as MS1 centroids, matching the mzML
-  path. A default (non-`thermo`) build gives a clear "rebuild with
-  `--features thermo`" error for `.raw` input.
-- **ID-free isotope-consistency m/z recalibration** (`[file] mz_recalibration`,
-  default off; CLI `--recalibrate`). A pass-1 feature detection collects the
-  signed ppm deviation of every adjacent isotope-hill spacing from its
-  theoretical `neutron_mass / z` step and bins the residuals over (m/z, RT).
-  Pass 2 shifts the *expected* isotope position during chain extension by the
-  learned per-region median offset (hierarchical fallback: cell → m/z-marginal
-  → global), so isotope hills are searched at their recalibrated location.
-  Corrects the proportional, m/z-/RT-dependent mass-error component (dominant
-  Orbitrap mode) without IDs or a lock mass; a constant Da offset stays
-  unobservable by design. Deterministic (robust medians, fixed binning),
-  skipped in decoy mode, and costs one extra cheap feature-assembly pass over
-  the same hills. Tunable via `mz_recalibration_mz_bins` (20),
-  `mz_recalibration_rt_bins` (8), `mz_recalibration_min_samples` (50).
-  Inspired by Biosaur's per-isotope "smart" calibration and AlphaPept's
-  multi-dimensional recalibration, adapted to koth_ff's ID-free feature stage.
-  Benchmarked as a no-op on its own — well-calibrated instruments have little
-  proportional error left to correct — but it is the scaffolding for the
-  region-adaptive tolerance below, which *is* a win and is now applied together
-  with it.
-- **Region-adaptive isotope-match tolerance** — enabled automatically whenever
-  `[file] mz_recalibration` is on (the former separate
-  `mz_recalibration_adaptive_tol` flag and the `--adaptive-tol` / `--kish` CLI
-  flags have been removed; see *Removed / renamed*). Replaces the fixed
-  isotope-match ppm window with
-  `clamp(tol_sigma_mult × σ(m/z, RT), tol_floor_ppm, mz_tolerance)`, where σ
-  comes from the recalibration surface's per-region residual spread —
-  tightening the search where the instrument is precise (rejecting false
-  isotope matches) and relaxing it, up to the configured ceiling, where it
-  isn't. **Validated on both benchmark platforms and shipped in
-  `benchmark/config/koth_ff.toml` and `koth_ff_bruker.toml`:** on PXD003881
-  (20-run Orbitrap cohort) it drops features −5.8% (spurious matches at the
-  over-wide fixed 8 ppm window) at flat PSM recall, while median CV improves
-  23.76→23.25%, MV 0.615→0.568%, CV@q≤0.05 20.64→20.47%, +70 complete-quant
-  features @q≤0.05; on the 18-run timsTOF 15-min cohort (fixed 15 ppm vs a
-  learned real spread of σ≈2.8 ppm) it improves PSM recall +1.06 pp
-  (79.34→80.40%) *and* quant (median CV 13.89→13.76%, MV 3.12→3.08%,
-  CV@q≤0.05 11.74→11.69%, +285 complete-quant features), with −0.2% features.
-  No regression found on either platform or metric. Tunable via
-  `mz_recalibration_tol_sigma_mult` (3.0) and `mz_recalibration_tol_floor_ppm`
-  (1.0).
-- `[lfq] rt_spread_scoring` (default `false`, experimental) — replaces the raw
-  RT-closeness term with a σ-normalised Gaussian likelihood using the per-run
-  post-warp RT-residual spread (region-aware RT scoring).
-- New per-cell columns in `lfq_details.tsv`: `spectral_bhattacharyya`,
-  `coelution`, `rt_score`, `int_score` — the individual hybrid components,
-  exposed for downstream rescoring.
-- `[lfq] decoy_mz_shift_da` and `[lfq] decoy_rt_shift_pct` config knobs that
-  control the decoy grid offsets (previously hard-coded to 11 Da/charge and
-  1 % of the RT span). Defaults preserve previous behaviour.
-
 ### Fixed
 - Non-deterministic MS2 hill IDs: `detect_ms2_hills_from_iter` collected hills
   in `HashMap` iteration order before numbering them, so identical input
@@ -191,61 +252,3 @@ and this project uses [Semantic Versioning](https://semver.org/).
   ignored; the default (0.1) is unchanged.
 - `koth-ff` PyO3 Python bindings (`koth_ff_py` crate) and the wheel-publish
   workflow. Use the `koth_ff` CLI instead.
-
-## [0.3.0] — 2026-09-08
-
-### Changed
-- **Benchmark operating point is now the default.** Every struct default (and
-  every serde `default = ...` fallback) now equals the value the published
-  benchmark configs set, so a run with no `--config` reproduces the paper's
-  operating point and `example_config*.toml` really do show the defaults.
-  Old → new:
-  - `[hills]`: `max_gap` 0 → 1; `lfc_weight` 0.5 → 0.3; `split_valley_ratio`
-    0.70 → 0.60; `split_sigma_mult` 4.0 → 5.0 (`split_height_frac` stays 0.10).
-  - `[features]`: `min_charge` 1 → 2; `max_charge` 7 → 6; `min_chain_cosine`
-    0.5 → 0.4; `min_isotope_score` 0.0 → 0.5; `min_isotope_step_ratio`
-    (née `right_max_decrease`) 0.05 → 0.01.
-  - `[file]`: `mz_recalibration` false → true (the `--recalibrate` flag is now
-    a no-op unless a config turned it off).
-  - `[lfq]`: `rt_window_pct` 0.02 → 0.01; `lone_coelution` 1.0 → 0.5;
-    `decoy_own_template` false → true; `detected_use_grid` false → true (see
-    below).
-  - `[lfq.consensus]`: `min_group_size` 1 → 2; `min_member_combined_score`
-    0.0 → 0.5 (now has a serde default, so it is no longer a required key);
-    `min_seed_combined_score` 0.0 → 0.75.
-  - `[alignment].rt_warp_kind` already defaulted to `"ransac"`; unchanged.
-  A TOML that pinned the previous values still parses and behaves as before;
-  only unset keys move.
-- **`[features].right_max_decrease` is renamed `min_isotope_step_ratio`.** The
-  semantics are unchanged: a heavier isotope must be at least this fraction of
-  its predecessor's intensity or the chain stops. The old key is accepted as a
-  serde alias, so existing configs keep working.
-- **`koth_align` now defaults to `detected_use_grid = true`**: every consensus
-  cell — detected and match-between-runs alike — is quantified by the same XIC
-  grid re-integration, so the whole matrix sits on one intensity scale. The old
-  default trusted the per-run feature's own intensity for detected cells, which
-  mixes scales (on timsTOF the feature integrates ion mobility while the 2-D
-  grid does not; replicate CV inflated ~38 → 13.7 %). All-grid quantification
-  is also a measured win on Orbitrap (PXD003881: gated matrix CV 14.27 →
-  12.31 %, ECOLI bias −0.067 → −0.020, HUMAN IQR 0.219 → 0.194; recall and
-  missingness unchanged). Under all-grid, `quant_estimator = "sum"` beats
-  `"apex"` on Orbitrap and ties it on timsTOF, so the shipped configs use
-  `"sum"` on both platforms and the per-platform `[lfq]` split is gone. Set
-  `detected_use_grid = false` only to reproduce older mixed-scale matrices.
-
-## [0.2.0] — 2026-09-03
-
-### Added
-- Multi-CV FAIMS support for MS1 feature detection. mzML and native Thermo
-  readers carry compensation voltage into independent, channel-local hill and
-  feature pipelines; the feature TSV and Parquet schemas expose a nullable
-  `FAIMS` column. Non-FAIMS inputs retain the existing single-channel detection
-  path.
-
-## [0.1.0] — 2026-04-07
-
-Initial release.
-
-### Added
-- `koth_ff` CLI for streaming hill detection, isotope-feature detection, and
-  averagine scoring on mzML files and Bruker timsTOF `.d` directories.

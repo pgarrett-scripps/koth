@@ -19,17 +19,21 @@ target/release/koth_ff --version
 target/release/koth_align --version
 ```
 
-Before the first public release, confirm the GitHub Actions matrix passes on
-Linux, macOS, and Windows. The release workflow will refuse a tag whose name is
-not exactly `v<version from Cargo.toml>`.
+Confirm the GitHub Actions matrix passes on Linux, macOS, and Windows. The
+release workflow will refuse a tag whose name is not exactly `v<version from
+Cargo.toml>`, and it only runs for a tag that has been **pushed** — a local tag
+publishes nothing (0.3.0 sat unpushed for three days).
 
 ## Manual gates
 
-- Decide the release version. The current `Unreleased` section contains breaking
-  configuration changes, so the existing `0.1.0` value must be reviewed before
-  tagging; `0.2.0` is the natural pre-1.0 SemVer choice.
-- Finish the paper-dependent behavior and configuration work. Update both example
-  TOMLs and `docs/CONFIGURATION.md` for every config change.
+- Decide the release version and set it in the workspace `Cargo.toml`. Pre-1.0,
+  a new config key or a changed default is a minor bump; the released line so far
+  is 0.1.0 (2026-08-18), 0.2.0 (2026-09-03), 0.3.0 (2026-09-08).
+- Update both example TOMLs and `docs/CONFIGURATION.md` for every config change.
+- Move every `## [Unreleased]` entry into the new dated version section. Entries
+  left there describe code that is already tagged and read as unreleased.
+- `git push origin master` **and** `git push origin vX.Y.Z`, then confirm the
+  release workflow ran and the GitHub release exists.
 - Resolve or explicitly accept the changelog warning that absolute QDA q-value
   calibration has not yet been independently validated.
 - Run the four ignored Bruker real-data integration tests with their fixtures.
@@ -37,8 +41,6 @@ not exactly `v<version from Cargo.toml>`.
   Thermo `.raw` fixture.
 - Confirm the tuned configs in the separate `koth-paper` repository still parse
   and reproduce the intended benchmark outputs.
-- Replace `## [Unreleased]` with a dated version section and add a fresh empty
-  `Unreleased` section.
 - Confirm the repository is public if the release is intended to be public, and
   configure branch protection so CI is required on `master`.
 - Decide whether to publish `koth_ff` to crates.io in addition to GitHub binaries.
