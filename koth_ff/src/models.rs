@@ -2,6 +2,37 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+/// Ion polarity: which way the charge-carrying adduct shifts m/z, and so which
+/// way to undo it when recovering a neutral mass.
+///
+/// Positive mode (protonation, `M + zH`) is the default and covers peptides.
+/// Nucleic acids are run in negative mode (deprotonation, `M − zH`), where
+/// subtracting the protons instead of adding them mis-masses every feature by
+/// `2·z·1.00728` Da — 8 Da on a 4-charged oligonucleotide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Polarity {
+    /// `M + zH`: neutral mass = `mz·z − z·proton`.
+    #[default]
+    Positive,
+    /// `M − zH`: neutral mass = `mz·z + z·proton`.
+    Negative,
+}
+
+/// Mass of a proton, in Da.
+pub const PROTON_MASS: f64 = 1.007_276_466_621;
+
+impl Polarity {
+    /// Neutral mass of an ion at `mz` carrying `charge` adducts of this polarity.
+    pub fn neutral_mass(&self, mz: f64, charge: u8) -> f64 {
+        let z = charge as f64;
+        match self {
+            Self::Positive => mz * z - z * PROTON_MASS,
+            Self::Negative => mz * z + z * PROTON_MASS,
+        }
+    }
+}
+
 /// A single centroided MS1 peak.
 #[derive(Debug, Clone, Copy)]
 pub struct Peak {
@@ -159,13 +190,12 @@ impl Feature {
         self.hills.first().and_then(|h| h.faims_cv)
     }
 
-    /// Neutral monoisotopic mass (mass = mz * z - z * proton_mass)
-    pub fn monoisotopic_neutral_mass(&self) -> Option<f64> {
+    /// Neutral monoisotopic mass, undoing `polarity`'s adduct (`mz·z ∓ z·proton`).
+    pub fn monoisotopic_neutral_mass(&self, polarity: Polarity) -> Option<f64> {
         if self.charge == 0 {
             return None;
         }
-        const PROTON_MASS: f64 = 1.007_276_466_621;
-        Some(self.monoisotopic_mz() * self.charge as f64 - self.charge as f64 * PROTON_MASS)
+        Some(polarity.neutral_mass(self.monoisotopic_mz(), self.charge))
     }
 
     pub fn rt_apex(&self) -> f64 {
@@ -302,8 +332,8 @@ impl ScoredFeature {
     }
 
     /// Corrected neutral monoisotopic mass.
-    pub fn monoisotopic_neutral_mass(&self) -> Option<f64> {
-        let base = self.feature.monoisotopic_neutral_mass()?;
+    pub fn monoisotopic_neutral_mass(&self, polarity: Polarity) -> Option<f64> {
+        let base = self.feature.monoisotopic_neutral_mass(polarity)?;
         const C13_NEUTRON: f64 = 1.003_354_835;
         Some(base - self.neutron_offset as f64 * C13_NEUTRON)
     }

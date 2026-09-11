@@ -10,6 +10,67 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [0.4.0] — 2026-09-11
+
+### Added
+- **Non-peptide isotope models.** `[features] isotope_model` selects which
+  analyte class's average composition the theoretical isotope pattern is built
+  from: `"peptide"` (the default, Senko's averagine, and the only model the
+  published benchmark exercises), `"rna"`, `"dna"`, or an explicit table
+  (`{ residue_mass = 321.2916, c = 9.5, h = 11.75, n = 3.75, o = 7.0 }`). The
+  nucleic-acid models are unweighted means of the four chain residues
+  (a nucleoside monophosphate less one water): RNA C₉.₅H₁₁.₇₅N₃.₇₅O₇ per
+  321.2916 Da, DNA C₉.₇₅H₁₂.₂₅N₃.₇₅O₆ per 308.8006 Da. Phosphorus is carried in
+  the residue mass and nowhere else — ³¹P is the only stable phosphorus isotope,
+  so it cannot shift a pattern, and excluding it from the convolution is exact
+  rather than an approximation. Hill detection and chain assembly never assumed
+  an analyte class; scoring was the only place one was hard-coded.
+  `koth_align` takes the same key in `[lfq]`, and it must match the model the
+  per-run features were detected with.
+
+  A model without sulfur ignores `sulfur_offsets` entirely: varying an atom the
+  analyte does not contain would hand every candidate, decoys included, a free
+  maximum over templates.
+
+  Measured on a PXD075396 RNase digest of *E. coli* rRNA (negative mode, 9601
+  MS1 scans), RNA model vs peptide model: 15,578 vs 14,510 features, mean
+  isotope score 0.848 vs 0.821, share scoring ≥ 0.90 up from 33.8 % to 42.9 %
+  (on features with ≥ 4 isotopes, 0.926 vs 0.892).
+- **`[file] polarity`** — `"positive"` (default, `M + zH`) or `"negative"`
+  (`M − zH`). Nucleic acids are acquired in negative mode, where the previous
+  fixed positive-mode arithmetic mis-massed every feature by 2·z·1.00728 Da, or
+  8 Da at charge 4 — enough to defeat any downstream identification. koth does
+  not read the polarity out of the file; set it alongside `isotope_model`.
+
+### Fixed
+- **The element cache clamped oxygen and nitrogen at 100 atoms**, sized for
+  tryptic peptides. Oligonucleotides are oxygen-rich (7 O per 321 Da residue
+  against a peptide's 1.48 per 111 Da), so a 5 kDa RNA needs 109 O and a 9 kDa
+  one 196, and every count above the cap was silently scored against a truncated
+  composition — a wrong isotope pattern, not a slow one. `MAX_O` is now 320 and
+  `MAX_N` 220; the tables cost 80 bytes per count.
+
+  This also reaches heavy peptides. On PXD003881 run B03_02, 3 of 135,085
+  features change `isotope_score` (all at neutral mass ≥ 7.9 kDa, needing
+  105–110 O): 0.7073 → 0.6998, 0.5729 → 0.5684, 0.5721 → 0.5684. No feature is
+  gained or lost, hills are byte-identical, and every other feature row is
+  unchanged. The published 0.3.0 numbers are unaffected — they were produced by
+  the 0.3.0 binaries — and a re-run at 0.4.0 would move them by nothing
+  measurable.
+
+### Changed
+- **Library API (breaking).** `run_scoring`, `scoring::score_features`,
+  `write_features_tsv` and `write_features_parquet` take the ion polarity, and
+  `Feature::monoisotopic_neutral_mass` / `ScoredFeature::monoisotopic_neutral_mass`
+  take a `Polarity` rather than assuming protonation. There is deliberately no
+  polarity-free overload: a silent positive-mode default is the bug this release
+  fixes. The isotope model travels in the config structs, so the CLI is
+  unaffected except for the two new keys.
+- `scoring::averagine`'s mass-to-composition helpers moved onto the new
+  `scoring::model::IsotopeModel` (`counts`, `distribution`,
+  `distribution_with_sulfur`, `sulfur_ceil`); `lookup_template` is gone.
+  `resolve_sulfur_counts` and `bhattacharyya_score_best_sulfur` take the model.
+
 ## [0.3.0] — 2026-09-08
 
 ### Changed

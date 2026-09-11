@@ -16,7 +16,7 @@ use koth_ff::config::KothConfig;
 use koth_ff::output::{write_features_tsv, write_hills_tsv};
 use koth_ff::{
     run_features, run_hills_streaming, run_pipeline, run_pipeline_with_ms2, run_scoring,
-    PipelineOptions,
+    PipelineOptions, Polarity,
 };
 
 fn fixture() -> PathBuf {
@@ -41,7 +41,7 @@ fn features_tsv(features: &[koth_ff::ScoredFeature]) -> String {
         std::process::id(),
         rand_tag()
     ));
-    write_features_tsv(features, &p).expect("write features tsv");
+    write_features_tsv(features, &p, Polarity::Positive).expect("write features tsv");
     let s = std::fs::read_to_string(&p).expect("read features tsv");
     let _ = std::fs::remove_file(&p);
     s
@@ -66,7 +66,12 @@ fn run_pipeline_matches_binary_staged_path() {
     // (a) The exact staged sequence main.rs runs.
     let hills = run_hills_streaming(&path, &config.hills, &config.file).expect("hills");
     let features = run_features(&hills, &config.features, &config.file).expect("features");
-    let scored = run_scoring(&features, &config.scoring, &config.features);
+    let scored = run_scoring(
+        &features,
+        &config.scoring,
+        &config.features,
+        config.file.polarity,
+    );
 
     // (b) The in-process API.
     let out = run_pipeline(&path, &config, &PipelineOptions::default()).expect("pipeline");

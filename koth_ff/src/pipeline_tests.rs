@@ -12,6 +12,7 @@
 //! have written.
 
 use super::*;
+use crate::models::Polarity;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -194,7 +195,7 @@ fn hills_tsv(hills: &[Hill]) -> String {
 /// Serialize scored features through the real TSV writer and return contents.
 fn features_tsv(features: &[ScoredFeature]) -> String {
     let p = tmp_path("features");
-    write_features_tsv(features, &p).expect("write features tsv");
+    write_features_tsv(features, &p, Polarity::Positive).expect("write features tsv");
     let s = std::fs::read_to_string(&p).expect("read features tsv");
     let _ = std::fs::remove_file(&p);
     s
@@ -260,7 +261,8 @@ fn feature_readers_round_trip_faims() {
     assert!(!output.features.is_empty());
 
     let tsv_path = tmp_path_with_extension("faims_features", "tsv");
-    write_features_tsv(&output.features, &tsv_path).expect("write features tsv");
+    write_features_tsv(&output.features, &tsv_path, Polarity::Positive)
+        .expect("write features tsv");
     let tsv_features = read_features_tsv(&tsv_path).expect("read features tsv");
     let _ = std::fs::remove_file(&tsv_path);
     assert!(!tsv_features.is_empty());
@@ -269,7 +271,8 @@ fn feature_readers_round_trip_faims() {
         .all(|feature| feature.feature.faims_cv() == Some(-65.0)));
 
     let parquet_path = tmp_path_with_extension("faims_features", "parquet");
-    write_features_parquet(&output.features, &parquet_path).expect("write features parquet");
+    write_features_parquet(&output.features, &parquet_path, Polarity::Positive)
+        .expect("write features parquet");
     let parquet_features = read_features_parquet(&parquet_path).expect("read features parquet");
     let _ = std::fs::remove_file(&parquet_path);
     assert!(!parquet_features.is_empty());
@@ -283,7 +286,12 @@ fn manual_staged(config: &KothConfig, spectra: &[Spectrum]) -> (Vec<Hill>, Vec<S
     let hills =
         crate::hills::detect_hills_from_iter(spectra.iter().cloned(), &config.hills, &config.file);
     let features = crate::run_features(&hills, &config.features, &config.file).expect("features");
-    let scored = crate::run_scoring(&features, &config.scoring, &config.features);
+    let scored = crate::run_scoring(
+        &features,
+        &config.scoring,
+        &config.features,
+        config.file.polarity,
+    );
     (hills, scored)
 }
 

@@ -8,7 +8,7 @@ pub use report::{build_features_report, build_hills_report, write_report, RunRep
 use std::path::Path;
 
 use crate::error::KothError;
-use crate::models::{Hill, ScoredFeature};
+use crate::models::{Hill, Polarity, ScoredFeature};
 
 /// Hill output columns, in emission order. Shared by the TSV header and the
 /// Parquet schema so the two backends can't drift apart. The Parquet element
@@ -223,7 +223,11 @@ fn write_hills_tsv_inner(
 /// Column order is biosaur2-compatible through `FAIMS`, followed by koth's
 /// scoring and diagnostic columns. List columns (elution_profile,
 /// isotope_profile, etc.) are JSON arrays.
-pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(), KothError> {
+pub fn write_features_tsv(
+    features: &[ScoredFeature],
+    path: &Path,
+    polarity: Polarity,
+) -> Result<(), KothError> {
     // Sort by intensitySum descending, exclude charge=0
     let mut scored: Vec<&ScoredFeature> =
         features.iter().filter(|f| f.feature.charge > 0).collect();
@@ -243,7 +247,7 @@ pub fn write_features_tsv(features: &[ScoredFeature], path: &Path) -> Result<(),
         let f = &sf.feature;
 
         let mass_calib = sf
-            .monoisotopic_neutral_mass()
+            .monoisotopic_neutral_mass(polarity)
             .map(|m| format!("{:.6}", m))
             .unwrap_or_default();
 
@@ -535,7 +539,11 @@ fn write_hills_parquet_inner(
 /// Write scored features to a Parquet file.
 ///
 /// Schema mirrors features.tsv; list columns are stored as JSON strings.
-pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result<(), KothError> {
+pub fn write_features_parquet(
+    features: &[ScoredFeature],
+    path: &Path,
+    polarity: Polarity,
+) -> Result<(), KothError> {
     use arrow::array::{ArrayRef, Float64Array, Int64Array, Int8Array, StringArray, UInt8Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -616,7 +624,7 @@ pub fn write_features_parquet(features: &[ScoredFeature], path: &Path) -> Result
 
     for sf in &scored {
         let f = &sf.feature;
-        mass_calib.push(sf.monoisotopic_neutral_mass());
+        mass_calib.push(sf.monoisotopic_neutral_mass(polarity));
         mz.push(sf.monoisotopic_mz());
         rt_apex.push(f.rt_apex());
         rt_start.push(f.rt_start());

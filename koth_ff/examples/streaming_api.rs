@@ -51,7 +51,7 @@ fn uno_style(path: &std::path::Path, config: &KothConfig) {
     }) {
         println!(
             "[uno]   most intense: mass {:?} z{} score {:.3}",
-            top.monoisotopic_neutral_mass(),
+            top.monoisotopic_neutral_mass(koth_ff::Polarity::Positive),
             top.feature.charge,
             top.combined_score
         );

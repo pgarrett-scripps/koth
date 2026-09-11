@@ -1,9 +1,11 @@
 pub mod averagine;
 pub mod elements;
+pub mod model;
 
 use crate::config::ScoringConfig;
-use crate::models::{Feature, ScoredFeature};
-use averagine::{bhattacharyya_score, lookup_template};
+use crate::models::{Feature, Polarity, ScoredFeature};
+use averagine::bhattacharyya_score;
+use model::IsotopeModel;
 
 /// Score features using averagine theoretical isotope patterns.
 ///
@@ -16,12 +18,14 @@ pub fn score_features(
     features: &[Feature],
     config: &ScoringConfig,
     sulfur_offsets: &[i8],
+    model: &IsotopeModel,
+    polarity: Polarity,
 ) -> Vec<ScoredFeature> {
     log::info!("Scoring {} features", features.len());
 
     let all_scored: Vec<ScoredFeature> = features
         .iter()
-        .map(|feature| score_one(feature, config, sulfur_offsets))
+        .map(|feature| score_one(feature, config, sulfur_offsets, model, polarity))
         .collect();
 
     if log::log_enabled!(log::Level::Debug) {
@@ -72,8 +76,14 @@ pub fn score_features(
     scored
 }
 
-fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_offsets: &[i8]) -> ScoredFeature {
-    let neutral_mass = match feature.monoisotopic_neutral_mass() {
+fn score_one(
+    feature: &Feature,
+    config: &ScoringConfig,
+    sulfur_offsets: &[i8],
+    model: &IsotopeModel,
+    polarity: Polarity,
+) -> ScoredFeature {
+    let neutral_mass = match feature.monoisotopic_neutral_mass(polarity) {
         Some(m) => m,
         None => {
             // Unknown charge — return unscored
@@ -88,7 +98,7 @@ fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_offsets: &[i8]) -
         }
     };
 
-    let template = lookup_template(neutral_mass);
+    let template = model.distribution(neutral_mass);
     let obs = feature.isotope_profile_apex();
     let k = obs.len().min(10);
 
@@ -100,7 +110,7 @@ fn score_one(feature: &Feature, config: &ScoringConfig, sulfur_offsets: &[i8]) -
         if sulfur_offsets.is_empty() {
             bhattacharyya_score(o, &template)
         } else {
-            averagine::bhattacharyya_score_best_sulfur(o, neutral_mass, sulfur_offsets).0
+            averagine::bhattacharyya_score_best_sulfur(o, neutral_mass, sulfur_offsets, model).0
         }
     };
 

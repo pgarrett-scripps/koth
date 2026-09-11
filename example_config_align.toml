@@ -121,6 +121,12 @@ decoy_own_template = true
 # target-like score.
 lone_coelution = 0.5
 
+# Which analyte class's average composition the LFQ isotope templates are built
+# from: "peptide" (default), "rna", "dna", or an explicit composition table.
+# Must match the `[features] isotope_model` the per-run features were detected
+# with, or consensus cells are scored against a pattern the detector never used.
+isotope_model = "peptide"
+
 # Decoy m/z shift in Da. The decoy grid is centred at
 #   decoy_mz = target_mz + decoy_mz_shift_da / charge.
 # Pick a value large enough to clear the target's isotope envelope and any
