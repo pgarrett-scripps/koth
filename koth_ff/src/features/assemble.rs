@@ -25,12 +25,12 @@ use rayon::prelude::*;
 
 use crate::config::{CosineAnchor, FeaturesConfig, FileConfig, ImToleranceType, ToleranceType};
 use crate::models::Hill;
+use crate::models::Polarity;
 use crate::scoring::averagine;
+use crate::scoring::model::IsotopeModel;
 
 use super::cosine::cosine_similarity;
 use super::recalibration::MzRecalModel;
-
-const PROTON_MASS: f64 = 1.007_276_466_621;
 
 /// Immutable per-detection context threaded through the chain-assembly
 /// functions (`resolve_exhaustive`, `build_charge_candidate`, `find_neighbors`).
@@ -122,8 +122,11 @@ pub(super) fn build_charge_candidate(
         // next theoretical isotope falls below the noise floor. The seed is
         // taken as monoisotopic — that is the assembler's contract, not a
         // provisional guess, so template[iso] indexes the chain directly.
-        let neutral_mass_seed_mono = seed_mz * charge as f64 - charge as f64 * PROTON_MASS;
-        let template = averagine::lookup_template(neutral_mass_seed_mono);
+        let neutral_mass_seed_mono = file.polarity.neutral_mass(seed_mz, charge);
+        let template = config
+            .isotope_model
+            .model()
+            .distribution(neutral_mass_seed_mono);
         let template_mono = template[0].max(1e-12);
         let seed_intensity = seed_hill.intensity_max;
 
@@ -260,6 +263,7 @@ fn rescore_chain(
     charge: u8,
     sorted_hills: &[&Hill],
     config: &FeaturesConfig,
+    polarity: Polarity,
 ) -> (f64, f64, f64) {
     if chain.len() < 2 {
         return (0.0, 0.0, 0.0);
@@ -270,7 +274,13 @@ fn rescore_chain(
         cos_sum += cosine_similarity(hills[k], hills[k + 1], config.min_scan_overlap);
     }
     let mean_cosine = cos_sum / (hills.len() - 1) as f64;
-    let isotope_score = score_chain(&hills, charge, &config.sulfur_offsets);
+    let isotope_score = score_chain(
+        &hills,
+        charge,
+        &config.sulfur_offsets,
+        &config.isotope_model.model(),
+        polarity,
+    );
     let composite = isotope_score * mean_cosine.max(0.0);
     (composite, mean_cosine, isotope_score)
 }
@@ -348,6 +358,7 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
 
     let sorted_hills = ctx.sorted_hills;
     let config = ctx.config;
+    let polarity = ctx.file.polarity;
 
     // Phase 1+2: over-complete hypothesis pool — one candidate per (seed, charge),
     // built by the SAME `build_charge_candidate` used throughout. Every
@@ -365,7 +376,7 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
             (config.min_charge..=config.max_charge).filter_map(move |charge| {
                 build_charge_candidate(ctx, seed_idx, charge).map(|c| {
                     let (composite, _mc, isotope_score) =
-                        rescore_chain(&c.hill_indices, c.charge, sorted_hills, config);
+                        rescore_chain(&c.hill_indices, c.charge, sorted_hills, config, polarity);
                     HeapItem {
                         chain: c.hill_indices,
                         charge: c.charge,
@@ -413,7 +424,7 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
             // hills) rather than re-queuing junk.
             let prefix: Vec<usize> = item.chain[..k].to_vec();
             let (composite, _mc, isotope_score) =
-                rescore_chain(&prefix, item.charge, sorted_hills, config);
+                rescore_chain(&prefix, item.charge, sorted_hills, config, polarity);
             if isotope_score >= config.exhaustive_min_isotope_score {
                 heap.push(HeapItem {
                     chain: prefix,
@@ -431,7 +442,13 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
     accepted
 }
 
-fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_offsets: &[i8]) -> f64 {
+fn score_chain(
+    chain_hills: &[&Hill],
+    charge: u8,
+    sulfur_offsets: &[i8],
+    model: &IsotopeModel,
+    polarity: Polarity,
+) -> f64 {
     if chain_hills.len() <= 1 || charge == 0 {
         return 0.0;
     }
@@ -439,7 +456,7 @@ fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_offsets: &[i8]) -> f64 
     let mut sorted: Vec<&Hill> = chain_hills.to_vec();
     sorted.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
 
-    let neutral_mass = sorted[0].mz * charge as f64 - charge as f64 * PROTON_MASS;
+    let neutral_mass = polarity.neutral_mass(sorted[0].mz, charge);
 
     let min_scan = sorted.iter().map(|h| h.scan_start).min().unwrap_or(0);
     let max_scan = sorted.iter().map(|h| h.scan_end).max().unwrap_or(0);
@@ -471,10 +488,10 @@ fn score_chain(chain_hills: &[&Hill], charge: u8, sulfur_offsets: &[i8]) -> f64 
     let k = obs.len().min(10);
 
     if sulfur_offsets.is_empty() {
-        let template = averagine::lookup_template(neutral_mass);
+        let template = model.distribution(neutral_mass);
         averagine::bhattacharyya_score(&obs[..k], &template)
     } else {
-        averagine::bhattacharyya_score_best_sulfur(&obs[..k], neutral_mass, sulfur_offsets).0
+        averagine::bhattacharyya_score_best_sulfur(&obs[..k], neutral_mass, sulfur_offsets, model).0
     }
 }
 

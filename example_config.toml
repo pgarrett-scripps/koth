@@ -10,6 +10,12 @@ mz_tolerance = 8.0
 # "ppm" or "da"
 mz_tolerance_type = "ppm"
 
+# Ion polarity of the acquisition, which sets how a neutral mass is recovered
+# from an observed m/z: "positive" (default, M + zH) or "negative" (M - zH).
+# Peptides run positive; nucleic acids run negative, and the wrong setting
+# shifts every reported massCalib by 2*z*1.00728 Da (8 Da at charge 4).
+polarity = "positive"
+
 # Ion mobility tolerance — used by both hill detection and feature finding
 im_tolerance = 0.05
 # "relative" (fraction of IM value) or "absolute" (1/K0 units)
@@ -183,6 +189,17 @@ smoothing_window = 1
 # Charge state range to consider
 min_charge = 2
 max_charge = 6
+
+# Which analyte class's average composition the theoretical isotope pattern is
+# built from: "peptide" (default, Senko's averagine — the only model the
+# published benchmark exercises), "rna", "dna", or an explicit table:
+#
+#   isotope_model = { residue_mass = 321.2916, c = 9.5, h = 11.75, n = 3.75, o = 7.0 }
+#
+# The nucleic-acid models are the mean of the four chain residues. A model
+# without sulfur ignores `sulfur_offsets` entirely. Set `[file] polarity` to
+# match — nucleic acids are acquired in negative mode.
+isotope_model = "peptide"
 
 # Per-extension threshold (CHROMATOGRAPHIC cosine, in scan/RT space) used
 # while building an isotope chain. A candidate hill's cosine vs the seed hill

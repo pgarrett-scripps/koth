@@ -209,7 +209,12 @@ fn main() -> anyhow::Result<()> {
     } else {
         log::info!("Scoring features...");
         let t = Instant::now();
-        let s = run_scoring(&features, &config.scoring, &config.features);
+        let s = run_scoring(
+            &features,
+            &config.scoring,
+            &config.features,
+            config.file.polarity,
+        );
         log::info!("[timing] scoring: {:.2?}", t.elapsed());
         s
     };
@@ -221,8 +226,10 @@ fn main() -> anyhow::Result<()> {
     let features_path = out_dir.join(format!("features.{features_ext}"));
     let t = Instant::now();
     match config.output.format {
-        OutputFormat::Tsv => write_features_tsv(&scored, &features_path),
-        OutputFormat::Parquet => write_features_parquet(&scored, &features_path),
+        OutputFormat::Tsv => write_features_tsv(&scored, &features_path, config.file.polarity),
+        OutputFormat::Parquet => {
+            write_features_parquet(&scored, &features_path, config.file.polarity)
+        }
     }
     .with_context(|| format!("Failed to write features to {}", features_path.display()))?;
     log::info!(

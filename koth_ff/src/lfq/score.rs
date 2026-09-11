@@ -270,7 +270,7 @@ mod spectral_tests {
     fn bhattacharyya_penalises_lone_monoisotope_decoy() {
         let grid = lone_mono_grid();
         let neutral_mass = 1500.0; // averagine predicts substantial M+1/M+2 here
-        let bc_template = crate::scoring::averagine::lookup_template(neutral_mass);
+        let bc_template = crate::scoring::model::PEPTIDE.distribution(neutral_mass);
         let theory = vec![0.5, 0.3, 0.2];
         let mut scores = ColumnScores::new(3);
         let mut col_totals = vec![0.0f32; 3];
@@ -343,7 +343,7 @@ mod spectral_tests {
     }
 
     fn integrate_grid(grid: &XicGrid, theory: &[f64], projection: bool) -> f64 {
-        let bc_template = crate::scoring::averagine::lookup_template(1500.0);
+        let bc_template = crate::scoring::model::PEPTIDE.distribution(1500.0);
         let mut cfg = LfqConfig::default();
         cfg.averagine_projection = projection;
         let mut scores = ColumnScores::new(3);

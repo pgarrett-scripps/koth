@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::models::Polarity;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToleranceType {
@@ -48,6 +50,17 @@ pub struct FileConfig {
     /// inside a kept run (morphological-close radius). Default 1.
     #[serde(default = "default_bruker_filter_max_internal_gap")]
     pub bruker_filter_max_internal_gap: usize,
+    /// Ion polarity of the acquisition, which sets how a neutral mass is
+    /// recovered from an observed m/z: `"positive"` (the default, `M + zH`) or
+    /// `"negative"` (`M − zH`).
+    ///
+    /// Peptides are acquired in positive mode. Nucleic acids are acquired in
+    /// negative mode, and getting this wrong shifts every reported `massCalib`
+    /// by `2·z·1.00728` Da, which is 8 Da on a 4-charged oligonucleotide — large
+    /// enough to defeat any downstream identification. koth does not read the
+    /// polarity out of the file; set it alongside `[features] isotope_model`.
+    #[serde(default)]
+    pub polarity: Polarity,
     /// Bruker vertical-IM filter: minimum run span (gap-inclusive) in scans
     /// for a column feature to survive. Default 5.
     #[serde(default = "default_bruker_filter_min_feature_length")]
@@ -211,6 +224,7 @@ impl Default for FileConfig {
             n_threads: None,
             bruker_filter_mz_half_width: default_bruker_filter_mz_half_width(),
             bruker_filter_max_internal_gap: default_bruker_filter_max_internal_gap(),
+            polarity: Polarity::default(),
             bruker_filter_min_feature_length: default_bruker_filter_min_feature_length(),
             bruker_filter_min_window_intensity: 0,
             bruker_filter_min_feature_intensity: 0,

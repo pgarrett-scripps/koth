@@ -18,7 +18,7 @@
 //! let spectra = koth_ff::read_spectra(input, &config.file).unwrap();
 //! let hills = run_hills(&spectra, &config.hills, &config.file);
 //! let features = run_features(&hills, &config.features, &config.file).unwrap();
-//! let scored = run_scoring(&features, &config.scoring, &config.features);
+//! let scored = run_scoring(&features, &config.scoring, &config.features, config.file.polarity);
 //! ```
 
 /// Crate version with the git commit it was built from, e.g. `0.1.0 (a1b2c3d4e5f6)`,
@@ -55,7 +55,7 @@ pub use pipeline::{
 
 // Re-export the core in-memory result types at the crate root so a downstream
 // crate (koth_tracer, uno) can name them without depending on the module layout.
-pub use models::{Feature, Hill, IsolationWindow, ScoredFeature, Spectrum};
+pub use models::{Feature, Hill, IsolationWindow, Polarity, ScoredFeature, Spectrum};
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -316,6 +316,7 @@ pub fn run_scoring(
     features: &[Feature],
     scoring_cfg: &ScoringConfig,
     features_cfg: &FeaturesConfig,
+    polarity: Polarity,
 ) -> Vec<ScoredFeature> {
     if has_multiple_faims_channels(features.iter().map(Feature::faims_cv)) {
         let mut groups: HashMap<Option<u32>, (Option<f32>, Vec<Feature>)> = HashMap::new();
@@ -339,19 +340,31 @@ pub fn run_scoring(
 
         let mut out = Vec::new();
         for (_cv, group) in groups {
-            out.extend(run_scoring_one_channel(&group, scoring_cfg, features_cfg));
+            out.extend(run_scoring_one_channel(
+                &group,
+                scoring_cfg,
+                features_cfg,
+                polarity,
+            ));
         }
         return out;
     }
-    run_scoring_one_channel(features, scoring_cfg, features_cfg)
+    run_scoring_one_channel(features, scoring_cfg, features_cfg, polarity)
 }
 
 fn run_scoring_one_channel(
     features: &[Feature],
     scoring_cfg: &ScoringConfig,
     features_cfg: &FeaturesConfig,
+    polarity: Polarity,
 ) -> Vec<ScoredFeature> {
-    let mut scored = scoring::score_features(features, scoring_cfg, &features_cfg.sulfur_offsets);
+    let mut scored = scoring::score_features(
+        features,
+        scoring_cfg,
+        &features_cfg.sulfur_offsets,
+        &features_cfg.isotope_model.model(),
+        polarity,
+    );
     let any_filter = features_cfg.min_isotope_score > 0.0
         || features_cfg.min_cosine_score > 0.0
         || features_cfg.min_combined_score > 0.0;

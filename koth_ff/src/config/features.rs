@@ -1,3 +1,4 @@
+use crate::scoring::model::IsotopeModelSpec;
 use serde::{Deserialize, Serialize};
 
 /// Resolved form of `FeaturesConfig::cosine_anchor` — which hill the
@@ -139,6 +140,24 @@ pub struct FeaturesConfig {
     /// isotope-score distribution alone.
     #[serde(default = "default_sulfur_offsets")]
     pub sulfur_offsets: Vec<i8>,
+    /// Which analyte class's average composition the theoretical isotope
+    /// pattern is built from.
+    ///
+    /// `"peptide"` (the default) is Senko's averagine and the only model the
+    /// published benchmark exercises. `"rna"` and `"dna"` are the means of the
+    /// four ribo- / deoxyribonucleotide chain residues. An explicit table
+    /// overrides both:
+    ///
+    /// ```toml
+    /// isotope_model = { residue_mass = 321.2916, c = 9.5, h = 11.75, n = 3.75, o = 7.0 }
+    /// ```
+    ///
+    /// `s` defaults to 0 and a model without sulfur ignores `sulfur_offsets`
+    /// entirely — varying a structurally absent atom would hand every candidate,
+    /// decoys included, a free maximum over templates. An unknown class name is
+    /// a config parse error, never a silent fallback to peptide.
+    #[serde(default)]
+    pub isotope_model: IsotopeModelSpec,
     /// Neutron (C13) mass in Da
     pub neutron_mass: f64,
     /// Drop features whose **isotope_score** (Bhattacharyya vs averagine) is
@@ -214,6 +233,7 @@ impl Default for FeaturesConfig {
             exhaustive_isotope_priority: false,
             cosine_anchor: default_cosine_anchor(),
             sulfur_offsets: default_sulfur_offsets(),
+            isotope_model: IsotopeModelSpec::default(),
             neutron_mass: 1.003_354_835,
             min_isotope_score: 0.5,
             min_cosine_score: 0.0,

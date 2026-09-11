@@ -212,7 +212,12 @@ fn drive_from_hills<S: PipelineSink>(
     // Stage 3: scoring (optional) — produced before we release the hills so the
     // ordering the writer would see is preserved.
     let scored: Vec<ScoredFeature> = if opts.scoring {
-        crate::run_scoring(&features, &config.scoring, &config.features)
+        crate::run_scoring(
+            &features,
+            &config.scoring,
+            &config.features,
+            config.file.polarity,
+        )
     } else {
         features.into_iter().map(wrap_unscored).collect()
     };

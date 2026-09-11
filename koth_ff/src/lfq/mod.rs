@@ -5,6 +5,7 @@ pub mod rescore;
 pub mod score;
 pub mod tdc;
 
+use crate::scoring::model::IsotopeModelSpec;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -168,6 +169,12 @@ pub struct LfqConfig {
     /// coordinate on QDA feature index 3.
     #[serde(default = "default_lone_coelution")]
     pub lone_coelution: f64,
+    /// Which analyte class's average composition the LFQ isotope templates are
+    /// built from. Mirrors `[features] isotope_model` and must match the model
+    /// the per-run features were detected with, or the consensus cells are
+    /// scored against a pattern the detector never used. Default `"peptide"`.
+    #[serde(default)]
+    pub isotope_model: IsotopeModelSpec,
 }
 
 fn default_min_spectral_bhattacharyya() -> f64 {
@@ -232,6 +239,7 @@ impl Default for LfqConfig {
             averagine_projection: false,
             decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),
+            isotope_model: IsotopeModelSpec::default(),
         }
     }
 }
@@ -745,9 +753,10 @@ pub fn quantify(
     // Full-length averagine Bhattacharyya templates, one per consensus feature.
     // Each depends only on `cf.neutral_mass`, so precompute here instead of
     // rebuilding inside every (run × feature × target/decoy) score_grid call.
+    let isotope_model = config.isotope_model.model();
     let bc_templates: Vec<_> = consensus
         .iter()
-        .map(|cf| crate::scoring::averagine::lookup_template(cf.neutral_mass))
+        .map(|cf| isotope_model.distribution(cf.neutral_mass))
         .collect();
 
     // (Audit A2) Decoy-specific averagine template + theoretical pattern, computed
@@ -759,11 +768,7 @@ pub fn quantify(
     let decoy_bc_templates: Vec<[f64; K_PATTERN]> = if config.decoy_own_template {
         consensus
             .iter()
-            .map(|cf| {
-                crate::scoring::averagine::lookup_template(
-                    cf.neutral_mass + config.decoy_mz_shift_da,
-                )
-            })
+            .map(|cf| isotope_model.distribution(cf.neutral_mass + config.decoy_mz_shift_da))
             .collect()
     } else {
         Vec::new()
@@ -776,9 +781,7 @@ pub fn quantify(
                 // same length as the target's `theoretical_pattern` so the grid's
                 // `n_rows` trimming/weighting behaves identically to the target.
                 let k = cf.theoretical_pattern.len().min(K_PATTERN);
-                let full = crate::scoring::averagine::lookup_template(
-                    cf.neutral_mass + config.decoy_mz_shift_da,
-                );
+                let full = isotope_model.distribution(cf.neutral_mass + config.decoy_mz_shift_da);
                 let sum: f64 = full[..k].iter().sum();
                 if sum > 0.0 {
                     full[..k].iter().map(|&x| x / sum).collect()

@@ -1,7 +1,9 @@
 //! Per-element isotopologue distribution cache.
 //!
-//! For each of the five "averagine" elements (C, H, N, O, S), pre-compute the
-//! exact isotopologue distribution for atom counts `0..=MAX`. At lookup time,
+//! For each of the five pattern-bearing elements (C, H, N, O, S), pre-compute
+//! the exact isotopologue distribution for atom counts `0..=MAX`. Phosphorus is
+//! absent on purpose: ³¹P is the only stable phosphorus isotope, so it cannot
+//! shift a pattern — see [`super::model`]. At lookup time,
 //! we convolve the five cached distributions for a given `(n_C, n_H, n_N,
 //! n_O, n_S)` to get the molecule's isotope pattern.
 //!
@@ -24,8 +26,15 @@ pub const K_PATTERN: usize = 10;
 /// with room for cysteine-rich edge cases (high S count).
 const MAX_C: usize = 300;
 const MAX_H: usize = 500;
-const MAX_N: usize = 100;
-const MAX_O: usize = 100;
+/// 220 covers a 9 kDa oligonucleotide (RNA averagine: ~105 N at that mass) as
+/// well as any peptide in range.
+const MAX_N: usize = 220;
+/// Oligonucleotides are oxygen-rich — the RNA averagine carries 7 O per 321 Da
+/// residue against a peptide's 1.48 per 111 Da — so a 5 kDa RNA needs 109 O and
+/// a 9 kDa one 196. At the former cap of 100 those clamped silently, which is a
+/// wrong isotope pattern rather than a slow one. The tables cost 80 bytes per
+/// count, so the headroom is free.
+const MAX_O: usize = 320;
 /// 20 covers everything biological — even a peptide of pure cysteines on a
 /// 5000 Da chain is ~50 C and 50 S; the 20-S cap is the highest reasonable
 /// bound we'd ever need for tryptic peptides. Clamped above this.
