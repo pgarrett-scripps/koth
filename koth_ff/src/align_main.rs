@@ -123,6 +123,13 @@ fn main() -> anyhow::Result<()> {
     // ── Alignment ─────────────────────────────────────────────────────────────
     log::info!("Running alignment...");
     let t = Instant::now();
+    if let Some(name) = &config.alignment.reference_run {
+        anyhow::ensure!(
+            runs.iter().any(|r| &r.name == name),
+            "Unknown reference run: {}",
+            name
+        );
+    }
     let alignment = align_runs(&runs, &config.alignment);
     let alignment_elapsed = t.elapsed();
     log::info!(
@@ -173,6 +180,18 @@ fn main() -> anyhow::Result<()> {
             "Parquet output for the intensity matrix is not yet implemented; \
              wrote TSV instead."
         );
+    }
+
+    if config.output.export_long {
+        let feature_paths: Vec<_> = run_paths.iter().map(|p| p.features_path.clone()).collect();
+        koth_ff::output::long_matrix::write_bundle(
+            &matrix,
+            &runs,
+            &alignment,
+            &feature_paths,
+            &config,
+            &out_dir,
+        )?;
     }
 
     let t = Instant::now();

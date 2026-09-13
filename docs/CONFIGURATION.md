@@ -303,6 +303,7 @@ Anchor matching is coordinate-only (charge + ppm + RT window, no peptide ID), so
 
 | Key | Type | Default | What it does / what to set |
 |---|---|---|---|
+| `reference_run` | optional string | unset | Exact run-directory name for a fixed reference. Unknown names are rejected; omission keeps automatic selection. |
 | `anchor_mass_ppm` | f64 | `10.0` | ppm tolerance for forming an anchor pair (run feature ↔ reference feature). `10.0` both. Widen only for poorer mass accuracy. |
 | `rt_anchor_window` | f64 | `0.05` | Normalised RT half-window `[0,1]` for candidate anchors (±5% ≈ ±6 min on a 2 hr gradient). `0.05` both. |
 | `im_tolerance` | f64 | `0.05` | IM tolerance (1/K0) for anchors. Inert on Orbitrap; `0.05` both. |
@@ -324,7 +325,7 @@ and (if `run_tdc`) repeat with a decoy.
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
 | `mz_ppm` | f64 | `10.0` | ppm tolerance for hill lookup per isotopologue. `10.0` both. **Also reused by consensus grouping at 2× (20 ppm)** to absorb alignment drift. |
-| `rt_window_pct` | f64 | `0.01` | XIC grid half-window as a fraction of RT span. **`0.01` (±~1.2 min), halved from the pre-0.3.0 default of `0.02`:** the generous ±2.4 min window summed contaminant hills (+11.5% MBR bias, 2× scatter); `0.01` cuts bias to −2.1% and matrix CV 16.17→15.33 with no MV loss; `0.005` over-tightens (−24%). Also reused by consensus grouping at 2×. |
+| `rt_window_pct` | f64 | `0.01` | XIC grid half-window as a fraction of RT span. **`0.01` (±~1.2 min), halved from the pre-0.3.0 default of `0.02`:** the generous ±2.4 min window summed contaminant hills (+11.5% MBR bias, 2× scatter); `0.01` cuts bias to −2.1% and matrix CV 16.17→15.33 with no MV loss; `0.005` over-tightens (−24%). Consensus grouping has independent full-span limits in `[lfq.consensus]`. |
 | `im_tolerance` | f64 | `0.05` | IM tolerance (1/K0) for hill lookup. Inert on Orbitrap. Reused by consensus grouping at 1×. |
 | `n_isotopes` | usize | `3` | Grid isotope rows (1=M, 2=M+M1, 3=M+M1+M2). `3`. Clamped to ≥1. |
 | `grid_cols` | usize | `100` | RT bins per grid. `100`. Clamped to ≥1. More = finer RT at higher cost. |
@@ -355,12 +356,19 @@ gatable. Deterministic (no RNG). The simpler ranker in `lfq/tdc.rs` is retained
 as reference but not used by the pipeline.
 
 ### 4.3 `[lfq.consensus]` — cross-run grouping quality filters
-Tolerances are **not** here — grouping reuses `[lfq]`'s `mz_ppm`/`rt_window_pct`
-(at 2×) and `im_tolerance` (at 1×). Features are projected into reference space
-and single-linkage grouped by (charge, neutral mass, aligned RT, IM).
+Features are projected into reference space and grouped in deterministic quality
+order. Each complete group must fit the mass, RT and IM span limits below;
+missing IM cannot bridge incompatible measured IM values. These limits are
+independent of the LFQ extraction windows. Size and seed-quality filters apply
+after grouping, and each run's primary observation is selected by its own quality.
+Original alternatives remain available in the optional long bundle.
 
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
+| `mz_ppm` | f64 | `20.0` | Maximum full group mass span in ppm. Independent of `[lfq].mz_ppm`. |
+| `rt_window_pct` | f64 | `0.02` | Maximum full group RT span as a fraction of the reference gradient. |
+| `im_tolerance` | f64 | `0.05` | Maximum full group IM span. Missing values cannot bridge incompatible known values. |
+| `allow_replicated_weak_seeds` | bool | `false` | Experimental: retain groups supported by at least two distinct original runs below the seed floor. Member-quality and group-size limits still apply; duplicate alternatives in one run do not qualify. |
 | `min_member_combined_score` | f64 | `0.5` | Pre-grouping filter: a feature's `combined_score` must clear this to join/seed a group (else excluded, doesn't count toward `n_contributing_runs`). `0.0` keeps everything. |
 | `min_group_size` | usize | `2` | Min distinct runs that must detect a feature to keep the group. `2` (of 20) in the benchmark. `1` = keep single-run detections; raise for stricter reproducibility. |
 | `min_seed_combined_score` | f64 | `0.75` | Post-grouping filter: drop a group whose best member (seed) is below this. `0.0` keeps all groups. |
@@ -368,6 +376,7 @@ and single-linkage grouped by (charge, neutral mass, aligned RT, IM).
 ### 4.4 `[output]`
 | Key | Type | Default → shipped | What it does |
 |---|---|---|---|
+| `export_long` | bool | `false` | Write schema-versioned original feature observations, recomputed LFQ cells and a manifest with source/output hashes. See [long-matrix.md](long-matrix.md). |
 | `format` | enum | `"tsv"` → **`"parquet"`** | Matrix/consensus output format. `"parquet"` shipped. |
 | `max_qvalue` | f64 | `1.0` | Only write matrix entries with q ≤ this. **Required key** (no serde default). `1.0` = emit all, filter downstream. |
 | `export_decoys` | bool | `true` | Write `decoy_intensity_matrix`. No effect when `run_tdc=false`. `true`. |

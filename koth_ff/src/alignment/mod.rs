@@ -38,6 +38,8 @@ fn default_ransac_thresh() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AlignmentConfig {
+    /// Explicit reference run name; None selects the highest-quality run.
+    pub reference_run: Option<String>,
     /// PPM tolerance for finding anchor feature pairs
     pub anchor_mass_ppm: f64,
     /// Normalised RT window [0, 1] for anchor matching (e.g. 0.05 = ±5% of gradient)
@@ -66,6 +68,7 @@ pub struct AlignmentConfig {
 impl Default for AlignmentConfig {
     fn default() -> Self {
         Self {
+            reference_run: None,
             anchor_mass_ppm: 10.0,
             rt_anchor_window: 0.05,
             im_tolerance: 0.05,
@@ -306,7 +309,7 @@ pub struct AlignmentResult {
 /// The reference is the run with the most features whose `combined_score`
 /// \>= `config.min_anchor_combined_score`.
 pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResult {
-    let ref_idx = runs
+    let auto_ref_idx = runs
         .iter()
         .enumerate()
         .map(|(i, r)| {
@@ -321,6 +324,11 @@ pub fn align_runs(runs: &[RunInput], config: &AlignmentConfig) -> AlignmentResul
         .map(|(i, _)| i)
         .unwrap_or(0);
 
+    let ref_idx = config.reference_run.as_ref().map_or(auto_ref_idx, |name| {
+        runs.iter()
+            .position(|r| &r.name == name)
+            .expect("configured reference run must exist")
+    });
     let reference = &runs[ref_idx];
     let ref_rt_range = reference.rt_range();
 
