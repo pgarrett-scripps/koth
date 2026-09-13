@@ -413,6 +413,8 @@ pub struct LfqEntry {
 
 /// Final intensity matrix: features (rows) × runs (columns).
 pub struct IntensityMatrix {
+    /// Original consensus membership retained for long-format evidence export.
+    pub consensus: Vec<consensus::ConsensusFeature>,
     pub n_features: usize,
     pub n_runs: usize,
     pub run_names: Vec<String>,
@@ -695,6 +697,7 @@ fn assemble_matrix(
     }
 
     IntensityMatrix {
+        consensus: consensus.to_vec(),
         n_features,
         n_runs,
         run_names: runs.iter().map(|r| r.name.clone()).collect(),

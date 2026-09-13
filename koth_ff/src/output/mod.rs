@@ -1,4 +1,5 @@
 pub mod align_report;
+pub mod long_matrix;
 pub mod report;
 pub use align_report::{
     build_align_report, write_align_report, AlignReport, Timing as AlignTiming,

@@ -6,6 +6,8 @@ use super::OutputFormat;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AlignOutputConfig {
+    /// Export the versioned long-format observation and extraction bundle.
+    pub export_long: bool,
     /// "tsv" or "parquet"
     pub format: OutputFormat,
     /// Only write matrix entries with q-value ≤ this threshold (1.0 = keep all)
@@ -31,6 +33,7 @@ fn default_export_details() -> bool {
 impl Default for AlignOutputConfig {
     fn default() -> Self {
         Self {
+            export_long: false,
             format: OutputFormat::Tsv,
             max_qvalue: 1.0,
             export_decoys: default_export_decoys(),

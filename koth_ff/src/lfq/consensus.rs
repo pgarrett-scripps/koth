@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -6,12 +6,19 @@ use serde::{Deserialize, Serialize};
 use crate::alignment::{AlignmentResult, RunInput};
 use crate::lfq::LfqConfig;
 
+type GroupSpans = ((f64, f64), (f64, f64), Option<(f64, f64)>);
+
 /// Grouping quality filters for the multi-run consensus feature list.
-/// Tolerances (m/z ppm, RT window, IM) are shared with the LFQ config to avoid
-/// redundant settings — see `[lfq]` for those values.
+/// Grouping limits are independent of LFQ extraction windows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConsensusConfig {
+    /// Maximum full group mass span in ppm. Default 20 ppm.
+    pub mz_ppm: f64,
+    /// Maximum full group RT span as a fraction of the reference gradient.
+    pub rt_window_pct: f64,
+    /// Maximum full group IM span; missing IM never bridges incompatible values.
+    pub im_tolerance: f64,
     /// Pre-grouping filter: a feature's `combined_score` must clear this to
     /// be eligible as a group member or seed. Features below are excluded
     /// from the projection entirely (don't count toward `n_contributing_runs`).
@@ -27,6 +34,10 @@ pub struct ConsensusConfig {
     /// member) is below this. 0.0 = keep all groups. Default 0.75.
     #[serde(default = "default_min_seed_combined_score")]
     pub min_seed_combined_score: f64,
+    /// Experimental: retain bounded groups supported by >=2 original runs even
+    /// when no individual member clears the seed-quality floor. The member
+    /// quality floor and group-size requirement still apply. Default false.
+    pub allow_replicated_weak_seeds: bool,
 }
 
 fn default_min_member_combined_score() -> f64 {
@@ -44,9 +55,13 @@ fn default_min_seed_combined_score() -> f64 {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
+            mz_ppm: 20.0,
+            rt_window_pct: 0.02,
+            im_tolerance: 0.05,
             min_member_combined_score: default_min_member_combined_score(),
             min_group_size: default_min_group_size(),
             min_seed_combined_score: default_min_seed_combined_score(),
+            allow_replicated_weak_seeds: false,
         }
     }
 }
@@ -79,12 +94,20 @@ pub struct ConsensusFeature {
     /// `total_intensity()` directly for contributing runs, falling back to XIC
     /// re-integration only for runs that did not contribute (MBR transfer).
     pub per_run_feature: Vec<Option<u32>>,
+    /// Every original member, including alternatives to the primary per run.
+    pub members: Vec<(usize, u32)>,
+    /// Original feature index of the seed in its source run.
+    pub seed_feature_idx: u32,
 }
 
 /// Internal: one feature projected into reference-run coordinate space.
 /// `combined_score` is the seed-selection / filter axis (isotope × chromato cosine).
 struct ProjectedFeature {
     run_idx: usize,
+    /// Rank of the run name; independent of input run order.
+    run_rank: usize,
+    /// Stable tie-break from original scalar measurements.
+    measurement_key: u64,
     /// Index into `runs[run_idx].features`. Carried through grouping so each
     /// contributing run's feature intensity can be recovered downstream.
     feature_idx: u32,
@@ -103,26 +126,14 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize], n_runs: usize) ->
     for &i in group {
         let run_idx = projected[i].run_idx;
         let entry = best_per_run.entry(run_idx).or_insert(i);
-        if projected[i].combined_score > projected[*entry].combined_score {
+        if quality_order(&projected[i], &projected[*entry]).is_lt() {
             *entry = i;
         }
     }
 
-    // Sort the deduped members before selecting the seed: `best_per_run.values()`
-    // iterates a HashMap in nondeterministic order, and `max_by` returns the
-    // *last* maximum, so on a combined_score tie the seed (and hence the group's
-    // m/z / RT, which drive the downstream merge) would flip run-to-run. Sorting
-    // by projected index gives a stable, deterministic tie-break.
-    let mut deduped: Vec<usize> = best_per_run.values().copied().collect();
-    deduped.sort_unstable();
-    let seed_idx = *deduped
+    let seed_idx = *group
         .iter()
-        .max_by(|&&a, &&b| {
-            projected[a]
-                .combined_score
-                .partial_cmp(&projected[b].combined_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .min_by(|&&a, &&b| quality_order(&projected[a], &projected[b]))
         .unwrap();
     let seed = &projected[seed_idx];
 
@@ -141,18 +152,13 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize], n_runs: usize) ->
         neutral_mass: seed.neutral_mass,
         seed_combined_score: seed.combined_score,
         seed_run_idx: seed.run_idx,
-        n_contributing_runs: deduped.len(),
+        n_contributing_runs: best_per_run.len(),
         per_run_feature,
-    }
-}
-
-/// Apply post-grouping filters before emitting a group.
-#[inline]
-fn push_if_passes(cf: ConsensusFeature, config: &LfqConfig, out: &mut Vec<ConsensusFeature>) {
-    if cf.n_contributing_runs >= config.consensus.min_group_size
-        && cf.seed_combined_score >= config.consensus.min_seed_combined_score
-    {
-        out.push(cf);
+        members: group
+            .iter()
+            .map(|&i| (projected[i].run_idx, projected[i].feature_idx))
+            .collect(),
+        seed_feature_idx: seed.feature_idx,
     }
 }
 
@@ -172,11 +178,18 @@ pub fn build_consensus(
     let t_project = Instant::now();
     let mut projected: Vec<ProjectedFeature> = Vec::new();
 
+    let mut run_order: Vec<usize> = (0..runs.len()).collect();
+    run_order.sort_by_key(|&i| &runs[i].name);
+    let mut run_ranks = vec![0; runs.len()];
+    for (rank, &i) in run_order.iter().enumerate() {
+        run_ranks[i] = rank;
+    }
     for (run_idx, run) in runs.iter().enumerate() {
         let is_reference = run_idx == alignment.reference_idx;
 
         for (feat_idx, feat) in run.features.iter().enumerate() {
             if feat.feature.charge == 0
+                || !feat.combined_score.is_finite()
                 || feat.combined_score < config.consensus.min_member_combined_score
             {
                 continue;
@@ -200,8 +213,34 @@ pub fn build_consensus(
             let neutral_mass =
                 ref_mz * feat.feature.charge as f64 - feat.feature.charge as f64 * PROTON;
 
+            if ![ref_mz, ref_rt, ref_im, neutral_mass]
+                .iter()
+                .all(|x| x.is_finite())
+                || neutral_mass <= 0.0
+            {
+                continue;
+            }
+            use std::hash::{Hash, Hasher};
+            let mut key = std::collections::hash_map::DefaultHasher::new();
+            for x in [
+                feat.cosine_score,
+                feat.isotope_score,
+                feat.feature.ppm_error,
+                feat.feature.rt_start(),
+                feat.feature.rt_end(),
+                feat.feature.total_intensity(),
+            ] {
+                x.to_bits().hash(&mut key);
+            }
+            feat.neutron_offset.hash(&mut key);
+            feat.feature.n_scans_total().hash(&mut key);
+            for x in &feat.theoretical_pattern {
+                x.to_bits().hash(&mut key);
+            }
             projected.push(ProjectedFeature {
                 run_idx,
+                run_rank: run_ranks[run_idx],
+                measurement_key: key.finish(),
                 feature_idx: feat_idx as u32,
                 ref_mz,
                 ref_rt,
@@ -220,266 +259,145 @@ pub fn build_consensus(
         t_project.elapsed()
     );
 
-    // Sort: charge ASC, neutral_mass ASC, ref_im ASC, ref_rt ASC.
-    // Including IM before RT ensures features at the same mass but very different
-    // ion mobilities (different conformers, or noise) are separated in the list
-    // before the sweep runs, preventing an IM-mismatched feature from landing
-    // between two same-IM features and breaking the group.
-    let t_sort = Instant::now();
-    projected.sort_by(|a, b| {
-        a.charge
-            .cmp(&b.charge)
-            .then(a.neutral_mass.partial_cmp(&b.neutral_mass).unwrap())
-            .then(a.ref_im.partial_cmp(&b.ref_im).unwrap())
-            .then(a.ref_rt.partial_cmp(&b.ref_rt).unwrap())
-    });
-    log::info!("[timing] consensus sort: {:.2?}", t_sort.elapsed());
-
-    let mut consensus: Vec<ConsensusFeature> = Vec::new();
-
-    if projected.is_empty() {
-        return consensus;
-    }
-
-    // Convert the fractional RT window to absolute minutes using the reference
-    // run's gradient span, computed once before the sweep.
-    let ref_rt_range = runs[alignment.reference_idx].rt_range();
-    let rt_window_abs = config.rt_window_pct * (ref_rt_range.1 - ref_rt_range.0);
-
-    // Greedy single-linkage sweep: compare each feature against the first member
-    // (anchor) of the current group.  Comparing against the anchor rather than the
-    // last member prevents drift in group coordinates as members accumulate.
-    let t_sweep = Instant::now();
-    let mut group: Vec<usize> = vec![0];
-
-    for i in 1..projected.len() {
-        let anchor = &projected[group[0]];
-        let cur = &projected[i];
-
-        let same_charge = cur.charge == anchor.charge;
-
-        // Use 2× the LFQ extraction ppm for consensus grouping: alignment
-        // residual drift can scatter the same peptide's projected mass across
-        // >10 ppm, which would fragment one real group into many small ones.
-        let mass_ok = if anchor.neutral_mass > 0.0 {
-            (cur.neutral_mass - anchor.neutral_mass).abs() / anchor.neutral_mass * 1e6
-                <= config.mz_ppm * 2.0
-        } else {
-            (cur.neutral_mass - anchor.neutral_mass).abs() <= 0.02
-        };
-
-        let rt_ok = (cur.ref_rt - anchor.ref_rt).abs() <= rt_window_abs * 2.0;
-
-        let im_ok = anchor.ref_im == 0.0
-            || cur.ref_im == 0.0
-            || (cur.ref_im - anchor.ref_im).abs() <= config.im_tolerance;
-
-        if same_charge && mass_ok && rt_ok && im_ok {
-            group.push(i);
-        } else {
-            push_if_passes(
-                emit_group(&projected, &group, runs.len()),
-                config,
-                &mut consensus,
-            );
-            group.clear();
-            group.push(i);
-        }
-    }
-    push_if_passes(
-        emit_group(&projected, &group, runs.len()),
-        config,
-        &mut consensus,
-    );
+    let range = runs[alignment.reference_idx].rt_range();
+    let consensus = cluster_projected(&projected, &config.consensus, range.1 - range.0, runs.len());
     log::info!(
-        "[timing] consensus sweep ({} pre-merge groups): {:.2?}",
-        consensus.len(),
-        t_sweep.elapsed()
-    );
-
-    // Second pass: merge consensus groups whose seeds are within tolerance.
-    //
-    // The first sweep can fragment one real peptide into multiple groups when a
-    // run contributes features at the same mass but different retention times
-    // (e.g. RT=67 and RT=79 for the same peptide in the same run).  Those
-    // "wrong-RT" entries interleave in the sorted projected list and act as
-    // group separators, closing the current group prematurely.  The resulting
-    // sub-groups have seeds that are trivially close to each other.  A second
-    // sweep over the seeds merges them.
-    let t_merge = Instant::now();
-    consensus = merge_consensus(consensus, config, rt_window_abs);
-    log::info!(
-        "[timing] consensus merge_consensus ({} post-merge groups): {:.2?}",
-        consensus.len(),
-        t_merge.elapsed()
-    );
-
-    let n_multi_run = consensus
-        .iter()
-        .filter(|c| c.n_contributing_runs > 1)
-        .count();
-    log::info!(
-        "Consensus: {} groups from {} projected features ({} runs, {} cross-run)",
+        "Consensus: {} final groups from {} eligible / {} original features",
         consensus.len(),
         projected.len(),
-        runs.len(),
-        n_multi_run,
+        runs.iter().map(|r| r.features.len()).sum::<usize>()
     );
-
     consensus
 }
 
-/// Merge consensus groups whose seeds fall within the same mass/IM/RT window.
-///
-/// Groups are sorted by (charge, neutral_mass, ref_im, ref_rt) and a sliding
-/// mass window is walked over them. Within each window every pair of groups
-/// is tested with the 2× tolerances used in the projection sweep, and matching
-/// pairs are unioned in a disjoint-set structure. Each resulting cluster
-/// collapses to a single feature whose seed is the highest-scoring member;
-/// `n_contributing_runs` is summed across members (may overcount when a run
-/// appeared in multiple sub-groups, but this matches the previous behaviour).
-///
-/// The pairwise sweep (vs. the previous adjacent-only sweep) is what makes
-/// the merge transitive: it can rejoin sub-groups even when an unrelated
-/// group of similar mass interleaves between them in the sort.
-fn merge_consensus(
-    mut groups: Vec<ConsensusFeature>,
-    config: &LfqConfig,
-    rt_window_abs: f64,
-) -> Vec<ConsensusFeature> {
-    if groups.len() < 2 {
-        return groups;
-    }
+fn quality_order(a: &ProjectedFeature, b: &ProjectedFeature) -> std::cmp::Ordering {
+    b.combined_score
+        .total_cmp(&a.combined_score)
+        .then(a.charge.cmp(&b.charge))
+        .then(a.neutral_mass.total_cmp(&b.neutral_mass))
+        .then(a.ref_rt.total_cmp(&b.ref_rt))
+        .then(a.ref_im.total_cmp(&b.ref_im))
+        .then(a.run_rank.cmp(&b.run_rank))
+        .then(a.measurement_key.cmp(&b.measurement_key))
+        .then(a.feature_idx.cmp(&b.feature_idx))
+}
 
-    groups.sort_by(|a, b| {
-        a.charge
-            .cmp(&b.charge)
-            .then(a.neutral_mass.partial_cmp(&b.neutral_mass).unwrap())
-            .then(a.ref_im.partial_cmp(&b.ref_im).unwrap())
-            .then(a.ref_rt.partial_cmp(&b.ref_rt).unwrap())
-    });
-
-    let n = groups.len();
-    let ppm_tol = config.mz_ppm * 2.0;
-    let rt_tol = rt_window_abs * 2.0;
-    let im_tol = config.im_tolerance;
-
-    let mut parent: Vec<usize> = (0..n).collect();
-
-    fn find(parent: &mut [usize], mut a: usize) -> usize {
-        while parent[a] != a {
-            parent[a] = parent[parent[a]];
-            a = parent[a];
+struct Group {
+    members: Vec<usize>,
+    mass: (f64, f64),
+    rt: (f64, f64),
+    im: Option<(f64, f64)>,
+}
+impl Group {
+    fn new(i: usize, p: &ProjectedFeature) -> Self {
+        Self {
+            members: vec![i],
+            mass: (p.neutral_mass, p.neutral_mass),
+            rt: (p.ref_rt, p.ref_rt),
+            im: (p.ref_im != 0.0).then_some((p.ref_im, p.ref_im)),
         }
-        a
     }
-
-    // Sliding mass window: for each i, scan forward j>i while same charge and
-    // neutral_mass(j) - neutral_mass(i) within the ppm tolerance.
-    for i in 0..n {
-        let a_charge = groups[i].charge;
-        let a_mass = groups[i].neutral_mass;
-        let a_rt = groups[i].ref_rt;
-        let a_im = groups[i].ref_im;
-        let mass_high = if a_mass > 0.0 {
-            a_mass * (1.0 + ppm_tol / 1e6)
+    fn spans(&self, p: &ProjectedFeature) -> GroupSpans {
+        let mass = (
+            self.mass.0.min(p.neutral_mass),
+            self.mass.1.max(p.neutral_mass),
+        );
+        let rt = (self.rt.0.min(p.ref_rt), self.rt.1.max(p.ref_rt));
+        let im = if p.ref_im == 0.0 {
+            self.im
         } else {
-            a_mass + 0.02
+            Some(self.im.map_or((p.ref_im, p.ref_im), |(lo, hi)| {
+                (lo.min(p.ref_im), hi.max(p.ref_im))
+            }))
         };
-
-        for j in (i + 1)..n {
-            let b = &groups[j];
-            // charges are sorted ascending; once b.charge > a.charge no
-            // further candidate can match.
-            if b.charge != a_charge {
-                break;
-            }
-            if b.neutral_mass > mass_high {
-                break;
-            }
-
-            let rt_ok = (b.ref_rt - a_rt).abs() <= rt_tol;
-            if !rt_ok {
-                continue;
-            }
-
-            let im_ok = a_im == 0.0 || b.ref_im == 0.0 || (b.ref_im - a_im).abs() <= im_tol;
-            if !im_ok {
-                continue;
-            }
-
-            let pi = find(&mut parent, i);
-            let pj = find(&mut parent, j);
-            if pi != pj {
-                parent[pi] = pj;
-            }
-        }
+        (mass, rt, im)
     }
+}
 
-    // Bucket members by cluster root.
-    let mut cluster_members: HashMap<usize, Vec<usize>> = HashMap::new();
-    for i in 0..n {
-        let root = find(&mut parent, i);
-        cluster_members.entry(root).or_default().push(i);
-    }
-
-    // Collapse each cluster: best-scoring seed wins; per_run_feature is the
-    // union across cluster members (per-run, prefer the member whose feature
-    // has the highest combined_score — approximated by seed score of the
-    // group that owned that run-slot).
-    let mut merged: Vec<ConsensusFeature> = Vec::with_capacity(cluster_members.len());
-    for (_, members) in cluster_members {
-        if members.len() == 1 {
-            merged.push(groups[members[0]].clone());
-            continue;
-        }
-        let best = *members
-            .iter()
-            .max_by(|&&a, &&b| {
-                groups[a]
-                    .seed_combined_score
-                    .partial_cmp(&groups[b].seed_combined_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .unwrap();
-        let mut out = groups[best].clone();
-        // Union per_run_feature: for each run-slot that's None in `out`, take
-        // the first non-None entry from any other cluster member. Iterating
-        // members in score-descending order ensures we prefer higher-quality
-        // owner-groups when more than one member fills the same slot.
-        let mut order: Vec<usize> = members.clone();
-        order.sort_by(|&a, &b| {
-            groups[b]
-                .seed_combined_score
-                .partial_cmp(&groups[a].seed_combined_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for &k in &order {
-            if k == best {
-                continue;
-            }
-            let src = &groups[k].per_run_feature;
-            for (slot, dst) in out.per_run_feature.iter_mut().enumerate() {
-                if dst.is_none() {
-                    if let Some(v) = src.get(slot).and_then(|x| *x) {
-                        *dst = Some(v);
-                    }
+/// Quality-first clustering: every member must fit the full coordinate span.
+/// Fixed seed lookup uses positive mass bits (ordered like positive f64 values).
+fn cluster_projected(
+    projected: &[ProjectedFeature],
+    config: &ConsensusConfig,
+    rt_span: f64,
+    n_runs: usize,
+) -> Vec<ConsensusFeature> {
+    assert!(config.mz_ppm.is_finite() && config.mz_ppm >= 0.0);
+    assert!(config.rt_window_pct.is_finite() && config.rt_window_pct >= 0.0);
+    assert!(config.im_tolerance.is_finite() && config.im_tolerance >= 0.0);
+    let rt_tol = config.rt_window_pct * rt_span;
+    let ratio = 1.0 + config.mz_ppm / 1e6;
+    let mut order: Vec<usize> = (0..projected.len()).collect();
+    order.sort_by(|&a, &b| quality_order(&projected[a], &projected[b]));
+    let mut index: BTreeMap<(u8, u64), Vec<usize>> = BTreeMap::new();
+    let mut groups: Vec<Group> = Vec::new();
+    for i in order {
+        let p = &projected[i];
+        let lo = (p.neutral_mass / ratio).to_bits();
+        let hi = (p.neutral_mass * ratio).to_bits();
+        let mut best: Option<(f64, usize)> = None;
+        for ids in index
+            .range((p.charge, lo)..=(p.charge, hi))
+            .map(|(_, ids)| ids)
+        {
+            for &g in ids {
+                let (mass, rt, im) = groups[g].spans(p);
+                if (mass.1 - mass.0) / mass.0 * 1e6 > config.mz_ppm
+                    || rt.1 - rt.0 > rt_tol
+                    || im.is_some_and(|(lo, hi)| hi - lo > config.im_tolerance)
+                {
+                    continue;
+                }
+                let seed = &projected[groups[g].members[0]];
+                let residual = ((p.neutral_mass - seed.neutral_mass) / seed.neutral_mass * 1e6
+                    / config.mz_ppm.max(f64::EPSILON))
+                .powi(2)
+                    + ((p.ref_rt - seed.ref_rt) / rt_tol.max(f64::EPSILON)).powi(2)
+                    + if p.ref_im != 0.0 && seed.ref_im != 0.0 {
+                        ((p.ref_im - seed.ref_im) / config.im_tolerance.max(f64::EPSILON)).powi(2)
+                    } else {
+                        0.0
+                    };
+                if best.is_none_or(|(r, j)| residual < r || (residual == r && g < j)) {
+                    best = Some((residual, g));
                 }
             }
         }
-        out.n_contributing_runs = out.per_run_feature.iter().filter(|x| x.is_some()).count();
-        merged.push(out);
+        if let Some((_, g)) = best {
+            let (mass, rt, im) = groups[g].spans(p);
+            groups[g].mass = mass;
+            groups[g].rt = rt;
+            groups[g].im = im;
+            groups[g].members.push(i);
+        } else {
+            index
+                .entry((p.charge, p.neutral_mass.to_bits()))
+                .or_default()
+                .push(groups.len());
+            groups.push(Group::new(i, p));
+        }
     }
-
-    // Deterministic ordering for downstream consumers.
-    merged.sort_by(|a, b| {
+    log::info!(
+        "Consensus: {} complete groups before final size/seed filters",
+        groups.len()
+    );
+    let mut out: Vec<_> = groups
+        .iter()
+        .map(|g| emit_group(projected, &g.members, n_runs))
+        .filter(|g| {
+            g.n_contributing_runs >= config.min_group_size
+                && (g.seed_combined_score >= config.min_seed_combined_score
+                    || (config.allow_replicated_weak_seeds && g.n_contributing_runs >= 2))
+        })
+        .collect();
+    out.sort_by(|a, b| {
         a.charge
             .cmp(&b.charge)
-            .then(a.neutral_mass.partial_cmp(&b.neutral_mass).unwrap())
-            .then(a.ref_im.partial_cmp(&b.ref_im).unwrap())
-            .then(a.ref_rt.partial_cmp(&b.ref_rt).unwrap())
+            .then(a.neutral_mass.total_cmp(&b.neutral_mass))
+            .then(a.ref_im.total_cmp(&b.ref_im))
+            .then(a.ref_rt.total_cmp(&b.ref_rt))
     });
-    merged
+    out
 }
 
 #[cfg(test)]
@@ -494,6 +412,8 @@ mod tests {
     ) -> ProjectedFeature {
         ProjectedFeature {
             run_idx,
+            run_rank: run_idx,
+            measurement_key: 0,
             feature_idx,
             ref_mz,
             ref_rt: 10.0,
@@ -540,5 +460,119 @@ mod tests {
             );
             assert_eq!(cf.seed_run_idx, first.seed_run_idx);
         }
+    }
+    fn at(run: usize, id: u32, mass: f64, rt: f64, score: f64) -> ProjectedFeature {
+        let mut p = proj(run, id, score, mass / 2.0 + 1.007276466621);
+        p.neutral_mass = mass;
+        p.ref_rt = rt;
+        p
+    }
+    fn cfg(min_runs: usize) -> ConsensusConfig {
+        ConsensusConfig {
+            min_group_size: min_runs,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn interleaved_low_seed_keeps_its_valid_run_support() {
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.7),
+            at(0, 1, 1000.001, 40.0, 0.9),
+            at(1, 0, 1000.002, 10.0, 0.9),
+        ];
+        let g = cluster_projected(&p, &cfg(2), 100.0, 2);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].n_contributing_runs, 2);
+        assert_eq!(g[0].members.len(), 2);
+    }
+    #[test]
+    fn replicated_weak_seeds_can_survive_without_admitting_weak_singletons() {
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.7),
+            at(1, 0, 1000.002, 10.1, 0.6),
+            at(0, 1, 1100.0, 20.0, 0.7),
+            at(0, 2, 1100.001, 20.0, 0.6),
+        ];
+        assert!(cluster_projected(&p, &cfg(1), 100.0, 2).is_empty());
+        let mut config = cfg(1);
+        config.allow_replicated_weak_seeds = true;
+        let g = cluster_projected(&p, &config, 100.0, 2);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].n_contributing_runs, 2);
+        assert_eq!(g[0].seed_combined_score, 0.7);
+        config.min_group_size = 3;
+        assert!(cluster_projected(&p, &config, 100.0, 2).is_empty());
+    }
+    #[test]
+    fn default_floor_applies_after_interleaved_members_join() {
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.9),
+            at(0, 1, 1000.001, 40.0, 0.9),
+            at(1, 0, 1000.002, 10.0, 0.9),
+        ];
+        let g = cluster_projected(&p, &cfg(2), 100.0, 2);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].n_contributing_runs, 2);
+    }
+    #[test]
+    fn chain_cannot_exceed_mass_or_rt_span() {
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.99),
+            at(1, 0, 1000.015, 11.5, 0.9),
+            at(2, 0, 1000.030, 13.0, 0.9),
+        ];
+        let g = cluster_projected(&p, &cfg(1), 100.0, 3);
+        assert_eq!(g.len(), 2);
+        assert_eq!(g.iter().map(|g| g.members.len()).sum::<usize>(), 3);
+        for g in g {
+            assert!(g.members.len() <= 2);
+        }
+    }
+    #[test]
+    fn per_run_winner_uses_its_own_score_and_keeps_alternatives() {
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.99),
+            at(1, 10, 1000.001, 10.0, 0.51),
+            at(1, 20, 1000.002, 10.0, 0.90),
+        ];
+        let g = cluster_projected(&p, &cfg(2), 100.0, 2);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].per_run_feature[1], Some(20));
+        assert_eq!(g[0].members.len(), 3);
+        assert_eq!(g[0].n_contributing_runs, 2);
+    }
+    #[test]
+    fn missing_im_does_not_bridge_incompatible_conformers() {
+        let mut p = vec![
+            at(0, 0, 1000.0, 10.0, 0.99),
+            at(1, 0, 1000.0, 10.0, 0.95),
+            at(2, 0, 1000.0, 10.0, 0.9),
+        ];
+        p[0].ref_im = 1.0;
+        p[1].ref_im = 0.0;
+        p[2].ref_im = 1.2;
+        assert_eq!(cluster_projected(&p, &cfg(1), 100.0, 3).len(), 2);
+    }
+    #[test]
+    fn reordering_observations_and_run_indices_preserves_group_coordinates() {
+        let mut p = vec![
+            at(0, 0, 1000.0, 10.0, 0.9),
+            at(1, 0, 1000.015, 11.5, 0.9),
+            at(2, 0, 1000.03, 13.0, 0.9),
+        ];
+        let signature = |g: Vec<ConsensusFeature>| {
+            g.iter()
+                .map(|f| (f.neutral_mass, f.ref_rt, f.n_contributing_runs))
+                .collect::<Vec<_>>()
+        };
+        let expected = signature(cluster_projected(&p, &cfg(1), 100.0, 3));
+        p.reverse();
+        for x in &mut p {
+            x.run_idx = 2 - x.run_idx;
+        }
+        assert_eq!(
+            expected,
+            signature(cluster_projected(&p, &cfg(1), 100.0, 3))
+        );
     }
 }

@@ -54,6 +54,7 @@ arrow      = { workspace = true }
 parquet    = { workspace = true }
 rand       = { workspace = true }
 rustc-hash = "1"
+sha2 = "0.10"
 
 [features]
 default = ["tdf"]

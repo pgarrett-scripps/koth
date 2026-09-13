@@ -10,6 +10,36 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [0.5.0] — 2026-09-13
+
+### Added
+- Optional long LFQ bundle (`[output] export_long = true`) containing original
+  feature measurements, aligned coordinates, every original group member and
+  alternative, recomputed LFQ cells, and a versioned provenance manifest.
+  Original feature quality remains separate from extraction quality and q-values.
+- Independent full-span mass, RT and IM limits in `[lfq.consensus]`, plus an
+  optional fixed `[alignment] reference_run` for reproducible comparisons.
+- Default-off `allow_replicated_weak_seeds` retains bounded groups supported by
+  multiple original runs below the seed-quality floor. Other quality limits apply.
+
+### Fixed
+- Consensus grouping now uses deterministic quality order and bounded full-group
+  spans. Minimum size and seed-quality filters run after membership is complete.
+- Each run's primary observation is chosen by its own quality; alternatives are
+  preserved. Missing ion mobility cannot bridge incompatible measured values.
+- Long output reads original isotope counts and other feature descriptors from
+  source tables, preserving measurements lost in reconstructed alignment hills.
+- Synthetic extraction decoys have no original observation link or inherited
+  target q-value. Q-values are unavailable when target/decoy scoring is disabled.
+
+### Compatibility and validation
+- Per-run feature-finding defaults are unchanged. Consensus grouping behavior
+  changes, so LFQ matrices must be regenerated for version-matched comparisons.
+- Wide matrices remain supported; long export and weak-group retention are opt-in.
+- Extraction q-values assess extraction confidence, not peptide or protein
+  identity. Absolute QDA q-value calibration remains an explicitly accepted
+  limitation; no new absolute-calibration claim is made in this release.
+
 ## [0.4.0] — 2026-09-11
 
 ### Added

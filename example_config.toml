@@ -1,3 +1,4 @@
+# Cross-run LFQ settings and the optional long bundle are in example_config_align.toml.
 # koth_ff example configuration
 # All values shown are defaults. Uncomment and modify as needed.
 # Usage: koth_ff <input> --config example_config.toml
