@@ -8,8 +8,8 @@ sync with the config structs in `koth_ff/src/config/`, `koth_ff/src/lfq/`, and
 
 > **Ground truth:** every TOML is parsed with `#[serde(deny_unknown_fields)]` at
 > every level — a misspelled or stale key is a **hard load error**, not a silent
-> fallback. A build-time test parses the shipped configs against the structs, so
-> the field names here cannot drift from the code without breaking the build.
+> fallback. A build-time test parses the shipped config templates against the structs.
+> This prose reference is not build-checked and must be reviewed against the code.
 > Running either binary writes the fully-resolved config back out
 > (`config.toml` / `align_config.toml`) for reproducibility.
 
@@ -35,7 +35,7 @@ envelopes with charge and averagine/Bhattacharyya scores). Bruker `.d` input
 adds a front-end (`dnoise` vertical-IM filter + watershed centroider) before
 hill detection; on mzML those knobs are inert.
 
-### koth_align — cross-run alignment + LFQ + FDR
+### koth_align — cross-run alignment + LFQ + target-decoy ranking
 
 ```
 batch of koth_ff run dirs
@@ -48,7 +48,9 @@ batch of koth_ff run dirs
 
 Reads `koth_ff` output for N runs, corrects systematic RT/mass/IM offsets, and
 emits a feature × run intensity matrix with per-cell target-decoy q-values.
-Filter the matrix at e.g. `q ≤ 0.01` downstream for 1% FDR.
+Apply a quality gate downstream using these q-values. They are target-decoy
+ranking statistics; a gate of 0.01 does not establish a calibrated 1% false
+discovery rate for extracted peptide signals without independent validation.
 
 ### The two things you actually tune per platform
 
@@ -62,8 +64,7 @@ ppm timsTOF).
 
 ## 2. How configuration works
 
-- Pass a TOML with `--config`. Every key is optional **except** where noted
-  "required key"; omitted keys take the struct default. Because of
+- Pass a TOML with `--config`. Omitted keys take the struct default. Because of
   `deny_unknown_fields`, you cannot leave a stale key lying around.
 - A handful of CLI flags on `koth_ff` override the config for that run:
   `--no-scoring`, `--ms2`, `--recalibrate` (→ `[file].mz_recalibration`),
@@ -74,7 +75,7 @@ ppm timsTOF).
 - The canonical worked examples are the tuned configs `koth_ff.toml` /
   `koth_ff_bruker.toml` (feature finding, Orbitrap / timsTOF) and
   `koth_align.toml` / `koth_align_bruker.toml` (alignment+LFQ). They live in
-  `benchmark/config/` of the separate [koth-paper](https://github.com/tacular-omics/koth-paper) repository,
+  `analysis/config/` of the separate [koth-paper](https://github.com/tacular-omics/koth-paper) repository,
   alongside the benchmark that produced them. Prefer them over the templates
   when reproducing published results.
 
@@ -99,7 +100,7 @@ Tolerances here are shared by **both** the hills and features stages.
 | `mz_tolerance` | f64 | `8.0` | m/z match window for linking peaks into hills and isotopes. **The key platform value: 8.0 Orbitrap (Fusion OT is 2–5 ppm), 15.0 Bruker/timsTOF.** |
 | `mz_tolerance_type` | enum | `"ppm"` | `"ppm"` or `"da"`. `"ppm"` on both platforms. Region-adaptive isotope tolerance is only honored for ppm. |
 | `polarity` | enum | `"positive"` | `"positive"` (M + zH) or `"negative"` (M − zH) — how a neutral mass is recovered from an observed m/z. Peptides are positive; **nucleic acids are negative**, and the wrong setting shifts every reported `massCalib` by 2·z·1.00728 Da (8 Da at charge 4), enough to defeat any downstream identification. koth does not read polarity out of the file. Set it alongside `[features] isotope_model`. |
-| `im_tolerance` | f64 | `0.05` | Ion-mobility tolerance. `0.05` everywhere; inert on Orbitrap but the key is schema-required. |
+| `im_tolerance` | f64 | `0.05` → **`0.015` on timsTOF** | Hill-linking and isotope-chain IM half-window, interpreted by `im_tolerance_type`. Optional; inert without IM. This relative feature-finding tolerance is independent of the absolute LFQ window. |
 | `im_tolerance_type` | enum | `"relative"` | `"relative"` (fraction of IM value) or `"absolute"` (1/K0). `"relative"` on both. |
 | `global_min_mz` | f64 | `0.0` | Ignore peaks below this m/z. Left at default. |
 | `global_max_mz` | f64 | `inf` | Ignore peaks above this m/z. Left at default. |
@@ -335,12 +336,12 @@ and (if `run_tdc`) repeat with a decoy.
 | `decoy_mz_shift_da` | f64 | `11.0` | Decoy m/z = target + `shift/charge`; must clear any real isotopologue/adduct. `11.0`. Tunable null-model knob (not shipped explicitly). |
 | `decoy_rt_shift_pct` | f64 | `0.01` | Decoy RT = target RT − `shift × run_rt_span`. With the default extraction half-window of 0.005, the two RT windows meet at one boundary. A shift greater than twice the half-window fully separates the intervals. |
 | `decoy_own_template` | bool | `true` | Score the +`decoy_mz_shift_da` decoy against **its own** averagine template (from the shifted mass), not the target's. Correctness fix (audit A2); measured neutral on its own but paired with `lone_coelution`. Target scoring + reported intensities unchanged. `false` reproduces pre-0.3.0 q-values. |
-| `lone_coelution` | f64 | `0.5` | Co-elution value for a cell with <2 isotope rows carrying signal (a lone monoisotope — nothing to co-elute), applied identically to target and decoy. `1.0` (the pre-0.3.0 default) hands noise-grabbing lone-hill decoys a free target-like coordinate on the QDA co-elution feature; **`0.5` neutralises that freebie** — validated q-calibration win (audit A4: q-AUROC 0.934→0.938, +141 PSMs at q≤0.05, no quant cost). |
+| `lone_coelution` | f64 | `0.5` | Co-elution value for a cell with <2 isotope rows carrying signal (a lone monoisotope — nothing to co-elute), applied identically to target and decoy. `1.0` (the pre-0.3.0 default) hands noise-grabbing lone-hill decoys a free target-like coordinate on the QDA co-elution feature; **`0.5` neutralises that freebie** — historical ranking improvement (audit A4: q-AUROC 0.934→0.938, +141 PSMs at q≤0.05, no quant cost). |
 | `isotope_model` | enum or table | `"peptide"` | As `[features] isotope_model`, for the LFQ consensus templates. **Must match** the model the per-run features were detected with, or every cell is scored against a pattern the detector never used. |
 | `normalize` | String | `"none"` | Cross-run matrix normalisation. **`"none"` for the paper** (the benchmark normalises every tool identically downstream, so an in-binary median-of-ratios would double-normalise unfairly). `"median_ratios"` = DESeq/edgeR size factors — a **validated option for standalone use** where you consume the matrix directly. |
 | `quant_estimator` | String | `"sum"` (both platforms) | Per-cell estimator over the grid. Under all-grid quantification `"sum"` beats `"apex"` on Orbitrap (CV 12.31 vs 13.19 %, HUMAN IQR 0.194 vs 0.206) and the two are a wash on Bruker (CV 9.06 vs 9.19 %). The old "apex wrecks IQR 0.227→0.413" result was measured in the mixed detected-feature/grid regime and no longer applies. |
 | `detected_use_grid` | bool | `true` (both platforms; **code default flipped 2026-08-27**) | Quantify **every** cell (detected + MBR) by the same grid re-integration — one estimator, one scale. Essential on timsTOF (feature integrates IM, 2-D grid doesn't; mixed scales inflated CV 38→13.7%) and a validated win on Orbitrap too (gated CV 14.27→12.31 %, ECOLI bias −0.067→−0.020, HUMAN IQR 0.219→0.194). `false` only reproduces pre-2026-08-27 mixed-scale matrices. |
-| `rt_spread_scoring` | bool | `false` | Replace the raw RT term with a σ-normalised Gaussian likelihood using the per-run post-warp RT-residual spread (region-aware; strict where alignment is confident). Applied to target+decoy so TDC stays calibrated. **Validated but default-off**; omit unless experimenting. |
+| `rt_spread_scoring` | bool | `false` | Replace the raw RT term with a σ-normalised Gaussian likelihood using the per-run post-warp RT-residual spread (region-aware; strict where alignment is confident). Applied symmetrically to targets and decoys; this alone does not establish calibration. **Validated but default-off**; omit unless experimenting. |
 | `averagine_projection` | bool | `false` | Report the averagine matched-filter projection per cell instead of the raw box-sum (keeps on-pattern signal, rejects orthogonal contamination). **Tested negative on Orbitrap** (CV +3.1 pp, IQR +0.036, FFCR +1.9 pp, recall flat — see [§5](#5-experimental-knob-status-do-not-re-litigate)); untested on Bruker (its background-floor regime is where it might help). Byte-identical when off. **Keep `false`.** |
 
 *Removed keys that now error:* `spectral_cosine_min` (→ `min_spectral_bhattacharyya`),
@@ -377,8 +378,8 @@ Original alternatives remain available in the optional long bundle.
 | Key | Type | Default → shipped | What it does |
 |---|---|---|---|
 | `export_long` | bool | `false` | Write schema-versioned original feature observations, recomputed LFQ cells and a manifest with source/output hashes. See [long-matrix.md](long-matrix.md). |
-| `format` | enum | `"tsv"` → **`"parquet"`** | Matrix/consensus output format. `"parquet"` shipped. |
-| `max_qvalue` | f64 | `1.0` | Only write matrix entries with q ≤ this. **Required key** (no serde default). `1.0` = emit all, filter downstream. |
+| `format` | enum | `"tsv"` → **`"parquet"`** | Requested wide-output format. The benchmark sets `"parquet"`, but the current alignment writer warns and falls back to TSV. |
+| `max_qvalue` | f64 | `1.0` | Threshold for counting positive-intensity cells in `consensus_features.tsv` column `n_runs_detected`. Optional. Does not filter the intensity matrix; apply the quality gate downstream using `qvalue_matrix.tsv`. |
 | `export_decoys` | bool | `true` | Write `decoy_intensity_matrix`. No effect when `run_tdc=false`. `true`. |
 | `export_details` | bool | `true` | Write `lfq_details` (long-format: one row per feature×run×is_decoy, with scores/RT-diff/observed m/z+IM). `true`. |
 
@@ -413,6 +414,7 @@ Start from the shipped configs; the deltas are minimal.
 | Setting | Orbitrap (`koth_ff.toml` / `koth_align.toml`) | Bruker/timsTOF (`*_bruker.toml`) | Why |
 |---|---|---|---|
 | `[file].mz_tolerance` | `8.0` | `15.0` | timsTOF MS1 mass accuracy is looser |
+| `[file].im_tolerance` | `0.05` (inert) | `0.015` relative | Hill linking and isotope-chain assembly; separate from absolute LFQ IM tolerance |
 | `[file].n_threads` | unset | unset | all cores on both platforms; v0.1.0 ignored the key, current builds honor it |
 | `[file].bruker_*` front-end | inert (mzML) | active (`.d` filter + watershed) | Bruker raw-frame denoising |
 | `[lfq].quant_estimator` | `"sum"` | `"sum"` | identical since 2026-08-27 (sum-vs-apex is a wash under all-grid) |

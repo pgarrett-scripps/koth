@@ -367,7 +367,7 @@ fn write_consensus_tsv(
 }
 
 /// Write `intensity_matrix.tsv` — features × runs, all intensities unfiltered.
-/// Use `qvalue_matrix.tsv` to apply an FDR threshold downstream.
+/// Use `qvalue_matrix.tsv` to apply a quality gate downstream.
 fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<()> {
     write_cell_matrix(
         matrix,
@@ -386,8 +386,10 @@ fn write_matrix_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<
 }
 
 /// Write `qvalue_matrix.tsv` — same layout as intensity_matrix but cells are
-/// TDC q-values (1.0 = no signal / TDC not run, 0.0 = perfect score).
-/// Use this file to apply an FDR threshold to intensity_matrix.tsv downstream.
+/// TDC ranking q-values; cells without signal receive 1.0. All cells with
+/// signal are scored, including those supported by a per-run detection.
+/// Use this file to apply a quality gate to intensity_matrix.tsv downstream;
+/// the gate alone does not establish calibrated false discovery control.
 fn write_qvalue_matrix_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Result<()> {
     write_cell_matrix(
         matrix,

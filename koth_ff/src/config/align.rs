@@ -8,9 +8,11 @@ use super::OutputFormat;
 pub struct AlignOutputConfig {
     /// Export the versioned long-format observation and extraction bundle.
     pub export_long: bool,
-    /// "tsv" or "parquet"
+    /// Requested wide-output format; the alignment writer currently falls back
+    /// to TSV with a warning when Parquet is requested.
     pub format: OutputFormat,
-    /// Only write matrix entries with q-value ≤ this threshold (1.0 = keep all)
+    /// Quality threshold for n_runs_detected in consensus_features.tsv.
+    /// Does not filter the exported intensity matrix.
     pub max_qvalue: f64,
     /// Write `decoy_intensity_matrix.tsv` (target-decoy decoy LFQ values).
     /// Has no effect when `lfq.run_tdc = false`.
