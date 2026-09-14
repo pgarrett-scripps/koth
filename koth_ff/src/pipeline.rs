@@ -23,8 +23,9 @@
 //!
 //! The API therefore reflects the algorithm rather than pretending otherwise:
 //!
-//! 1. Spectra stream in one at a time during hill detection (peak memory is
-//!    `O(active hills)`, not `O(total peaks)` — the reader is already streaming).
+//! 1. With default settings, spectra arrive through bounded buffers during hill
+//!    detection. Native readers retain scan metadata; completed hills are kept.
+//!    See [`crate::run_hills_streaming`] for options that still collect spectra.
 //! 2. When detection completes, the sink receives the **whole finalized hill
 //!    set once**, by value ([`PipelineSink::on_hills`]).
 //! 3. Features are then assembled and handed to the sink **one at a time, by
@@ -236,9 +237,9 @@ fn drive_from_hills<S: PipelineSink>(
 /// Run the full pipeline from a file path, streaming results to `sink`.
 /// No output files are written.
 ///
-/// Hill detection routes exactly as the binary does (streaming mzML with a
-/// prefetch reader thread; batch-load for Bruker `.d` / Thermo `.raw`; decoy
-/// shuffle when `file.decoy_mode`), via [`crate::run_hills_streaming`].
+/// Hill detection routes through [`crate::run_hills_streaming`], using bounded
+/// MS1 spectrum buffers for mzML, Bruker `.d`, and Thermo `.raw`. Decoy shuffling
+/// and optional TIC normalization collect spectra before detection.
 pub fn run_pipeline_streaming<S: PipelineSink>(
     path: &Path,
     config: &KothConfig,

@@ -8,10 +8,10 @@
 ///   the vertical filter + horizontal halo + watershed in a single in-process
 ///   pass over the raw frames — the exact stage code the standalone `dnoise` tool
 ///   runs — with no denoised `.d` written to disk. Calibration comes from the
-///   context. This is the future default once re-validated on the Bruker cohort.
+///   context. The flag selects preprocessing; both modes stream into detection.
 ///
-/// Both paths then optionally apply the `bruker_noise_sigma` MAD filter, sort by
-/// retention time, and reassign sequential scan indices (`finalize`). All
+/// Both paths then optionally apply the `bruker_noise_sigma` MAD filter, emit in
+/// retention-time order, and assign sequential scan indices. All
 /// denoising / centroiding logic lives in the `dnoise` crate.
 #[cfg(feature = "tdf")]
 pub mod inner {
@@ -35,11 +35,154 @@ pub mod inner {
 
     const MAX_PEAKS: usize = 10_000;
 
+    /// Collect the streaming reader for callers that explicitly need all spectra.
     pub fn read_bruker(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
-        if file.bruker_streaming {
-            read_bruker_streaming(path, file)
-        } else {
-            read_bruker_local(path, file)
+        stream_bruker(path, file).collect()
+    }
+
+    /// Stream MS1 spectra in retention-time order with bounded parallel decoding.
+    /// Only frame metadata is indexed up front. Both preprocessing modes use
+    /// batches of at most 32 frames and a queue of at most 32 spectra.
+    /// Opening/decoding failures are yielded as errors; dropping the iterator
+    /// stops the producer and joins its thread.
+    pub fn stream_bruker(
+        path: &Path,
+        file: &FileConfig,
+    ) -> super::super::prefetch::Prefetch<Result<Spectrum, KothError>> {
+        let path = path.to_owned();
+        let file = file.clone();
+        super::super::prefetch::try_prefetch(
+            move |emit| {
+                if file.bruker_streaming {
+                    read_bruker_streaming(&path, &file, emit)
+                } else {
+                    read_bruker_local(&path, &file, emit)
+                }
+            },
+            MS1_BATCH_SIZE,
+        )
+    }
+
+    const MS1_BATCH_SIZE: usize = 32;
+
+    /// Sorting lightweight metadata preserves the old batch reader's stable RT
+    /// order even for files whose acquisition indices are not chronological.
+    fn ms1_indices(reader: &FrameReader) -> Result<Vec<usize>, KothError> {
+        let mut frames = Vec::new();
+        for i in 0..reader.len() {
+            let frame = reader
+                .get_frame_without_coordinates(i)
+                .map_err(|e| KothError::TdfError(e.to_string()))?;
+            if frame.ms_level == timsrust::MSLevel::MS1 {
+                if !frame.rt_in_seconds.is_finite() {
+                    return Err(KothError::TdfError(format!(
+                        "non-finite RT for frame {}",
+                        frame.index
+                    )));
+                }
+                frames.push((i, frame.rt_in_seconds));
+            }
+        }
+        frames.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        Ok(frames.into_iter().map(|(i, _)| i).collect())
+    }
+
+    /// An indexed Rayon map preserves order within each bounded batch. No later
+    /// batch is decoded until this one has been delivered to the consumer.
+    fn emit_batches<F>(
+        indices: &[usize],
+        process: F,
+        emit: &mut dyn FnMut(Spectrum) -> bool,
+    ) -> Result<(), KothError>
+    where
+        F: Fn(usize) -> Result<Spectrum, KothError> + Sync,
+    {
+        if indices.is_empty() {
+            return Err(KothError::NoSpectra);
+        }
+        for (batch_index, batch) in indices.chunks(MS1_BATCH_SIZE).enumerate() {
+            let spectra: Vec<_> = batch.par_iter().map(|&i| process(i)).collect();
+            for (offset, spectrum) in spectra.into_iter().enumerate() {
+                let mut spectrum = spectrum?;
+                spectrum.scan_index = batch_index * MS1_BATCH_SIZE + offset;
+                if !emit(spectrum) {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod streaming_tests {
+        use super::*;
+
+        fn spectrum(i: usize) -> Spectrum {
+            Spectrum {
+                scan_index: usize::MAX,
+                retention_time: i as f64,
+                peaks: Vec::new(),
+                ms_level: 1,
+                isolation_window: None,
+                faims_cv: None,
+            }
+        }
+
+        #[test]
+        fn ordered_batches_stop_decoding_when_consumer_stops() {
+            let processed = AtomicUsize::new(0);
+            let indices: Vec<_> = (0..1000).collect();
+            emit_batches(
+                &indices,
+                |i| {
+                    processed.fetch_add(1, AtomicOrdering::Relaxed);
+                    Ok(spectrum(i))
+                },
+                &mut |s| {
+                    assert_eq!(s.scan_index, 0);
+                    false
+                },
+            )
+            .unwrap();
+            assert_eq!(processed.load(AtomicOrdering::Relaxed), MS1_BATCH_SIZE);
+        }
+
+        #[test]
+        fn batch_boundaries_preserve_order_and_indices() {
+            let indices: Vec<_> = (0..MS1_BATCH_SIZE * 3 + 1).rev().collect();
+            let mut seen = Vec::new();
+            emit_batches(&indices, |i| Ok(spectrum(i)), &mut |s| {
+                assert_eq!(s.scan_index, seen.len());
+                seen.push(s.retention_time as usize);
+                true
+            })
+            .unwrap();
+            assert_eq!(seen, indices);
+        }
+
+        #[test]
+        fn decode_error_stops_delivery_and_empty_input_errors() {
+            let mut seen = Vec::new();
+            let result = emit_batches(
+                &[0, 1, 2],
+                |i| {
+                    if i == 1 {
+                        Err(KothError::TdfError("corrupt frame".into()))
+                    } else {
+                        Ok(spectrum(i))
+                    }
+                },
+                &mut |s| {
+                    seen.push(s.scan_index);
+                    true
+                },
+            );
+            assert!(matches!(result, Err(KothError::TdfError(_))));
+            assert_eq!(seen, vec![0]);
+            assert!(matches!(
+                emit_batches(&[], |i| Ok(spectrum(i)), &mut |_| true),
+                Err(KothError::NoSpectra)
+            ));
         }
     }
 
@@ -69,29 +212,16 @@ pub mod inner {
         }
     }
 
-    /// Sort spectra by retention time and reassign sequential scan indices. Shared
-    /// by both reader paths so the downstream hill detector sees a canonical order.
-    fn finalize(mut spectra: Vec<Spectrum>) -> Result<Vec<Spectrum>, KothError> {
-        if spectra.is_empty() {
-            return Err(KothError::NoSpectra);
-        }
-        spectra.sort_by(|a, b| {
-            a.retention_time
-                .partial_cmp(&b.retention_time)
-                .unwrap_or(Ordering::Equal)
-        });
-        for (i, s) in spectra.iter_mut().enumerate() {
-            s.scan_index = i;
-        }
-        Ok(spectra)
-    }
-
     /// In-process streaming path (opt-in via `bruker_streaming`): drive dnoise's
     /// [`RunContext`], which runs the vertical-IM filter + horizontal halo +
     /// watershed in a single pass over each raw MS1 frame — the exact stage code
     /// the standalone `dnoise` tool runs, with no denoised `.d` written to disk.
     /// Calibration comes straight from the context, so no timsrust converters here.
-    fn read_bruker_streaming(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
+    fn read_bruker_streaming(
+        path: &Path,
+        file: &FileConfig,
+        emit: &mut dyn FnMut(Spectrum) -> bool,
+    ) -> Result<(), KothError> {
         let filter_params = filter_params(file);
         let watershed_params = watershed_params(file);
         let halo_params = HaloParams {
@@ -121,10 +251,11 @@ pub mod inner {
         let cal = ctx.calibration();
         let noise_sigma = file.bruker_noise_sigma;
 
-        let spectra: Vec<Spectrum> = (0..ctx.len())
-            .into_par_iter()
-            .filter(|&i| ctx.is_ms1(i))
-            .map(|i| -> Result<Spectrum, KothError> {
+        let indices =
+            ms1_indices(&FrameReader::new(path).map_err(|e| KothError::TdfError(e.to_string()))?)?;
+        emit_batches(
+            &indices,
+            |i| {
                 let decoded = ctx
                     .process(i)
                     .map_err(|e| KothError::TdfError(e.to_string()))?;
@@ -151,21 +282,19 @@ pub mod inner {
                     noise::filter_spectrum(&mut spectrum, sigma);
                 }
                 Ok(spectrum)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        log::info!(
-            "Read {} MS1 spectra from Bruker .d (dnoise streaming)",
-            spectra.len()
-        );
-        finalize(spectra)
+            },
+            emit,
+        )
     }
 
     /// Historical local path (default): timsrust frame iteration + dnoise's
     /// vertical filter and watershed (no halo), matching the paper's validated
-    /// pipeline. Kept as the default until streaming is re-validated on the
-    /// Bruker cohort.
-    fn read_bruker_local(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
+    /// pipeline. Spectrum delivery is bounded in both preprocessing modes.
+    fn read_bruker_local(
+        path: &Path,
+        file: &FileConfig,
+        emit: &mut dyn FnMut(Spectrum) -> bool,
+    ) -> Result<(), KothError> {
         let path_str = path
             .to_str()
             .ok_or_else(|| KothError::UnsupportedFormat("non-UTF8 path".into()))?;
@@ -185,82 +314,72 @@ pub mod inner {
         let processed = AtomicUsize::new(0);
         const PROGRESS_INTERVAL: usize = 100;
 
-        let spectra: Vec<Spectrum> = frame_reader
-            .parallel_filter(|f| f.ms_level == timsrust::MSLevel::MS1)
-            .filter_map(|frame_result| match frame_result {
-                Ok(frame) => {
-                    let flat = FlatFrame::from_frame(&frame);
-                    let n_raw = flat.len();
-                    let keep = filter_iterated(&flat, &filter_params);
-                    let survivors = flat.survivors(&keep);
-                    let n_filtered = survivors.len();
+        let indices = ms1_indices(&frame_reader)?;
+        emit_batches(
+            &indices,
+            |i| {
+                let frame = frame_reader
+                    .get(i)
+                    .map_err(|e| KothError::TdfError(e.to_string()))?;
+                let flat = FlatFrame::from_frame(&frame);
+                let n_raw = flat.len();
+                let keep = filter_iterated(&flat, &filter_params);
+                let survivors = flat.survivors(&keep);
+                let n_filtered = survivors.len();
 
-                    let centroids = watershed_centroid(
-                        &survivors,
-                        &watershed_params,
-                        MAX_PEAKS,
-                    );
-                    let n_centroids = centroids.len();
+                let centroids = watershed_centroid(&survivors, &watershed_params, MAX_PEAKS);
+                let n_centroids = centroids.len();
 
-                    let mut out_peaks: Vec<Peak> = centroids
-                        .into_iter()
-                        .map(|(scan, tof, intensity)| Peak {
-                            mz: mz_converter.convert(tof as f64) as f32,
-                            intensity: intensity as f32,
-                            ion_mobility: ims_converter.convert(scan as f64) as f32,
-                        })
-                        .collect();
-                    out_peaks.sort_by(|a, b| {
-                        a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal)
-                    });
+                let mut out_peaks: Vec<Peak> = centroids
+                    .into_iter()
+                    .map(|(scan, tof, intensity)| Peak {
+                        mz: mz_converter.convert(tof as f64) as f32,
+                        intensity: intensity as f32,
+                        ion_mobility: ims_converter.convert(scan as f64) as f32,
+                    })
+                    .collect();
+                out_peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
 
-                    let mut spectrum = Spectrum {
-                        scan_index: frame.index,
-                        retention_time: frame.rt_in_seconds / 60.0,
-                        peaks: out_peaks,
-                        ms_level: 1,
-                        isolation_window: None,
-                        faims_cv: None,
-                    };
+                let mut spectrum = Spectrum {
+                    scan_index: frame.index,
+                    retention_time: frame.rt_in_seconds / 60.0,
+                    peaks: out_peaks,
+                    ms_level: 1,
+                    isolation_window: None,
+                    faims_cv: None,
+                };
 
-                    if let Some(sigma) = noise_sigma {
-                        noise::filter_spectrum(&mut spectrum, sigma);
-                    }
-                    let n_after_noise = spectrum.peaks.len();
-
-                    let n = processed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
-                    if n % PROGRESS_INTERVAL == 0 {
-                        if noise_sigma.is_some() {
-                            log::info!(
-                                "Bruker frame {}: {} raw -> {} filtered -> {} centroids -> {} post-MAD",
-                                n,
-                                n_raw,
-                                n_filtered,
-                                n_centroids,
-                                n_after_noise,
-                            );
-                        } else {
-                            log::info!(
-                                "Bruker frame {}: {} raw -> {} filtered -> {} centroids",
-                                n,
-                                n_raw,
-                                n_filtered,
-                                n_centroids,
-                            );
-                        }
-                    }
-
-                    Some(spectrum)
+                if let Some(sigma) = noise_sigma {
+                    noise::filter_spectrum(&mut spectrum, sigma);
                 }
-                Err(e) => {
-                    log::error!("Error parsing Bruker frame: {:?}", e);
-                    None
-                }
-            })
-            .collect();
+                let n_after_noise = spectrum.peaks.len();
 
-        log::info!("Read {} MS1 spectra from Bruker .d", spectra.len());
-        finalize(spectra)
+                let n = processed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+                if n % PROGRESS_INTERVAL == 0 {
+                    if noise_sigma.is_some() {
+                        log::info!(
+                            "Bruker frame {}: {} raw -> {} filtered -> {} centroids -> {} post-MAD",
+                            n,
+                            n_raw,
+                            n_filtered,
+                            n_centroids,
+                            n_after_noise,
+                        );
+                    } else {
+                        log::info!(
+                            "Bruker frame {}: {} raw -> {} filtered -> {} centroids",
+                            n,
+                            n_raw,
+                            n_filtered,
+                            n_centroids,
+                        );
+                    }
+                }
+
+                Ok(spectrum)
+            },
+            emit,
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -565,4 +684,4 @@ pub mod inner {
 }
 
 #[cfg(feature = "tdf")]
-pub use inner::{read_bruker, read_bruker_ms2};
+pub use inner::{read_bruker, read_bruker_ms2, stream_bruker};

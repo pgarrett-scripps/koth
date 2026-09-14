@@ -157,3 +157,98 @@ fn empty_windows_is_not_dia() {
     assert!(!is_dia_schedule(&[]));
     assert_eq!(schedule_stats(&[]).recurrence, 0.0);
 }
+
+// Frozen pre-streaming reader (0908b50) serves as an independent batch oracle.
+fn read_thermo_batch_reference(path: &Path) -> Result<Vec<Spectrum>, KothError> {
+    ensure_dotnet_root();
+    let mut reader = RawFileReader::open(path).map_err(|e| {
+        KothError::ThermoError(format!(
+            "could not open Thermo .raw file '{}': {e} \
+             (a .NET 8 runtime must be installed for native .raw reading)",
+            path.display()
+        ))
+    })?;
+    // koth's hill detector works on centroids and does no peak picking; ask the
+    // Thermo reader to centroid so profile-mode MS1 scans arrive as peak lists.
+    reader.set_centroid_spectra(true);
+
+    let n = reader.len();
+    let mut spectra: Vec<Spectrum> = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let Some(spec) = reader.get(i) else { continue };
+        if spec.ms_level() != 1 {
+            continue; // MS1 only, matching read_mzml
+        }
+
+        let peaks = centroid_peaks(&spec);
+        if peaks.is_empty() {
+            continue;
+        }
+        let faims_cv = reader.get_raw_trailers_for(i).and_then(|trailers| {
+            trailers
+                .get_label("FAIMS CV")
+                .and_then(|v| parse_faims_cv(v.value))
+        });
+
+        spectra.push(Spectrum {
+            scan_index: 0,               // assigned after the RT sort below
+            retention_time: spec.time(), // Thermo reports scan time in minutes
+            peaks,
+            ms_level: 1,
+            isolation_window: None,
+            faims_cv,
+        });
+    }
+
+    if spectra.is_empty() {
+        return Err(KothError::NoSpectra);
+    }
+
+    // Sort by retention time and re-index, identical to `read_mzml`.
+    spectra.sort_by(|a, b| {
+        a.retention_time
+            .partial_cmp(&b.retention_time)
+            .unwrap_or(Ordering::Equal)
+    });
+    for (i, s) in spectra.iter_mut().enumerate() {
+        s.scan_index = i;
+    }
+
+    log::info!("Read {} MS1 spectra from Thermo .raw", spectra.len());
+    Ok(spectra)
+}
+
+#[test]
+#[ignore = "requires .NET and a real .raw path in KOTH_MS1_RAW"]
+fn streaming_ms1_matches_batch_reference() {
+    use crate::{config::KothConfig, run_hills, run_hills_streaming};
+    let path = std::path::PathBuf::from(
+        std::env::var_os("KOTH_MS1_RAW").expect("set KOTH_MS1_RAW to a real Thermo .raw"),
+    );
+    let batch = read_thermo_batch_reference(&path).unwrap();
+    let mut stream = stream_thermo(&path).unwrap();
+    for expected in &batch {
+        let actual = stream.next().expect("missing spectrum").unwrap();
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    }
+    assert!(stream.next().is_none());
+    assert!(stream.next().is_none());
+    let cfg = KothConfig::default();
+    let expected = run_hills(&batch, &cfg.hills, &cfg.file);
+    drop(batch);
+    let actual = run_hills_streaming(&path, &cfg.hills, &cfg.file).unwrap();
+    fn canonical(hills: Vec<crate::models::Hill>) -> Vec<String> {
+        let mut rows: Vec<_> = hills
+            .into_iter()
+            .map(|mut h| {
+                h.hill_id = 0;
+                format!("{h:?}")
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+    eprintln!("Thermo MS1 parity: {} hills", actual.len());
+    assert_eq!(canonical(actual), canonical(expected));
+}

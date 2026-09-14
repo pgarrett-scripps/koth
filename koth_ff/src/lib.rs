@@ -96,10 +96,11 @@ pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) 
     hills::detect_hills(&spectra, config, file)
 }
 
-/// Stage 1 (streaming): Detect hills by reading the mzML/Bruker file directly,
-/// processing one spectrum at a time without building a `Vec<Spectrum>`.
-/// This is the preferred API for large files — peak memory is O(active_hills)
-/// rather than O(total_peaks).
+/// Stage 1 (streaming): Detect hills from mzML, Bruker `.d`, or Thermo `.raw`
+/// using bounded spectrum buffers. Completed hills are retained for assembly;
+/// native readers also retain scan metadata. Decoy shuffling and optional TIC
+/// normalization still collect spectra. Gzipped mzML currently buffers the
+/// decompressed file, although spectrum decoding is incremental.
 pub fn run_hills_streaming(
     path: &Path,
     config: &HillsConfig,
@@ -190,48 +191,51 @@ fn hills_streaming_inner(
     config: &HillsConfig,
     file: &FileConfig,
 ) -> Result<Vec<Hill>, KothError> {
-    let fmt = io::detect_format(path);
-
-    #[cfg(feature = "tdf")]
-    if fmt == io::InputFormat::BrukerD {
-        // Bruker: still requires loading all frames (timsrust doesn't expose a streaming API)
-        let spectra = shuffle_if_decoy(io::read_spectra(path, file)?, file);
-        return Ok(hills::detect_hills(&spectra, config, file));
-    }
-
-    // Thermo .raw: no streaming API, so batch-load all MS1 spectra (mirrors the
-    // Bruker path above). `read_spectra` routes `.raw` to the native reader when
-    // built with `--features thermo`, or returns a clear "rebuild with
-    // --features thermo" error otherwise — handled here (rather than the mzML
-    // fall-through below) so the message is actionable in both builds.
-    if fmt == io::InputFormat::ThermoRaw {
-        let spectra = shuffle_if_decoy(io::read_spectra(path, file)?, file);
-        return Ok(hills::detect_hills(&spectra, config, file));
-    }
-
-    // mzML path — collect first if decoy mode so we can shuffle
-    let iter = io::mzml::stream_mzml(path)?;
+    let iter = io::stream_spectra(path, file)?;
     if file.decoy_mode {
-        let spectra = shuffle_if_decoy(iter.collect(), file);
-        log::info!("Streaming hill detection from {} (decoy)", path.display());
-        Ok(hills::detect_hills_from_iter(
+        // Full-run shuffling deliberately retains its collecting semantics.
+        let spectra = shuffle_if_decoy(iter.collect::<Result<Vec<_>, _>>()?, file);
+        return Ok(hills::detect_hills_from_iter(
             spectra.into_iter(),
             config,
             file,
-        ))
+        ));
+    }
+
+    log::info!("Streaming MS1 hill detection from {}", path.display());
+    // Bruker already owns a bounded producer. Thermo and mzML are decoded on
+    // this prefetch thread, overlapping I/O with hill detection.
+    let iter: io::SpectrumStream = if io::detect_format(path) == io::InputFormat::BrukerD {
+        iter
     } else {
-        log::info!("Streaming hill detection from {}", path.display());
-        // Decode the mzML (decompress + XML parse + peak extraction) on a
-        // background reader thread so it overlaps with `process_scan` on the
-        // consumer side. Order is preserved, so hill detection is unchanged.
-        let iter = io::prefetch::prefetch(iter, PREFETCH_CAPACITY);
-        Ok(hills::detect_hills_from_iter(iter, config, file))
+        Box::new(io::prefetch::prefetch(iter, PREFETCH_CAPACITY))
+    };
+    detect_hills_from_results(iter, config, file)
+}
+
+/// Stop on the first reader error and discard partial hills. The detector's
+/// infallible iterator API must never turn an I/O failure into a successful run.
+fn detect_hills_from_results(
+    iter: io::SpectrumStream,
+    config: &HillsConfig,
+    file: &FileConfig,
+) -> Result<Vec<Hill>, KothError> {
+    let mut error = None;
+    let spectra = iter.map_while(|item| match item {
+        Ok(spectrum) => Some(spectrum),
+        Err(e) => {
+            error = Some(e);
+            None
+        }
+    });
+    let hills = hills::detect_hills_from_iter(spectra, config, file);
+    match error {
+        Some(error) => Err(error),
+        None => Ok(hills),
     }
 }
 
-/// Bounded look-ahead (in spectra) for the mzML reader thread. At ~1–2k peaks
-/// per MS1 scan this caps the prefetch buffer at a few MB while giving the
-/// consumer enough slack to stay busy across decode-time variance.
+/// Bounded look-ahead in spectra for the mzML and Thermo reader thread.
 const PREFETCH_CAPACITY: usize = 64;
 
 /// Stage 2: Detect isotope features from hills.
@@ -445,5 +449,31 @@ mod shuffle_tests {
         let mut idx: Vec<usize> = out.iter().map(|s| s.scan_index).collect();
         idx.sort_unstable();
         assert_eq!(idx, (0..256).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+mod ms1_streaming_tests {
+    use super::*;
+
+    #[test]
+    fn reader_error_discards_partial_detection() {
+        let items = vec![
+            Ok(Spectrum {
+                scan_index: 0,
+                retention_time: 1.0,
+                peaks: vec![],
+                ms_level: 1,
+                isolation_window: None,
+                faims_cv: None,
+            }),
+            Err(KothError::ThermoError("decode failure".into())),
+        ];
+        let result = detect_hills_from_results(
+            Box::new(items.into_iter()),
+            &HillsConfig::default(),
+            &FileConfig::default(),
+        );
+        assert!(matches!(result, Err(KothError::ThermoError(_))));
     }
 }
