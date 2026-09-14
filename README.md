@@ -284,7 +284,7 @@ conflated under one "spectral" name:
   a free 1.0). This is the "does the isotope pattern match theory?" signal.
 - **Co-elution**: cosine similarity between the monoisotope's XIC trace and each higher isotope's
   trace across RT — "do the matched isotopes rise and fall together?". Orthogonal to the pattern
-  match; 1.0 when fewer than two isotope rows carry signal.
+  match; `lone_coelution` (default 0.5) when fewer than two isotope rows carry signal.
 - **Hybrid score**: `(RT × intensity × bhattacharyya × coelution)^¼` (default mode)
 
 Both the Bhattacharyya and co-elution terms are always computed — there is no flag to swap one
@@ -295,21 +295,22 @@ left and right until: 20 bins have been added, the spectral Bhattacharyya drops 
 `min_spectral_bhattacharyya`, or the score falls below half the apex score. All intensities in
 the expanded window across all isotopologue rows are summed.
 
-**Target-decoy competition and MBR FDR**: A decoy is generated for each consensus feature by
-shifting m/z by `decoy_mz_shift_da`/charge (default +11 Da) and RT back by `decoy_rt_shift_pct`
-of the gradient, then extracted with identical logic. Q-values are then computed by
-`tdc_method`:
+**Target-decoy ranking**: A decoy is generated for each consensus feature by
+shifting m/z by `decoy_mz_shift_da`/charge (default +11 Da) and RT back by
+`decoy_rt_shift_pct` of the run's observed RT span, then extracted with identical
+logic. A semi-supervised quadratic-discriminant (QDA) rescorer learns from five
+symmetric per-cell features: absolute ppm error, absolute RT difference,
+Bhattacharyya similarity, co-elution, and absolute IM difference (inert when IM
+is absent). It uses iterative confident-positive selection, decoys as negatives,
+and three-fold cross-validation by consensus feature index, then computes
+q-values from held-out scores. The procedure is deterministic, and every target
+cell with signal is scored, including cells supported by a per-run detection.
 
-- **`qda`** (default) — a semi-supervised quadratic-discriminant rescorer. Over all target cells
-  (detected + match-between-runs) and the decoys, it learns a QDA over five symmetric per-cell
-  features (`|ppm error|`, `|RT diff|`, Bhattacharyya, co-elution, `|IM delta|` — the last inert
-  on Orbitrap, active on timsTOF) using a Percolator-style loop (iterative confident-positive
-  selection, decoys as negatives, 3-fold cross-validation by feature index), then computes
-  q-values from the held-out scores. Every cell is scored — detected cells get no free pass — so
-  a background-contaminated cell in a depleted well is gatable regardless of how it was populated.
-  Deterministic.
-- **`hybrid`** — the legacy method: rank all target and decoy cells by `hybrid_score` and take
-  the monotonised running FDR (n_decoy / n_target).
+These q-values provide a target-decoy ranking statistic for downstream quality
+gating. A threshold of 0.01 does not establish a calibrated 1% false discovery
+rate for extracted peptide signals; calibration depends on the decoy model and
+requires independent validation. QDA is the active scoring path; `tdc_method`
+is not a supported configuration key.
 
 ## Memory design
 
@@ -388,24 +389,28 @@ One row per consensus (reference) feature.
 | `charge` | Charge state |
 | `rtApex` | Retention time at apex in the reference run (minutes) |
 | `im` | Ion mobility at apex (empty if not available) |
-| `score` | Averagine isotope pattern score from the seed feature [0, 1] |
+| `combined_score` | Combined isotope-pattern score from the seed feature [0, 1] |
 | `seed_run` | Name of the run that provided the seed feature for this row |
 | `n_contributing_runs` | Runs that contributed a detection to this consensus group |
 | `n_runs_detected` | Runs with intensity > 0 and q-value ≤ `max_qvalue` |
 
 #### intensity_matrix.tsv
 
-Feature metadata columns (massCalib, mz, charge, rtApex, im, score, seed_run,
+Feature metadata columns (massCalib, mz, charge, rtApex, im, combined_score, seed_run,
 n_contributing_runs) followed by one intensity column per run. Values are integrated intensities
-from the XIC grid; 0 means no peak was found. No FDR filtering is applied — use
-`qvalue_matrix.tsv` to filter downstream.
+from the XIC grid with the default settings; 0 means no positive intensity was
+extracted. The matrix is unfiltered. Apply a quality gate downstream using
+`qvalue_matrix.tsv`; `[output].max_qvalue` only sets the threshold used to count
+`n_runs_detected` in `consensus_features.tsv`.
 
 #### qvalue_matrix.tsv
 
-Same layout as `intensity_matrix.tsv` but cells contain q-values (0–1) from the MBR rescorer
-(`tdc_method`, default `qda`). Written only when `run_tdc = true`. A value of 1.0 means no signal
-was found or TDC was not run; a detected (feature-supported) cell reports 0. Filter
-intensity_matrix at q ≤ 0.01 for 1% FDR, for example.
+Same layout as `intensity_matrix.tsv`, with target-decoy q-values (0–1) from the
+QDA rescorer. Written only when `run_tdc = true`. Every target cell with signal
+is scored, including feature-supported cells; detection does not force a score
+of zero. Cells without signal receive 1.0, which can also occur for low-ranked
+signal. Use this matrix for downstream quality gating, with the calibration
+limits described above.
 
 ## Configuration
 
