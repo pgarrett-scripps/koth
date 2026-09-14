@@ -19,9 +19,9 @@ use recalibration::{MzRecalBuilder, MzRecalModel};
 ///    `FeaturesConfig.min_chain_cosine`); the seed is the monoisotope
 ///    hypothesis — see `build_charge_candidate`.
 /// 3. The over-complete candidate pool is resolved non-destructively by
-///    `resolve_exhaustive`: contested hills are claimed longest-envelope-first
-///    and a partly-claimed candidate is truncated to its free prefix and
-///    re-queued rather than dropped.
+///    `resolve_exhaustive`: contested hills are claimed by descending isotope log evidence
+///    using each candidate's best-scoring valid prefix. After a conflict, the
+///    best remaining free prefix is requeued at equal or lower priority.
 /// 4. Feature structs are built from the accepted candidates.
 pub fn detect_features(hills: &[Hill], config: &FeaturesConfig, file: &FileConfig) -> Vec<Feature> {
     detect_features_with_recal(hills, config, file, None)
@@ -79,9 +79,9 @@ pub fn detect_features_with_recal(
 
     // Non-destructive assembler (biosaur2 / AlphaPept style): an over-complete
     // (seed, charge) hypothesis pool, generated in parallel and resolved by
-    // claiming contested hills longest-envelope-first, truncating a
-    // partly-claimed candidate to its free monoisotope-anchored prefix rather
-    // than dropping it. See `resolve_exhaustive`.
+    // claiming each candidate's best valid prefix by descending isotope log
+    // evidence. Conflicts restrict selection to still-free prefixes before
+    // requeuing. See `resolve_exhaustive`.
     let ctx = ChainCtx {
         sorted_hills: &sorted_hills,
         mz_array: &mz_array,

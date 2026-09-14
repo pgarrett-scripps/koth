@@ -195,10 +195,14 @@ A candidate partner must satisfy:
   ±`max_isotope_log2_ratio`.
 
 This produces an over-complete `(seed, charge)` candidate pool, which is then resolved
-**non-destructively**: contested hills are claimed longest-envelope-first, and a candidate
-whose hills are partly claimed is truncated to its free monoisotope-anchored prefix,
-re-scored, and re-queued rather than dropped. Feature detection also records
-per-adjacent-pair cosine similarities and ppm errors for downstream quality filtering.
+**non-destructively**: each candidate competes using its best-scoring valid
+monoisotope-anchored prefix. The score sums per-isotope log evidence from the
+seed-relative averagine intensity ratio and chromatographic co-elution against
+explicit noise models. Good isotopes add evidence and poor ones subtract;
+envelope length never overrides the score. After a conflict, the resolver selects
+the best remaining free prefix and requeues it, so its priority cannot increase.
+Feature detection also records per-adjacent-pair cosine similarities and ppm
+errors for downstream quality filtering.
 
 ### Stage 3: Scoring
 
