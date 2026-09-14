@@ -10,6 +10,23 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 _Nothing yet._
 
+## [0.6.0] — 2026-09-13
+
+### Changed
+- The default LFQ extraction RT half-window is 0.005 of each run's observed
+  RT span (±0.5%), centred on the alignment-predicted native retention time.
+- The default LFQ extraction ion-mobility half-window is 0.015 absolute 1/K0
+  units. This setting is inert on inputs without ion mobility.
+- Configuration documentation distinguishes extraction windows from the
+  independent alignment and consensus-grouping tolerances.
+
+### Compatibility and validation
+- Explicit extraction settings continue to override the defaults. Per-run
+  feature detection, alignment, consensus grouping, decoy offsets, and output
+  schemas are unchanged. Regenerate LFQ matrices when adopting these defaults.
+- The default extraction windows are covered by configuration-loading tests,
+  including independence from consensus limits and explicit-setting overrides.
+
 ## [0.5.0] — 2026-09-13
 
 ### Added

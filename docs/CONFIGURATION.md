@@ -324,16 +324,16 @@ and (if `run_tdc`) repeat with a decoy.
 
 | Key | Type | Default → shipped | What it does / what to set |
 |---|---|---|---|
-| `mz_ppm` | f64 | `10.0` | ppm tolerance for hill lookup per isotopologue. `10.0` both. **Also reused by consensus grouping at 2× (20 ppm)** to absorb alignment drift. |
-| `rt_window_pct` | f64 | `0.01` | XIC grid half-window as a fraction of RT span. **`0.01` (±~1.2 min), halved from the pre-0.3.0 default of `0.02`:** the generous ±2.4 min window summed contaminant hills (+11.5% MBR bias, 2× scatter); `0.01` cuts bias to −2.1% and matrix CV 16.17→15.33 with no MV loss; `0.005` over-tightens (−24%). Consensus grouping has independent full-span limits in `[lfq.consensus]`. |
-| `im_tolerance` | f64 | `0.05` | IM tolerance (1/K0) for hill lookup. Inert on Orbitrap. Reused by consensus grouping at 1×. |
+| `mz_ppm` | f64 | `10.0` | ppm tolerance for hill lookup per isotopologue. Consensus grouping has its own mass-span limit in `[lfq.consensus]`. |
+| `rt_window_pct` | f64 | `0.005` | XIC extraction half-window, ±0.5% of each run's observed RT span, centred on the alignment-predicted native RT. A 142-minute span gives ±42.6 seconds. This is independent of the consensus RT-span limit. |
+| `im_tolerance` | f64 | `0.015` | Absolute IM half-window (1/K0) for hill lookup, not a percentage. Inert on Orbitrap. Alignment and consensus use their own independent tolerances. |
 | `n_isotopes` | usize | `3` | Grid isotope rows (1=M, 2=M+M1, 3=M+M1+M2). `3`. Clamped to ≥1. |
 | `grid_cols` | usize | `100` | RT bins per grid. `100`. Clamped to ≥1. More = finer RT at higher cost. |
 | `min_spectral_bhattacharyya` | f64 | `0.1` | Min spectral Bhattacharyya (observed vs averagine pattern) for a column to keep **extending** the integration peak (a gate, not a cosine). `0.1`. |
 | `score_mode` | enum | `"hybrid"` | Which per-column score picks the integration window + feeds TDC ranking. **`"hybrid"`** = geo-mean `(rt·intensity·bhattacharyya·coelution)^¼`. `"rt"`/`"intensity"`/`"spectral"` use one signal (diagnostic). Note: the *apex column* is chosen by raw intensity regardless. |
 | `run_tdc` | bool | `true` | Run target-decoy competition + compute per-cell q-values. `true`. `false` → q-values all 1.0, decoys zero. |
 | `decoy_mz_shift_da` | f64 | `11.0` | Decoy m/z = target + `shift/charge`; must clear any real isotopologue/adduct. `11.0`. Tunable null-model knob (not shipped explicitly). |
-| `decoy_rt_shift_pct` | f64 | `0.01` | Decoy RT = target − `shift × rt_span`. At `0.01` the decoy window still overlaps the target; increase to separate. Tunable null-model knob. |
+| `decoy_rt_shift_pct` | f64 | `0.01` | Decoy RT = target RT − `shift × run_rt_span`. With the default extraction half-window of 0.005, the two RT windows meet at one boundary. A shift greater than twice the half-window fully separates the intervals. |
 | `decoy_own_template` | bool | `true` | Score the +`decoy_mz_shift_da` decoy against **its own** averagine template (from the shifted mass), not the target's. Correctness fix (audit A2); measured neutral on its own but paired with `lone_coelution`. Target scoring + reported intensities unchanged. `false` reproduces pre-0.3.0 q-values. |
 | `lone_coelution` | f64 | `0.5` | Co-elution value for a cell with <2 isotope rows carrying signal (a lone monoisotope — nothing to co-elute), applied identically to target and decoy. `1.0` (the pre-0.3.0 default) hands noise-grabbing lone-hill decoys a free target-like coordinate on the QDA co-elution feature; **`0.5` neutralises that freebie** — validated q-calibration win (audit A4: q-AUROC 0.934→0.938, +141 PSMs at q≤0.05, no quant cost). |
 | `isotope_model` | enum or table | `"peptide"` | As `[features] isotope_model`, for the LFQ consensus templates. **Must match** the model the per-run features were detected with, or every cell is scored against a pattern the detector never used. |
@@ -450,7 +450,8 @@ for Bruker denoising. Two paths:
 - **Tighter quant (lower CV):** keep the shipped precision-optimal splitter
   (`split_valley_ratio=0.60`, `split_sigma_mult=5.0`, `split_height_frac=0.13`),
   `intensity_coverage=1.0`, `min_isotope_score=0.5`. For koth_align keep
-  `quant_estimator="sum"` (Orbitrap) and `rt_window_pct=0.01`.
+  `quant_estimator="sum"` (Orbitrap). The default extraction half-window is
+  `rt_window_pct=0.005`; evaluate precision and completeness for the intended use.
 - **Fast/short gradients (3–5-scan hills):** lower `[hills].min_scans` to 2 and
   `[features].min_scan_overlap` to 2; re-benchmark quant.
 - **MS1-search feature depth (dim 2+/3+):** `[features].chain_predicted_intensity_gate`
