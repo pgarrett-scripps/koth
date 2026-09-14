@@ -116,7 +116,8 @@ pub struct FileConfig {
     /// polygon -> watershed) in a single pass with no denoised `.d` written to
     /// disk. When `false` (default), the historical local path runs (vertical
     /// filter + watershed only, no halo/polygon) — this is the paper's validated
-    /// pipeline, so streaming is opt-in until re-validated on the Bruker cohort.
+    /// pipeline. This flag selects preprocessing, not spectrum buffering:
+    /// both modes stream MS1 spectra into hill detection.
     #[serde(default)]
     pub bruker_streaming: bool,
     /// Streaming path only: apply dnoise's horizontal-halo filter after the
