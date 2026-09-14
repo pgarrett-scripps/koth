@@ -65,11 +65,13 @@ rt_warp_ransac_thresh = 0.01
 mz_ppm = 10.0
 
 # Half-window for XIC grid extraction as a fraction of the run's RT span.
-# 0.01 = ±1% of gradient → 2% total window, 100 bins → ~1.4 s/bin per 120 min run.
-rt_window_pct = 0.01
+# 0.005 = ±0.5% of the observed run span, centred at the predicted native RT.
+# On a 142-minute run this is ±42.6 seconds (1% total window).
+rt_window_pct = 0.005
 
-# Ion mobility tolerance for hill matching in LFQ (1/K0 units)
-im_tolerance = 0.05
+# Absolute ion mobility half-window for hill matching in LFQ (1/K0 units).
+# This is not a relative percentage; it is inert on inputs without mobility.
+im_tolerance = 0.015
 
 # Number of isotopologue rows in the XIC grid: 1 = M only, 2 = M+M1, 3 = M+M1+M2
 n_isotopes = 3
@@ -139,15 +141,14 @@ decoy_mz_shift_da = 11.0
 
 # Decoy RT shift, as a fraction of the run's RT span. The decoy grid is
 # centred at decoy_rt = target_rt − decoy_rt_shift_pct · rt_span.
-# With the default 0.01 and `rt_window_pct = 0.01` the decoy window abuts the
-# target window; raise to ≥ 2 × `rt_window_pct` for a fully disjoint decoy
-# window.
+# With the default 0.01 and `rt_window_pct = 0.005`, the two RT windows meet
+# at one boundary. A shift greater than 2 × `rt_window_pct` separates them.
 decoy_rt_shift_pct = 0.01
 
 # ── Consensus grouping ────────────────────────────────────────────────────────
-# Builds the multi-run consensus feature list. Tolerances reuse mz_ppm,
-# rt_window_pct, and im_tolerance from [lfq] above. The three filters below
-# run at different points in the pipeline — see the comments.
+# Builds the multi-run consensus feature list with independent full-span
+# tolerances. The three quality filters below run at different points in the
+# pipeline — see the comments.
 [lfq.consensus]
 
 # Full group-span limits, independent of the LFQ extraction windows.
