@@ -8,7 +8,43 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Isotope-choice validation
+- Add a calculated-peptide-mass audit of isotope competitors across both full
+  cohorts. A shared-envelope selector worsened Bruker isotope choices despite
+  nearly unchanged CV and was removed; the prior extraction behavior remains.
+  See [the rejected trial](docs/lfq-isotope-choice.md) for results and provenance.
+
+### Exclusive LFQ extraction
+- Track original hill-profile samples and reserve native peak segments so
+  competing groups cannot quantify the same signal or adjacent slices of it.
+  Rank alternatives across runs, re-extract residuals, and mark unresolved
+  residuals ambiguous. Targets and decoys use independent masks with identical
+  rules; cell confidence is recomputed afterward.
+- Add ownership provenance to LFQ details and long bundle schema version 3,
+  synthetic regression tests, and full-cohort audits. Original group membership
+  and permutation q-values remain unchanged. See
+  [signal ownership](docs/lfq-signal-ownership.md) for results and limits.
+  Full-cohort validation finds remaining isotope-choice errors and an Orbitrap
+  precision regression. These remain documented limitations of the adopted
+  signal-ownership approach, not claims of automatic isotope correction.
+
+### LFQ group confidence
+- Replace member/seed score floors, `min_group_size`, and
+  `allow_replicated_weak_seeds` with `max_group_qvalue`. Continuous quality,
+  cross-run coordinate agreement and ambiguity rank all valid candidates against
+  ten independent RT-permutation control cohorts; at least two original runs
+  supply support. Controls preserve RT density within run/charge/quality strata.
+- Export separate group evidence and q-values in the consensus table and long
+  bundle schema version 2. Per-cell extraction confidence remains independent.
+- Add candidate auditing, CLI/export checks and an 18-run exploratory comparison.
+  The group statistic is not a validated FDR guarantee, and the initial results
+  show a coverage/quality tradeoff. The [permutation follow-up](docs/lfq-group-permutation.md)
+  retains the original scorer and replaces unstable whole-run shifts; includes
+  2-, 6-, 18- and 20-run checks, quantitative comparisons and member-link audits.
+- The [integrity audit](docs/lfq-group-integrity.md) identifies unresolved cross-group
+  splits, isotope aliases and shared-signal reporting; adds diagnostic tests and
+  reproducible audits. Exclusive extraction addresses demonstrated signal reuse;
+  cross-group membership and isotope identity remain unresolved in some cases.
 
 ## [0.5.0] — 2026-09-13
 

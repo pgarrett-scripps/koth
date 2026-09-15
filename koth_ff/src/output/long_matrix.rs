@@ -188,12 +188,10 @@ pub fn write_bundle(
                 "unknown_charge"
             } else if group.is_some() {
                 ""
-            } else if get(&["combined_score"]).parse::<f64>()?
-                < config.lfq.consensus.min_member_combined_score
-            {
-                "member_quality"
+            } else if !get(&["combined_score"]).parse::<f64>()?.is_finite() {
+                "invalid_feature_score"
             } else {
-                "final_group_filter"
+                "group_confidence_or_singleton"
             };
             let mut record = vec![
                 run.to_string(),
@@ -270,6 +268,8 @@ pub fn write_bundle(
         "im",
         "combined_score",
         "n_contributing_runs",
+        "group_score",
+        "group_qvalue",
         "lfq_intensity",
         "lfq_q_value",
         "lfq_is_mbr",
@@ -282,6 +282,11 @@ pub fn write_bundle(
         "lfq_expected_mz",
         "lfq_observed_mz",
         "lfq_status",
+        "lfq_ownership_status",
+        "lfq_owned_samples",
+        "lfq_excluded_samples",
+        "lfq_competing_consensus_id",
+        "lfq_preceding_signal_fraction",
     ])?;
     let finite = |x: f64| {
         if x.is_finite() {
@@ -322,6 +327,8 @@ pub fn write_bundle(
             },
             g.seed_combined_score.to_string(),
             g.n_contributing_runs.to_string(),
+            g.group_score.to_string(),
+            g.group_qvalue.to_string(),
             intensity.to_string(),
             if e.is_decoy || !config.lfq.run_tdc {
                 String::new()
@@ -343,10 +350,17 @@ pub fn write_bundle(
                 "no_signal"
             }
             .into(),
+            e.ownership_status.into(),
+            e.owned_samples.to_string(),
+            e.excluded_samples.to_string(),
+            e.competing_feature
+                .map(|i| i.to_string())
+                .unwrap_or_default(),
+            e.preceding_signal_fraction.to_string(),
         ])?;
     }
     cells.flush()?;
-    let manifest = serde_json::json!({"schema_version":1,"n_consensus":matrix.n_features,"reference_run_id":alignment.reference_idx,
+    let manifest = serde_json::json!({"schema_version":3,"n_consensus":matrix.n_features,"reference_run_id":alignment.reference_idx,
         "runs":run_manifest,"config":config,"units":{"mass":"Da","rt":"minutes","im":"1/K0"},
         "observations":{"path":"feature_observations.tsv","sha256":sha256(&obs_path)?},
         "cells":{"path":"lfq_matrix.long.tsv","sha256":sha256(&cells_path)?}});

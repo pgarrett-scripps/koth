@@ -336,7 +336,7 @@ fn write_consensus_tsv(
 
     writeln!(
         f,
-        "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs\tn_runs_detected"
+        "massCalib\tmz\tcharge\trtApex\tim\tcombined_score\tseed_run\tn_contributing_runs\tn_runs_detected\tgroup_score\tgroup_qvalue"
     )?;
 
     for feat in 0..matrix.n_features {
@@ -348,7 +348,7 @@ fn write_consensus_tsv(
 
         writeln!(
             f,
-            "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}\t{}",
+            "{:.6}\t{:.6}\t{}\t{:.6}\t{}\t{:.6}\t{}\t{}\t{}\t{:.6}\t{:.6}",
             matrix.feature_mass[feat],
             matrix.feature_mz[feat],
             matrix.feature_charge[feat],
@@ -358,6 +358,8 @@ fn write_consensus_tsv(
             matrix.feature_seed_run[feat],
             matrix.feature_n_contributing_runs[feat],
             n_detected,
+            matrix.consensus[feat].group_score,
+            matrix.consensus[feat].group_qvalue,
         )?;
     }
 
@@ -441,7 +443,7 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Re
          \tn_contributing_runs\trun_name\tis_decoy\tis_mbr\tintensity\thybrid_score\tspectral_bhattacharyya\
          \trt_score\tint_score\tcoelution\
          \tn_isotopes_found\texpected_rt\tapex_rt\trt_diff\tpeak_width_rt\
-         \tobserved_mz\tppm_error\tobserved_im\tim_delta\tq_value"
+         \tobserved_mz\tppm_error\tobserved_im\tim_delta\tq_value\townership_status\towned_samples\texcluded_samples\tcompeting_feature\tpreceding_signal_fraction"
     )?;
 
     let fmt_f = |v: f64| {
@@ -501,7 +503,7 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Re
              \t{ncont}\t{run_name}\t{decoy}\t{is_mbr}\t{intensity}\t{hybrid:.6}\t{bhatt:.6}\
              \t{rt_score:.6}\t{int_score:.6}\t{coelution:.6}\
              \t{nslots}\t{exp_rt}\t{apex_rt}\t{rtdiff}\t{pw}\
-             \t{obs_mz}\t{ppm}\t{obs_im}\t{im_delta}\t{qv}",
+             \t{obs_mz}\t{ppm}\t{obs_im}\t{im_delta}\t{qv}\t{ownership}\t{owned}\t{excluded}\t{competitor}\t{preceding:.6}",
             feat = feat,
             mass = matrix.feature_mass[feat],
             mz = matrix.feature_mz[feat],
@@ -530,6 +532,11 @@ fn write_lfq_details_tsv(matrix: &IntensityMatrix, out_dir: &Path) -> anyhow::Re
             obs_im = fmt_f(entry.observed_im),
             im_delta = fmt_f(im_delta),
             qv = fmt_f(q_value),
+            ownership = entry.ownership_status,
+            preceding = entry.preceding_signal_fraction,
+            owned = entry.owned_samples,
+            excluded = entry.excluded_samples,
+            competitor = entry.competing_feature.map(|i| i.to_string()).unwrap_or_default(),
         )?;
     }
 

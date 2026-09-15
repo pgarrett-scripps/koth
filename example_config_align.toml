@@ -150,31 +150,16 @@ decoy_rt_shift_pct = 0.01
 # run at different points in the pipeline — see the comments.
 [lfq.consensus]
 
-# Full group-span limits, independent of the LFQ extraction windows.
+# Full coordinate-span limits for candidate grouping.
 mz_ppm = 20.0
 rt_window_pct = 0.02
 im_tolerance = 0.05
+# Experimental permuted-RT group confidence, separate from per-cell LFQ q-values.
+# Ten independent controls preserve RT density within run/charge/quality strata.
+# Replaces member/seed floors, min_group_size, and allow_replicated_weak_seeds.
+# Groups need two original runs; 1.0 retains all replicated candidates for audit.
+max_group_qvalue = 0.05
 
-# Experimental retention of weaker groups supported by at least two runs.
-# The member-quality floor and min_group_size still apply.
-allow_replicated_weak_seeds = false
-
-# Pre-grouping filter on individual features (uses `combined_score`).
-# Features below are excluded entirely — they cannot seed a group AND do not
-# count toward `n_contributing_runs`. 0.0 = keep everything.
-min_member_combined_score = 0.5
-
-# Post-grouping filter on detection count. A group must have features from
-# at least this many distinct runs to survive. 1 = keep single-run
-# detections. 2+ = require reproducibility.
-min_group_size = 2
-
-# Post-grouping filter on the seed's `combined_score`. Drops groups whose
-# top feature is too weak to trust, even when other members are present.
-# 0.0 = keep everything.
-min_seed_combined_score = 0.75
-
-# ── Output ────────────────────────────────────────────────────────────────────
 [output]
 
 # Versioned bundle with original observations, LFQ cells and source hashes.

@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::alignment::{AlignmentResult, RunInput};
 use crate::lfq::LfqConfig;
 
+#[path = "group_confidence.rs"]
+mod group_confidence;
+pub use group_confidence::{EvidenceAudit, PermutationAudit, VARIANT_NAMES};
+
 type GroupSpans = ((f64, f64), (f64, f64), Option<(f64, f64)>);
 
 /// Grouping quality filters for the multi-run consensus feature list.
@@ -19,37 +23,10 @@ pub struct ConsensusConfig {
     pub rt_window_pct: f64,
     /// Maximum full group IM span; missing IM never bridges incompatible values.
     pub im_tolerance: f64,
-    /// Pre-grouping filter: a feature's `combined_score` must clear this to
-    /// be eligible as a group member or seed. Features below are excluded
-    /// from the projection entirely (don't count toward `n_contributing_runs`).
-    /// Default 0.5.
-    #[serde(default = "default_min_member_combined_score")]
-    pub min_member_combined_score: f64,
-    /// Minimum number of distinct runs that must have detected a feature in
-    /// a group for it to survive. 1 = keep single-run detections; default 2
-    /// requires a second run to have detected it.
-    #[serde(default = "default_min_group_size")]
-    pub min_group_size: usize,
-    /// Post-grouping filter: drop groups whose seed (best-`combined_score`
-    /// member) is below this. 0.0 = keep all groups. Default 0.75.
-    #[serde(default = "default_min_seed_combined_score")]
-    pub min_seed_combined_score: f64,
-    /// Experimental: retain bounded groups supported by >=2 original runs even
-    /// when no individual member clears the seed-quality floor. The member
-    /// quality floor and group-size requirement still apply. Default false.
-    pub allow_replicated_weak_seeds: bool,
-}
-
-fn default_min_member_combined_score() -> f64 {
-    0.5
-}
-
-fn default_min_group_size() -> usize {
-    2
-}
-
-fn default_min_seed_combined_score() -> f64 {
-    0.75
+    /// Experimental group-level target/permuted-RT q-value gate. This is an
+    /// empirical grouping statistic, not validated identification or cell FDR.
+    /// 1.0 retains all replicated candidates for diagnostics. Default 0.05.
+    pub max_group_qvalue: f64,
 }
 
 impl Default for ConsensusConfig {
@@ -58,11 +35,30 @@ impl Default for ConsensusConfig {
             mz_ppm: 20.0,
             rt_window_pct: 0.02,
             im_tolerance: 0.05,
-            min_member_combined_score: default_min_member_combined_score(),
-            min_group_size: default_min_group_size(),
-            min_seed_combined_score: default_min_seed_combined_score(),
-            allow_replicated_weak_seeds: false,
+            max_group_qvalue: 0.05,
         }
+    }
+}
+
+impl ConsensusConfig {
+    pub fn validate(&self) -> Result<(), crate::error::KothError> {
+        for (name, value) in [
+            ("mz_ppm", self.mz_ppm),
+            ("rt_window_pct", self.rt_window_pct),
+            ("im_tolerance", self.im_tolerance),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(crate::error::KothError::ConfigError(format!(
+                    "lfq.consensus.{name} must be finite and nonnegative"
+                )));
+            }
+        }
+        if !self.max_group_qvalue.is_finite() || !(0.0..=1.0).contains(&self.max_group_qvalue) {
+            return Err(crate::error::KothError::ConfigError(
+                "lfq.consensus.max_group_qvalue must be between 0 and 1".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -98,10 +94,15 @@ pub struct ConsensusFeature {
     pub members: Vec<(usize, u32)>,
     /// Original feature index of the seed in its source run.
     pub seed_feature_idx: u32,
+    /// Continuous cross-run evidence; the detector score is not a probability.
+    pub group_score: f64,
+    /// Experimental permuted-RT group q-value, separate from cell confidence.
+    pub group_qvalue: f64,
 }
 
 /// Internal: one feature projected into reference-run coordinate space.
-/// `combined_score` is the seed-selection / filter axis (isotope × chromato cosine).
+/// `combined_score` orders candidate assembly; it is no longer an admission gate.
+#[derive(Clone)]
 struct ProjectedFeature {
     run_idx: usize,
     /// Rank of the run name; independent of input run order.
@@ -159,6 +160,8 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize], n_runs: usize) ->
             .map(|&i| (projected[i].run_idx, projected[i].feature_idx))
             .collect(),
         seed_feature_idx: seed.feature_idx,
+        group_score: 0.0,
+        group_qvalue: 1.0,
     }
 }
 
@@ -168,11 +171,7 @@ fn emit_group(projected: &[ProjectedFeature], group: &[usize], n_runs: usize) ->
 /// using the alignment corrections, then grouped by (charge, neutral mass ± ppm,
 /// aligned RT ± window, IM ± tolerance).  Each group emits one `ConsensusFeature`
 /// seeded by the highest-scoring member from any run.
-pub fn build_consensus(
-    runs: &[RunInput],
-    alignment: &AlignmentResult,
-    config: &LfqConfig,
-) -> Vec<ConsensusFeature> {
+fn project_features(runs: &[RunInput], alignment: &AlignmentResult) -> Vec<ProjectedFeature> {
     const PROTON: f64 = 1.007_276_466_621;
 
     let t_project = Instant::now();
@@ -188,10 +187,7 @@ pub fn build_consensus(
         let is_reference = run_idx == alignment.reference_idx;
 
         for (feat_idx, feat) in run.features.iter().enumerate() {
-            if feat.feature.charge == 0
-                || !feat.combined_score.is_finite()
-                || feat.combined_score < config.consensus.min_member_combined_score
-            {
+            if feat.feature.charge == 0 || !feat.combined_score.is_finite() {
                 continue;
             }
 
@@ -259,15 +255,79 @@ pub fn build_consensus(
         t_project.elapsed()
     );
 
+    projected
+}
+
+pub fn build_consensus_candidates(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+) -> Vec<ConsensusFeature> {
+    let projected = project_features(runs, alignment);
     let range = runs[alignment.reference_idx].rt_range();
-    let consensus = cluster_projected(&projected, &config.consensus, range.1 - range.0, runs.len());
+    group_confidence::score_candidates(&projected, &config.consensus, range.1 - range.0, runs.len())
+}
+
+/// Research-only scorer/control comparison, independent of production settings.
+pub fn audit_consensus(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+    full_controls: bool,
+) -> EvidenceAudit {
+    let projected = project_features(runs, alignment);
+    let range = runs[alignment.reference_idx].rt_range();
+    group_confidence::audit_candidates(
+        &projected,
+        &config.consensus,
+        range.1 - range.0,
+        runs.len(),
+        full_controls,
+    )
+}
+
+/// Independent RT-permutation diagnostics using the same controls as production.
+pub fn audit_permutation_consensus(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+) -> PermutationAudit {
+    let projected = project_features(runs, alignment);
+    let range = runs[alignment.reference_idx].rt_range();
+    group_confidence::audit_permutations(
+        &projected,
+        &config.consensus,
+        range.1 - range.0,
+        runs.len(),
+    )
+}
+
+/// Retain candidates supported by at least two original runs and the group gate.
+/// Every accepted group still undergoes independent per-cell LFQ extraction.
+pub fn build_consensus(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+) -> Vec<ConsensusFeature> {
+    config
+        .consensus
+        .validate()
+        .expect("invalid consensus configuration");
+    let candidates = build_consensus_candidates(runs, alignment, config);
+    let count = candidates.len();
+    let retained: Vec<_> = candidates
+        .into_iter()
+        .filter(|g| {
+            g.n_contributing_runs >= 2 && g.group_qvalue <= config.consensus.max_group_qvalue
+        })
+        .collect();
     log::info!(
-        "Consensus: {} final groups from {} eligible / {} original features",
-        consensus.len(),
-        projected.len(),
-        runs.iter().map(|r| r.features.len()).sum::<usize>()
+        "Consensus confidence: retained {} / {} candidates at group q <= {}",
+        retained.len(),
+        count,
+        config.consensus.max_group_qvalue
     );
-    consensus
+    retained
 }
 
 fn quality_order(a: &ProjectedFeature, b: &ProjectedFeature) -> std::cmp::Ordering {
@@ -377,18 +437,9 @@ fn cluster_projected(
             groups.push(Group::new(i, p));
         }
     }
-    log::info!(
-        "Consensus: {} complete groups before final size/seed filters",
-        groups.len()
-    );
     let mut out: Vec<_> = groups
         .iter()
         .map(|g| emit_group(projected, &g.members, n_runs))
-        .filter(|g| {
-            g.n_contributing_runs >= config.min_group_size
-                && (g.seed_combined_score >= config.min_seed_combined_score
-                    || (config.allow_replicated_weak_seeds && g.n_contributing_runs >= 2))
-        })
         .collect();
     out.sort_by(|a, b| {
         a.charge
@@ -461,17 +512,25 @@ mod tests {
             assert_eq!(cf.seed_run_idx, first.seed_run_idx);
         }
     }
-    fn at(run: usize, id: u32, mass: f64, rt: f64, score: f64) -> ProjectedFeature {
+    pub(super) fn at(run: usize, id: u32, mass: f64, rt: f64, score: f64) -> ProjectedFeature {
         let mut p = proj(run, id, score, mass / 2.0 + 1.007276466621);
         p.neutral_mass = mass;
         p.ref_rt = rt;
         p
     }
-    fn cfg(min_runs: usize) -> ConsensusConfig {
-        ConsensusConfig {
-            min_group_size: min_runs,
-            ..Default::default()
-        }
+    fn cfg() -> ConsensusConfig {
+        ConsensusConfig::default()
+    }
+    fn replicated(
+        p: &[ProjectedFeature],
+        c: &ConsensusConfig,
+        span: f64,
+        runs: usize,
+    ) -> Vec<ConsensusFeature> {
+        cluster_projected(p, c, span, runs)
+            .into_iter()
+            .filter(|g| g.n_contributing_runs >= 2)
+            .collect()
     }
     #[test]
     fn interleaved_low_seed_keeps_its_valid_run_support() {
@@ -480,37 +539,30 @@ mod tests {
             at(0, 1, 1000.001, 40.0, 0.9),
             at(1, 0, 1000.002, 10.0, 0.9),
         ];
-        let g = cluster_projected(&p, &cfg(2), 100.0, 2);
+        let g = replicated(&p, &cfg(), 100.0, 2);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].n_contributing_runs, 2);
         assert_eq!(g[0].members.len(), 2);
     }
     #[test]
-    fn replicated_weak_seeds_can_survive_without_admitting_weak_singletons() {
+    fn weak_members_are_candidates_without_a_seed_override() {
         let p = vec![
-            at(0, 0, 1000.0, 10.0, 0.7),
-            at(1, 0, 1000.002, 10.1, 0.6),
-            at(0, 1, 1100.0, 20.0, 0.7),
-            at(0, 2, 1100.001, 20.0, 0.6),
+            at(0, 0, 1000.0, 10.0, 0.3),
+            at(1, 0, 1000.002, 10.1, 0.2),
+            at(0, 1, 1100.0, 20.0, 0.4),
         ];
-        assert!(cluster_projected(&p, &cfg(1), 100.0, 2).is_empty());
-        let mut config = cfg(1);
-        config.allow_replicated_weak_seeds = true;
-        let g = cluster_projected(&p, &config, 100.0, 2);
+        let g = replicated(&p, &cfg(), 100.0, 2);
         assert_eq!(g.len(), 1);
-        assert_eq!(g[0].n_contributing_runs, 2);
-        assert_eq!(g[0].seed_combined_score, 0.7);
-        config.min_group_size = 3;
-        assert!(cluster_projected(&p, &config, 100.0, 2).is_empty());
+        assert_eq!(g[0].seed_combined_score, 0.3);
     }
     #[test]
-    fn default_floor_applies_after_interleaved_members_join() {
+    fn replicated_support_is_counted_after_interleaved_members_join() {
         let p = vec![
             at(0, 0, 1000.0, 10.0, 0.9),
             at(0, 1, 1000.001, 40.0, 0.9),
             at(1, 0, 1000.002, 10.0, 0.9),
         ];
-        let g = cluster_projected(&p, &cfg(2), 100.0, 2);
+        let g = replicated(&p, &cfg(), 100.0, 2);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].n_contributing_runs, 2);
     }
@@ -521,13 +573,47 @@ mod tests {
             at(1, 0, 1000.015, 11.5, 0.9),
             at(2, 0, 1000.030, 13.0, 0.9),
         ];
-        let g = cluster_projected(&p, &cfg(1), 100.0, 3);
+        let g = cluster_projected(&p, &cfg(), 100.0, 3);
         assert_eq!(g.len(), 2);
         assert_eq!(g.iter().map(|g| g.members.len()).sum::<usize>(), 3);
         for g in g {
             assert!(g.members.len() <= 2);
         }
     }
+    // Diagnostic witnesses: group-level confidence does not reconcile aliases.
+    #[test]
+    fn rt_outliers_can_form_two_replicated_groups_at_the_same_mass() {
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.99),
+            at(1, 0, 1000.0, 10.1, 0.95),
+            at(2, 0, 1000.0, 10.4, 0.90),
+            at(3, 0, 1000.0, 10.5, 0.85),
+        ];
+        let g = cluster_projected(&p, &cfg(), 15.0, 4);
+        assert_eq!(g.len(), 2);
+        assert!(g.iter().all(|g| g.n_contributing_runs == 2));
+        let ownership: std::collections::HashSet<_> =
+            g.iter().flat_map(|g| g.members.iter().copied()).collect();
+        assert_eq!(ownership.len(), p.len());
+        // Unique observations do not imply one group per underlying analyte.
+        assert_eq!(g[0].neutral_mass, g[1].neutral_mass);
+    }
+
+    #[test]
+    fn residual_monoisotope_error_forms_a_separate_group() {
+        let c13 = crate::lfq::grid::C13_NEUTRON;
+        let p = vec![
+            at(0, 0, 1000.0, 10.0, 0.99),
+            at(1, 0, 1000.0, 10.0, 0.95),
+            at(2, 0, 1000.0 + c13, 10.0, 0.90),
+            at(3, 0, 1000.0 + c13, 10.0, 0.85),
+        ];
+        let g = cluster_projected(&p, &cfg(), 15.0, 4);
+        assert_eq!(g.len(), 2);
+        assert!(g.iter().all(|g| g.n_contributing_runs == 2));
+        assert!((g[1].neutral_mass - g[0].neutral_mass - c13).abs() < 1e-9);
+    }
+
     #[test]
     fn per_run_winner_uses_its_own_score_and_keeps_alternatives() {
         let p = vec![
@@ -535,7 +621,7 @@ mod tests {
             at(1, 10, 1000.001, 10.0, 0.51),
             at(1, 20, 1000.002, 10.0, 0.90),
         ];
-        let g = cluster_projected(&p, &cfg(2), 100.0, 2);
+        let g = replicated(&p, &cfg(), 100.0, 2);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].per_run_feature[1], Some(20));
         assert_eq!(g[0].members.len(), 3);
@@ -551,7 +637,7 @@ mod tests {
         p[0].ref_im = 1.0;
         p[1].ref_im = 0.0;
         p[2].ref_im = 1.2;
-        assert_eq!(cluster_projected(&p, &cfg(1), 100.0, 3).len(), 2);
+        assert_eq!(cluster_projected(&p, &cfg(), 100.0, 3).len(), 2);
     }
     #[test]
     fn reordering_observations_and_run_indices_preserves_group_coordinates() {
@@ -565,14 +651,11 @@ mod tests {
                 .map(|f| (f.neutral_mass, f.ref_rt, f.n_contributing_runs))
                 .collect::<Vec<_>>()
         };
-        let expected = signature(cluster_projected(&p, &cfg(1), 100.0, 3));
+        let expected = signature(cluster_projected(&p, &cfg(), 100.0, 3));
         p.reverse();
         for x in &mut p {
             x.run_idx = 2 - x.run_idx;
         }
-        assert_eq!(
-            expected,
-            signature(cluster_projected(&p, &cfg(1), 100.0, 3))
-        );
+        assert_eq!(expected, signature(cluster_projected(&p, &cfg(), 100.0, 3)));
     }
 }

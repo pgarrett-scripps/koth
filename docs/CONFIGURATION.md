@@ -345,7 +345,7 @@ and (if `run_tdc`) repeat with a decoy.
 
 *Removed keys that now error:* `spectral_cosine_min` (→ `min_spectral_bhattacharyya`),
 `spectral_bhattacharyya`, `spectral_coelution` (both signals always on),
-`min_feature_score` (→ `[lfq.consensus].min_member_combined_score`).
+`min_feature_score` (removed; see the group confidence gate below).
 
 **q-value mechanics.** With `run_tdc=true` the active path is a semi-supervised,
 cross-validated **QDA rescorer** (`lfq/rescore.rs`, Percolator-style protocol)
@@ -355,23 +355,52 @@ MBR) competes against decoys — a detected cell in a depleted well is still
 gatable. Deterministic (no RNG). The simpler ranker in `lfq/tdc.rs` is retained
 as reference but not used by the pipeline.
 
-### 4.3 `[lfq.consensus]` — cross-run grouping quality filters
-Features are projected into reference space and grouped in deterministic quality
-order. Each complete group must fit the mass, RT and IM span limits below;
-missing IM cannot bridge incompatible measured IM values. These limits are
-independent of the LFQ extraction windows. Size and seed-quality filters apply
-after grouping, and each run's primary observation is selected by its own quality.
-Original alternatives remain available in the optional long bundle.
+### 4.3 `[lfq.consensus]` — experimental cross-run confidence
 
-| Key | Type | Default → shipped | What it does / what to set |
+The [independent-permutation audit](lfq-group-permutation.md) replaces the initial
+whole-run shifts with stable controls on the tested cohorts. The group gate is
+still experimental: `0.05` is not a validated 5% identification or member-link FDR.
+
+All finite scored features with known charge and valid projected coordinates can
+enter bounded candidate groups, including scores below 0.5. The highest-quality
+member still provides reference coordinates, but its score is not an admission
+threshold. Each run supplies at most one primary observation; alternatives stay
+available in the long bundle and dilute ambiguous group support.
+
+| Key | Type | Default | Meaning |
 |---|---|---|---|
-| `mz_ppm` | f64 | `20.0` | Maximum full group mass span in ppm. Independent of `[lfq].mz_ppm`. |
-| `rt_window_pct` | f64 | `0.02` | Maximum full group RT span as a fraction of the reference gradient. |
-| `im_tolerance` | f64 | `0.05` | Maximum full group IM span. Missing values cannot bridge incompatible known values. |
-| `allow_replicated_weak_seeds` | bool | `false` | Experimental: retain groups supported by at least two distinct original runs below the seed floor. Member-quality and group-size limits still apply; duplicate alternatives in one run do not qualify. |
-| `min_member_combined_score` | f64 | `0.5` | Pre-grouping filter: a feature's `combined_score` must clear this to join/seed a group (else excluded, doesn't count toward `n_contributing_runs`). `0.0` keeps everything. |
-| `min_group_size` | usize | `2` | Min distinct runs that must detect a feature to keep the group. `2` (of 20) in the benchmark. `1` = keep single-run detections; raise for stricter reproducibility. |
-| `min_seed_combined_score` | f64 | `0.75` | Post-grouping filter: drop a group whose best member (seed) is below this. `0.0` keeps all groups. |
+| `mz_ppm` | f64 | `20.0` | Maximum full group mass span in ppm. |
+| `rt_window_pct` | f64 | `0.02` | Maximum full group RT span as a fraction of reference run span. |
+| `im_tolerance` | f64 | `0.05` | Maximum full IM span; missing IM cannot bridge incompatible values. |
+| `max_group_qvalue` | f64 | `0.05` | Experimental permuted-RT group gate. `1.0` keeps every replicated candidate for auditing. |
+
+`min_member_combined_score`, `min_seed_combined_score`, `min_group_size` and
+`allow_replicated_weak_seeds` are removed and rejected by the parser. Delete them
+from old configs and set `max_group_qvalue`. Two distinct original runs are
+required for cross-run support; a single-run dataset yields no consensus groups.
+
+Group evidence combines continuous detector quality, pairwise mass/RT/IM
+agreement and ambiguity from within-run alternatives. Ten deterministic,
+independent RT permutations within each run, charge and detector-score bin
+(width 0.1) preserve that stratum's exact RT distribution. Mass, IM, quality and
+feature provenance remain unchanged. The controls undergo identical grouping
+and scoring; fixed points are allowed. This replaces the initial whole-run
+circular translations, whose control counts were unstable with small run counts.
+At each score cutoff, estimated false groups equal one plus the average null
+count; division by the target count and a reverse cumulative minimum give the
+group q-value. The log reports retained counts from the two five-control halves
+and the pooled ten-control estimate. These internal controls add no user settings.
+
+This is not a learned probability model or a validated FDR guarantee. Permutations
+do not preserve within-stratum mass–RT or IM–RT dependence, or within-run group
+structure. Concentrated RT distributions can provide no useful discrimination;
+recurring artifacts and false attachments to real groups require separate
+validation. Group confidence does not identify peptides or establish every link.
+
+The existing per-cell extraction and gate still apply. `group_score` and
+`group_qvalue` are exported in the consensus table and long bundle, separately
+from `lfq_q_value`. No group-confidence value is reused as cell confidence.
+See [lfq-group-permutation.md](lfq-group-permutation.md) for the current experiment.
 
 ### 4.4 `[output]`
 | Key | Type | Default → shipped | What it does |
@@ -467,3 +496,11 @@ config field, update this file, `example_config*.toml` here, and the tuned
 `deny_unknown_fields` parse test fails the build if the templates in THIS repo
 disagree with the structs; it can no longer see the tuned configs, and it cannot
 check this doc — keep both current by hand.*
+
+### Experimental exclusive LFQ extraction
+
+The group-confidence worktree reserves native hill-profile peak segments across
+competing LFQ groups and rebuilds residual extractions before cell scoring. This
+requires grid quantification: `detected_use_grid=false` now warns and uses the
+grid estimator. There are no additional user settings. See
+[signal ownership](lfq-signal-ownership.md) for behavior, provenance and limits.

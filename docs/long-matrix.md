@@ -10,16 +10,14 @@ export_long = true
 mz_ppm = 20.0
 rt_window_pct = 0.02
 im_tolerance = 0.05
-min_member_combined_score = 0.5
-min_seed_combined_score = 0.75
-min_group_size = 2
+max_group_qvalue = 0.05
 ```
 
 Grouping tolerances are independent of extraction tolerances. These defaults
 retain the old effective pairwise limits, but apply them to the complete group
 span. Missing IM cannot bridge incompatible known IM values. Groups are formed
-in deterministic quality order; minimum size and seed score are applied after
-membership is complete. The primary observation in each run is selected using
+in deterministic quality order; cross-run evidence and the experimental group
+q-value gate replace member and seed floors. The primary observation in each run is selected using
 its own score. Alternatives remain in the observation table.
 
 Set `[alignment] reference_run = "exact run directory name"` to fix the reference
@@ -32,7 +30,7 @@ The additional outputs are:
 | --- | --- | --- |
 | `feature_observations.tsv` | run ID + original row ID | Original feature measurements, aligned coordinates, group membership, seed/primary flags and exclusion reasons |
 | `lfq_matrix.long.tsv` | consensus ID + run ID + extraction kind | Quantitative extraction and grid quality, with original/seed observation links |
-| `matrix_manifest.json` | bundle | Schema version 1, units, runs and source hashes, reference, configuration, and output hashes |
+| `matrix_manifest.json` | bundle | Schema version 3, units, runs and source hashes, reference, configuration, and output hashes |
 
 The observation table streams the source TSV or Parquet measurements directly:
 alignment's reconstructed single-hill placeholders do not contain the original
@@ -55,15 +53,24 @@ peptide or protein identification confidence.
 
 The manifest is installed only after both tables have been flushed and hashed.
 Wide exports and the existing `lfq_details.tsv` remain available for compatibility.
-# Experimental retention of replicated moderate-quality features
+# Experimental group confidence
 
-Set `[lfq.consensus] allow_replicated_weak_seeds = true` to retain a bounded group
-when at least two original runs support it, even if its best member falls below
-`min_seed_combined_score`. The existing member-quality floor, full mass/RT/IM
-span limits and `min_group_size` still apply. Multiple alternatives from one run
-do not satisfy the two-run requirement, and weak singleton groups remain excluded.
+The old member/seed/minimum-size settings and `allow_replicated_weak_seeds` are
+removed. Every valid candidate can contribute evidence, with two original runs
+required for cross-run support. `max_group_qvalue` is the sole group-quality gate.
 
-The option defaults to false. It changes the final retention decision after
-grouping, so existing retained groups keep their members and seed. Added groups
-receive LFQ extraction and confidence estimates through the same path, with all
-original measurements retained in the long bundle for joint identification.
+Schema version 2 adds `group_score` and `group_qvalue` to `lfq_matrix.long.tsv`.
+These describe the parent target consensus group, including on synthetic decoy
+extraction rows; they are not confidences for the decoy signal. `lfq_q_value`
+remains separate and is blank for decoys. Ungrouped observations use
+`group_confidence_or_singleton` or `invalid_feature_score` instead of the removed
+member-quality exclusion. See [lfq-group-confidence.md](lfq-group-confidence.md).
+
+# Exclusive signal provenance
+
+Schema version 3 adds `lfq_ownership_status`, `lfq_owned_samples`,
+`lfq_excluded_samples`, `lfq_competing_consensus_id`, and
+`lfq_preceding_signal_fraction`. Suppressed shared or
+ambiguous residual signal has intensity zero; original observations and group
+statistics are retained. See [lfq-signal-ownership.md](lfq-signal-ownership.md)
+for native peak ownership, control symmetry and limitations.
