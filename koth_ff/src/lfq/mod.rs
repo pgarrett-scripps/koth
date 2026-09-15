@@ -50,10 +50,11 @@ pub struct LfqConfig {
     /// m/z tolerance for hill lookup (ppm)
     pub mz_ppm: f64,
     /// Half-window size as a fraction of the run's total RT span.
-    /// 0.01 = ±1% of gradient → 2% total window, centred on the feature RT.
-    /// Default 0.01.
+    /// 0.005 = ±0.5% of the observed RT span → 1% total window, centred on
+    /// the alignment-predicted native RT. Default 0.005.
     pub rt_window_pct: f64,
-    /// Ion mobility tolerance for hill lookup (absolute 1/K0 units)
+    /// Ion mobility half-window for hill lookup (absolute 1/K0 units).
+    /// Default 0.015; inert when the input has no ion mobility.
     pub im_tolerance: f64,
     /// Number of isotopologue rows: 1 = M only, 2 = M+M1, 3 = M+M1+M2
     pub n_isotopes: usize,
@@ -85,9 +86,9 @@ pub struct LfqConfig {
     #[serde(default = "default_decoy_mz_shift_da")]
     pub decoy_mz_shift_da: f64,
     /// Decoy RT shift as a fraction of the run's RT span, subtracted from the
-    /// target RT. With the default 0.01 and a ±`rt_window_pct` half-window,
-    /// the decoy window still overlaps the target window — keep this within
-    /// `rt_window_pct` if you want some overlap, or larger to fully separate.
+    /// target RT. The default 0.01 is twice the default extraction half-window,
+    /// so the target and decoy RT windows meet at one boundary. A shift larger
+    /// than twice `rt_window_pct` fully separates their RT intervals.
     #[serde(default = "default_decoy_rt_shift_pct")]
     pub decoy_rt_shift_pct: f64,
     /// Tolerances for building the multi-run consensus feature list.
@@ -226,8 +227,8 @@ impl Default for LfqConfig {
     fn default() -> Self {
         Self {
             mz_ppm: 10.0,
-            rt_window_pct: 0.01,
-            im_tolerance: 0.05,
+            rt_window_pct: 0.005,
+            im_tolerance: 0.015,
             n_isotopes: 3,
             grid_cols: 100,
             min_spectral_bhattacharyya: 0.1,

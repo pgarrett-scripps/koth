@@ -8,6 +8,25 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.7.0] — 2026-09-14
+
+### Feature finding and input streaming
+- Rank isotope-chain candidates with tuned additive evidence and retain the
+  best-scoring prefix. Per-run features must be regenerated for this release.
+- Stream native Bruker and optional Thermo MS1 inputs through bounded buffers.
+  Reader parity and error propagation have regression coverage.
+
+### Release compatibility
+- Preserve the 0.6.0 extraction defaults: RT half-window 0.005 of the observed
+  run span and absolute IM half-window 0.015, independent of group limits.
+- Regenerate both detection and LFQ outputs. Old consensus admission settings
+  are rejected; migrate to `max_group_qvalue`. Long bundles use schema version 3.
+- Group and cell q-values remain separate exploratory confidence measures;
+  neither establishes calibrated peptide identification FDR. Known ownership
+  and isotope-choice limitations remain documented below.
+
 ### Isotope-choice validation
 - Add a calculated-peptide-mass audit of isotope competitors across both full
   cohorts. A shared-envelope selector worsened Bruker isotope choices despite
@@ -45,6 +64,23 @@ and this project uses [Semantic Versioning](https://semver.org/).
   splits, isotope aliases and shared-signal reporting; adds diagnostic tests and
   reproducible audits. Exclusive extraction addresses demonstrated signal reuse;
   cross-group membership and isotope identity remain unresolved in some cases.
+
+## [0.6.0] — 2026-09-13
+
+### Changed
+- The default LFQ extraction RT half-window is 0.005 of each run's observed
+  RT span (±0.5%), centred on the alignment-predicted native retention time.
+- The default LFQ extraction ion-mobility half-window is 0.015 absolute 1/K0
+  units. This setting is inert on inputs without ion mobility.
+- Configuration documentation distinguishes extraction windows from the
+  independent alignment and consensus-grouping tolerances.
+
+### Compatibility and validation
+- Explicit extraction settings continue to override the defaults. Per-run
+  feature detection, alignment, consensus grouping, decoy offsets, and output
+  schemas are unchanged. Regenerate LFQ matrices when adopting these defaults.
+- The default extraction windows are covered by configuration-loading tests,
+  including independence from consensus limits and explicit-setting overrides.
 
 ## [0.5.0] — 2026-09-13
 

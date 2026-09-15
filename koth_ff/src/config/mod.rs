@@ -169,6 +169,33 @@ mod config_parse_tests {
         cfg.lfq.consensus.rt_window_pct = -0.1;
         assert!(cfg.lfq.consensus.validate().is_err());
     }
+
+    #[test]
+    fn omitted_lfq_windows_use_release_defaults_without_changing_grouping() {
+        for text in [
+            "",
+            "[lfq]\n",
+            include_str!("../../../example_config_align.toml"),
+        ] {
+            let cfg: AlignConfig = toml::from_str(text).expect("valid alignment config");
+            assert_eq!(cfg.lfq.rt_window_pct, 0.005);
+            assert_eq!(cfg.lfq.im_tolerance, 0.015);
+            assert_eq!(cfg.lfq.consensus.rt_window_pct, 0.02);
+            assert_eq!(cfg.lfq.consensus.im_tolerance, 0.05);
+            assert_eq!(cfg.alignment.im_tolerance, 0.05);
+        }
+    }
+
+    #[test]
+    fn explicit_lfq_windows_override_defaults_without_changing_grouping() {
+        let cfg: AlignConfig =
+            toml::from_str("[lfq]\nrt_window_pct = 0.01\nim_tolerance = 0.025\n")
+                .expect("valid custom extraction windows");
+        assert_eq!(cfg.lfq.rt_window_pct, 0.01);
+        assert_eq!(cfg.lfq.im_tolerance, 0.025);
+        assert_eq!(cfg.lfq.consensus.rt_window_pct, 0.02);
+        assert_eq!(cfg.lfq.consensus.im_tolerance, 0.05);
+    }
 }
 
 #[cfg(test)]
