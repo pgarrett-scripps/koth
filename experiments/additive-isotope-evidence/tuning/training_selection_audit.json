@@ -1,0 +1,76 @@
+[
+  {
+    "label": "s0.4_c2",
+    "sigma": 0.4,
+    "shape": 2.0,
+    "recall": 0.8432263840924072,
+    "failures": []
+  },
+  {
+    "label": "s0.4_c4",
+    "sigma": 0.4,
+    "shape": 4.0,
+    "recall": 0.8440331768942413,
+    "failures": [
+      "wrong_charge_only_rate"
+    ]
+  },
+  {
+    "label": "s0.4_c8",
+    "sigma": 0.4,
+    "shape": 8.0,
+    "recall": 0.8389956413510827,
+    "failures": [
+      "per-file recall",
+      "wrong_charge_only_rate"
+    ]
+  },
+  {
+    "label": "s0.5_c2",
+    "sigma": 0.5,
+    "shape": 2.0,
+    "recall": 0.8448793254425062,
+    "failures": []
+  },
+  {
+    "label": "s0.5_c4",
+    "sigma": 0.5,
+    "shape": 4.0,
+    "recall": 0.8445251237246278,
+    "failures": []
+  },
+  {
+    "label": "s0.5_c8",
+    "sigma": 0.5,
+    "shape": 8.0,
+    "recall": 0.8381888485492488,
+    "failures": [
+      "per-file recall",
+      "wrong_charge_only_rate"
+    ]
+  },
+  {
+    "label": "s0.75_c2",
+    "sigma": 0.75,
+    "shape": 2.0,
+    "recall": 0.845873058039887,
+    "failures": []
+  },
+  {
+    "label": "s0.75_c4",
+    "sigma": 0.75,
+    "shape": 4.0,
+    "recall": 0.8430788000432913,
+    "failures": []
+  },
+  {
+    "label": "s0.75_c8",
+    "sigma": 0.75,
+    "shape": 8.0,
+    "recall": 0.835178133947283,
+    "failures": [
+      "per-file recall",
+      "wrong_charge_only_rate"
+    ]
+  }
+]

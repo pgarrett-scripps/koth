@@ -128,9 +128,10 @@ further stages that operate on the collected output from Stage 1–3.
 
 Hills are chromatographic traces — a single m/z signal tracked across consecutive MS1 scans.
 
-The detector processes the file one spectrum at a time using a streaming iterator (`stream_mzml`).
-No `Vec<Spectrum>` is ever held in memory; peak RSS is O(active hills) rather than
-O(total peaks in the file).
+The detector consumes MS1 spectra incrementally for mzML, Bruker `.d`, and Thermo `.raw`
+(`io::stream_spectra`). Bruker decodes batches of at most 32 frames in parallel and queues
+at most 32 spectra; mzML and Thermo prefetch at most 64 spectra. Native readers sort scan
+metadata before decoding to preserve retention-time order without retaining all peak arrays.
 
 For each scan the detector builds a scratch buffer of `(mz_mean, hill_id)` pairs sorted by m/z,
 then binary-searches it for each incoming peak. Because peaks arrive sorted by m/z within a scan,
@@ -195,10 +196,14 @@ A candidate partner must satisfy:
   ±`max_isotope_log2_ratio`.
 
 This produces an over-complete `(seed, charge)` candidate pool, which is then resolved
-**non-destructively**: contested hills are claimed longest-envelope-first, and a candidate
-whose hills are partly claimed is truncated to its free monoisotope-anchored prefix,
-re-scored, and re-queued rather than dropped. Feature detection also records
-per-adjacent-pair cosine similarities and ppm errors for downstream quality filtering.
+**non-destructively**: each candidate competes using its best-scoring valid
+monoisotope-anchored prefix. The score sums per-isotope log evidence from the
+seed-relative averagine intensity ratio and chromatographic co-elution against
+explicit noise models. Good isotopes add evidence and poor ones subtract;
+envelope length never overrides the score. After a conflict, the resolver selects
+the best remaining free prefix and requeues it, so its priority cannot increase.
+Feature detection also records per-adjacent-pair cosine similarities and ppm
+errors for downstream quality filtering.
 
 ### Stage 3: Scoring
 
@@ -313,9 +318,15 @@ of the gradient, then extracted with identical logic. Q-values are then computed
 
 ## Memory design
 
-The streaming hill detector never accumulates spectra. It reads one spectrum, updates the active
-hill map, evicts stale hills, and discards the spectrum. For a 1 GB mzML file this keeps peak
-RSS around 150 MB.
+With default settings, MS1 hill detection uses bounded spectrum buffers for every input format.
+It updates active hills and discards each consumed spectrum, retaining completed hills for
+isotope assembly. Native readers also retain scan metadata and vendor/library state; total
+process memory therefore includes more than the spectrum buffers. The `bruker_streaming`
+setting selects the dnoise preprocessing mode; both modes stream spectra into detection.
+
+Explicit decoy shuffling and optional TIC normalization still collect spectra. Gzipped mzML
+currently buffers the decompressed file before decoding spectra incrementally. The collecting
+`read_spectra` API remains available for callers that need a complete spectrum vector.
 
 Once hill detection is complete the hill list is passed to feature detection. Hills hold their
 intensity profiles as `Arc<[f32]>`, so features can reference the same profile data without

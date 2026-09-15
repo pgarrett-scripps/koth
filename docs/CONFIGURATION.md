@@ -260,8 +260,10 @@ min_scans = 2
 | `sulfur_offsets` | list[int] | `[-1, 0, 1]` | Sulfur-count offsets, relative to the **ceiling** of the averagine-expected count, to score each chain against — one averagine template per offset, best Bhattacharyya kept. Corrects the systematic penalty on Cys/Met-rich peptides (³⁴S lifts M+2). Default resolves to `{0,1,2}` sulfurs up to 2665 Da, `{1,2,3}` to 5330, `{2,3,4}` to 7995. Negatives saturate at 0 and duplicates collapse. Widen to `[-2,-1,0,1]` to keep the no-sulfur template on large peptides (~32 % of 3 kDa peptides have none). **Empty list disables sulfur awareness.** Scoring is a max over templates, so a longer list can only raise scores incl. decoys — judge changes on recall, not the score distribution. `koth_ff_sulfur_{on,off}.toml` exist for A/B. |
 | `isotope_model` | enum or table | `"peptide"` | Which analyte class's average composition the theoretical isotope pattern comes from. `"peptide"` is Senko's averagine (C₄.₉₃₈₄H₇.₇₅₈₃N₁.₃₅₇₇O₁.₄₇₇₃S₀.₀₄₁₇ / 111.1254 Da) and **the only model the published benchmark exercises**. `"rna"` (C₉.₅H₁₁.₇₅N₃.₇₅O₇ / 321.2916 Da) and `"dna"` (C₉.₇₅H₁₂.₂₅N₃.₇₅O₆ / 308.8006 Da) are unweighted means of the four chain residues; phosphorus is carried in the residue mass only, since ³¹P is monoisotopic and cannot shift a pattern. An explicit table overrides both: `isotope_model = { residue_mass = 321.2916, c = 9.5, h = 11.75, n = 3.75, o = 7.0 }` (`s` defaults to 0). A model without sulfur ignores `sulfur_offsets`. An unknown name is a parse error, never a silent fallback. On a PXD075396 RNase digest the RNA model raised the mean isotope score 0.821 → 0.848 and the share ≥0.90 from 33.8 % to 42.9 % against the peptide model. |
 | `neutron_mass` | f64 | `1.003354835` | C13 mass offset for isotope-spacing targets. Default. |
-| `exhaustive_min_isotope_score` | f64 | `0.0` | Exhaustive-resolver knob (unmerged experiment): min Bhattacharyya a candidate needs to *claim* its hills. `0.0` = no gate. Not set in shipped configs. |
-| `exhaustive_isotope_priority` | bool | `false` | Exhaustive-resolver knob: order contested-hill claims by envelope length → isotope score → composite. `false`. Not set in shipped configs. |
+| `exhaustive_min_isotope_score` | f64 | `0.0` | Minimum Bhattacharyya score a prefix needs to *claim* its hills. The resolver searches for the highest-evidence prefix that passes. `0.0` disables this claim gate; downstream retention filters still apply. |
+| `isotope_evidence_ratio_sigma` | f64 | `0.75` | Signal standard deviation of seed-relative log2 apex-intensity-ratio errors, against a broad Normal(0, 2²) noise null. Must be finite and strictly between 0 and 2. Used for additive claim ranking and best-prefix selection; does not change the per-step ratio gate. |
+| `isotope_evidence_cosine_shape` | f64 | `2.0` | Shape of the Beta(shape, 1) seed-anchored co-elution model against a uniform null. Must be finite and >1. Higher values favor tighter co-elution. These working likelihood models are not calibrated feature FDRs. |
+| `exhaustive_isotope_priority` | bool | `false` | Legacy compatibility field; ignored. Contested-hill claims always rank by additive isotope log evidence. |
 
 #### Final retention filters (AND-ed; drop the whole feature)
 | Key | Type | Default → shipped | What it does / what to set |
@@ -339,13 +341,13 @@ and (if `run_tdc`) repeat with a decoy.
 | `isotope_model` | enum or table | `"peptide"` | As `[features] isotope_model`, for the LFQ consensus templates. **Must match** the model the per-run features were detected with, or every cell is scored against a pattern the detector never used. |
 | `normalize` | String | `"none"` | Cross-run matrix normalisation. **`"none"` for the paper** (the benchmark normalises every tool identically downstream, so an in-binary median-of-ratios would double-normalise unfairly). `"median_ratios"` = DESeq/edgeR size factors — a **validated option for standalone use** where you consume the matrix directly. |
 | `quant_estimator` | String | `"sum"` (both platforms) | Per-cell estimator over the grid. Under all-grid quantification `"sum"` beats `"apex"` on Orbitrap (CV 12.31 vs 13.19 %, HUMAN IQR 0.194 vs 0.206) and the two are a wash on Bruker (CV 9.06 vs 9.19 %). The old "apex wrecks IQR 0.227→0.413" result was measured in the mixed detected-feature/grid regime and no longer applies. |
-| `detected_use_grid` | bool | `true` (both platforms; **code default flipped 2026-08-27**) | Quantify **every** cell (detected + MBR) by the same grid re-integration — one estimator, one scale. Essential on timsTOF (feature integrates IM, 2-D grid doesn't; mixed scales inflated CV 38→13.7%) and a validated win on Orbitrap too (gated CV 14.27→12.31 %, ECOLI bias −0.067→−0.020, HUMAN IQR 0.219→0.194). `false` only reproduces pre-2026-08-27 mixed-scale matrices. |
+| `detected_use_grid` | bool | `true` (both platforms; **code default flipped 2026-08-27**) | Quantify **every** cell (detected + MBR) by the same grid re-integration — one estimator, one scale. Essential on timsTOF (feature integrates IM, 2-D grid doesn't; mixed scales inflated CV 38→13.7%) and a validated win on Orbitrap too (gated CV 14.27→12.31 %, ECOLI bias −0.067→−0.020, HUMAN IQR 0.219→0.194). `false` now warns and uses grid intensities because exclusive native-signal ownership requires grid quantification. |
 | `rt_spread_scoring` | bool | `false` | Replace the raw RT term with a σ-normalised Gaussian likelihood using the per-run post-warp RT-residual spread (region-aware; strict where alignment is confident). Applied to target+decoy so TDC stays calibrated. **Validated but default-off**; omit unless experimenting. |
 | `averagine_projection` | bool | `false` | Report the averagine matched-filter projection per cell instead of the raw box-sum (keeps on-pattern signal, rejects orthogonal contamination). **Tested negative on Orbitrap** (CV +3.1 pp, IQR +0.036, FFCR +1.9 pp, recall flat — see [§5](#5-experimental-knob-status-do-not-re-litigate)); untested on Bruker (its background-floor regime is where it might help). Byte-identical when off. **Keep `false`.** |
 
 *Removed keys that now error:* `spectral_cosine_min` (→ `min_spectral_bhattacharyya`),
 `spectral_bhattacharyya`, `spectral_coelution` (both signals always on),
-`min_feature_score` (→ `[lfq.consensus].min_member_combined_score`).
+`min_feature_score` (removed; see the group confidence gate below).
 
 **q-value mechanics.** With `run_tdc=true` the active path is a semi-supervised,
 cross-validated **QDA rescorer** (`lfq/rescore.rs`, Percolator-style protocol)
@@ -355,23 +357,52 @@ MBR) competes against decoys — a detected cell in a depleted well is still
 gatable. Deterministic (no RNG). The simpler ranker in `lfq/tdc.rs` is retained
 as reference but not used by the pipeline.
 
-### 4.3 `[lfq.consensus]` — cross-run grouping quality filters
-Features are projected into reference space and grouped in deterministic quality
-order. Each complete group must fit the mass, RT and IM span limits below;
-missing IM cannot bridge incompatible measured IM values. These limits are
-independent of the LFQ extraction windows. Size and seed-quality filters apply
-after grouping, and each run's primary observation is selected by its own quality.
-Original alternatives remain available in the optional long bundle.
+### 4.3 `[lfq.consensus]` — experimental cross-run confidence
 
-| Key | Type | Default → shipped | What it does / what to set |
+The [independent-permutation audit](lfq-group-permutation.md) replaces the initial
+whole-run shifts with stable controls on the tested cohorts. The group gate is
+still experimental: `0.05` is not a validated 5% identification or member-link FDR.
+
+All finite scored features with known charge and valid projected coordinates can
+enter bounded candidate groups, including scores below 0.5. The highest-quality
+member still provides reference coordinates, but its score is not an admission
+threshold. Each run supplies at most one primary observation; alternatives stay
+available in the long bundle and dilute ambiguous group support.
+
+| Key | Type | Default | Meaning |
 |---|---|---|---|
-| `mz_ppm` | f64 | `20.0` | Maximum full group mass span in ppm. Independent of `[lfq].mz_ppm`. |
-| `rt_window_pct` | f64 | `0.02` | Maximum full group RT span as a fraction of the reference gradient. |
-| `im_tolerance` | f64 | `0.05` | Maximum full group IM span. Missing values cannot bridge incompatible known values. |
-| `allow_replicated_weak_seeds` | bool | `false` | Experimental: retain groups supported by at least two distinct original runs below the seed floor. Member-quality and group-size limits still apply; duplicate alternatives in one run do not qualify. |
-| `min_member_combined_score` | f64 | `0.5` | Pre-grouping filter: a feature's `combined_score` must clear this to join/seed a group (else excluded, doesn't count toward `n_contributing_runs`). `0.0` keeps everything. |
-| `min_group_size` | usize | `2` | Min distinct runs that must detect a feature to keep the group. `2` (of 20) in the benchmark. `1` = keep single-run detections; raise for stricter reproducibility. |
-| `min_seed_combined_score` | f64 | `0.75` | Post-grouping filter: drop a group whose best member (seed) is below this. `0.0` keeps all groups. |
+| `mz_ppm` | f64 | `20.0` | Maximum full group mass span in ppm. |
+| `rt_window_pct` | f64 | `0.02` | Maximum full group RT span as a fraction of reference run span. |
+| `im_tolerance` | f64 | `0.05` | Maximum full IM span; missing IM cannot bridge incompatible values. |
+| `max_group_qvalue` | f64 | `0.05` | Experimental permuted-RT group gate. `1.0` keeps every replicated candidate for auditing. |
+
+`min_member_combined_score`, `min_seed_combined_score`, `min_group_size` and
+`allow_replicated_weak_seeds` are removed and rejected by the parser. Delete them
+from old configs and set `max_group_qvalue`. Two distinct original runs are
+required for cross-run support; a single-run dataset yields no consensus groups.
+
+Group evidence combines continuous detector quality, pairwise mass/RT/IM
+agreement and ambiguity from within-run alternatives. Ten deterministic,
+independent RT permutations within each run, charge and detector-score bin
+(width 0.1) preserve that stratum's exact RT distribution. Mass, IM, quality and
+feature provenance remain unchanged. The controls undergo identical grouping
+and scoring; fixed points are allowed. This replaces the initial whole-run
+circular translations, whose control counts were unstable with small run counts.
+At each score cutoff, estimated false groups equal one plus the average null
+count; division by the target count and a reverse cumulative minimum give the
+group q-value. The log reports retained counts from the two five-control halves
+and the pooled ten-control estimate. These internal controls add no user settings.
+
+This is not a learned probability model or a validated FDR guarantee. Permutations
+do not preserve within-stratum mass–RT or IM–RT dependence, or within-run group
+structure. Concentrated RT distributions can provide no useful discrimination;
+recurring artifacts and false attachments to real groups require separate
+validation. Group confidence does not identify peptides or establish every link.
+
+The existing per-cell extraction and gate still apply. `group_score` and
+`group_qvalue` are exported in the consensus table and long bundle, separately
+from `lfq_q_value`. No group-confidence value is reused as cell confidence.
+See [lfq-group-permutation.md](lfq-group-permutation.md) for the current experiment.
 
 ### 4.4 `[output]`
 | Key | Type | Default → shipped | What it does |
@@ -468,3 +499,11 @@ config field, update this file, `example_config*.toml` here, and the tuned
 `deny_unknown_fields` parse test fails the build if the templates in THIS repo
 disagree with the structs; it can no longer see the tuned configs, and it cannot
 check this doc — keep both current by hand.*
+
+### Experimental exclusive LFQ extraction
+
+The group-confidence worktree reserves native hill-profile peak segments across
+competing LFQ groups and rebuilds residual extractions before cell scoring. This
+requires grid quantification: `detected_use_grid=false` now warns and uses the
+grid estimator. There are no additional user settings. See
+[signal ownership](lfq-signal-ownership.md) for behavior, provenance and limits.

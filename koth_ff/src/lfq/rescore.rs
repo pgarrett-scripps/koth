@@ -419,6 +419,11 @@ mod tests {
         bc: f32,
     ) -> LfqEntry {
         LfqEntry {
+            owned_samples: 0,
+            preceding_signal_fraction: 0.0,
+            excluded_samples: 0,
+            competing_feature: None,
+            ownership_status: "exclusive",
             feature_idx,
             run_idx,
             intensity: 1.0,

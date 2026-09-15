@@ -2,8 +2,8 @@
 //!
 //! An over-complete `(seed, charge)` hypothesis pool is generated in parallel
 //! (`build_charge_candidate`) and resolved non-destructively (`resolve_exhaustive`)
-//! by claiming contested hills longest-envelope-first, truncating a partly-claimed
-//! candidate to its free monoisotope-anchored prefix rather than dropping it.
+//! by claiming each candidate's best valid prefix in descending evidence order.
+//! After conflicts, the best remaining free prefix is rescored and requeued.
 //!
 //! **Chains extend upward only.** The seed IS the monoisotope hypothesis: a
 //! chain runs seed → M+1 → M+2 → …, never downward. Every hill is tried as a
@@ -255,54 +255,127 @@ pub(super) fn build_charge_candidate(
     }
 }
 
-/// Recompute `(composite, mean_cosine, isotope_score)` of a (possibly truncated)
-/// m/z-sorted chain. Mirrors the generation formula:
-/// `isotope_score × mean_adjacent_cosine`.
+/// Summed log evidence for every monoisotope-anchored prefix (index = length - 1).
+/// Each M+k contributes a seed-relative apex-ratio and chromatographic-cosine
+/// log-likelihood ratio. Ratio residuals are N(0, signal_sigma²) against a broad
+/// N(0, 2²) noise null; cosine is Beta(cosine_shape, 1) against Uniform(0, 1).
+/// These working models are not calibrated feature probabilities or FDRs.
+///
+/// Accumulate each sulfur template separately, then maximize each whole-prefix
+/// sum over templates. Retained observations never depend on tail length or a
+/// combined apex, so removing a tail cannot alter the retained evidence terms.
+fn prefix_log_evidence(
+    hills: &[&Hill],
+    charge: u8,
+    config: &FeaturesConfig,
+    polarity: Polarity,
+) -> Vec<f64> {
+    let mut scores = vec![f64::NEG_INFINITY; hills.len()];
+    if hills.len() < 2 || charge == 0 {
+        return scores;
+    }
+    let seed_apex = hills[0].intensity_max;
+    if !seed_apex.is_finite() || seed_apex <= 0.0 {
+        return scores;
+    }
+    let model = config.isotope_model.model();
+    let neutral_mass = polarity.neutral_mass(hills[0].mz, charge);
+    let (c, h, n, o, s) = model.counts(neutral_mass);
+    let sulfur_counts = if config.sulfur_offsets.is_empty() || !model.has_sulfur() {
+        vec![s]
+    } else {
+        averagine::resolve_sulfur_counts(&model, neutral_mass, &config.sulfur_offsets)
+    };
+    let observations: Vec<(f64, f64)> = hills[1..]
+        .iter()
+        .map(|hill| {
+            let log_ratio = hill.intensity_max.log2() - seed_apex.log2();
+            let cosine = cosine_similarity(hills[0], hill, config.min_scan_overlap);
+            (log_ratio, cosine)
+        })
+        .collect();
+    for s in sulfur_counts {
+        let template = crate::scoring::elements::cache().distribution(c, h, n, o, s);
+        let mut sum = 0.0;
+        for (k, &(observed, cosine)) in observations.iter().enumerate() {
+            let expected = template.get(k + 1).copied().unwrap_or(0.0);
+            let contribution = if expected <= 0.0 || template[0] <= 0.0 {
+                f64::NEG_INFINITY
+            } else {
+                let residual = observed - (expected.log2() - template[0].log2());
+                isotope_log_evidence(residual, cosine, config)
+            };
+            sum += contribution;
+            scores[k + 1] = scores[k + 1].max(sum);
+        }
+    }
+    scores
+}
+
+/// Select the best valid prefix, both before heap insertion and after conflicts.
+/// The heap key is therefore an upper bound on every remaining valid prefix:
+/// claiming hills can only remove choices, never expose a higher-scoring one.
+/// Tied prefixes choose the smaller set of hills; length never adds evidence.
 fn rescore_chain(
     chain: &[usize],
     charge: u8,
     sorted_hills: &[&Hill],
     config: &FeaturesConfig,
     polarity: Polarity,
-) -> (f64, f64, f64) {
-    if chain.len() < 2 {
-        return (0.0, 0.0, 0.0);
-    }
+) -> Option<HeapItem> {
     let hills: Vec<&Hill> = chain.iter().map(|&i| sorted_hills[i]).collect();
-    let mut cos_sum = 0.0;
-    for k in 0..hills.len() - 1 {
-        cos_sum += cosine_similarity(hills[k], hills[k + 1], config.min_scan_overlap);
+    let scores = prefix_log_evidence(&hills, charge, config, polarity);
+    let mut ends: Vec<usize> = (1..chain.len()).collect();
+    ends.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]).then(a.cmp(&b)));
+    for end in ends {
+        if !scores[end].is_finite() {
+            continue;
+        }
+        // Evaluate the unchanged Bhattacharyya claim gate only when enabled.
+        // A failing best prefix must not hide a lower-scoring valid prefix.
+        if config.exhaustive_min_isotope_score > 0.0
+            && score_chain(
+                &hills[..=end],
+                charge,
+                &config.sulfur_offsets,
+                &config.isotope_model.model(),
+                polarity,
+            ) < config.exhaustive_min_isotope_score
+        {
+            continue;
+        }
+        return Some(HeapItem {
+            chain: chain[..=end].to_vec(),
+            charge,
+            log_evidence: scores[end],
+        });
     }
-    let mean_cosine = cos_sum / (hills.len() - 1) as f64;
-    let isotope_score = score_chain(
-        &hills,
-        charge,
-        &config.sulfur_offsets,
-        &config.isotope_model.model(),
-        polarity,
-    );
-    let composite = isotope_score * mean_cosine.max(0.0);
-    (composite, mean_cosine, isotope_score)
+    None
+}
+
+/// Natural-log likelihood ratio for one seed-anchored isotope observation.
+fn isotope_log_evidence(log2_ratio_residual: f64, cosine: f64, config: &FeaturesConfig) -> f64 {
+    if !log2_ratio_residual.is_finite() || !cosine.is_finite() || cosine <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    let signal_sigma = config.isotope_evidence_ratio_sigma;
+    const NOISE_SIGMA: f64 = 2.0;
+    let ratio_llr = (NOISE_SIGMA / signal_sigma).ln()
+        - 0.5 * log2_ratio_residual.powi(2) * (signal_sigma.powi(-2) - NOISE_SIGMA.powi(-2));
+    let shape = config.isotope_evidence_cosine_shape;
+    let cosine_llr = shape.ln() + (shape - 1.0) * cosine.min(1.0).ln();
+    ratio_llr + cosine_llr
 }
 
 /// Priority-queue item for the exhaustive resolver.
 ///
-/// Ordering (max-heap: the "best" candidate pops first):
-///   1. more hills (longer envelope) first,
-///   2. if `iso_priority`: higher isotope-pattern score, then higher composite;
-///      otherwise: higher composite score,
-///   3. deterministic tie-break: smaller monoisotope index, then smaller charge.
-///
-/// The deterministic tie-break is essential: iteration order of the seed loop or
-/// any hash structure must never influence which candidate wins a contested hill.
-/// `iso_priority` is copied from `FeaturesConfig::exhaustive_isotope_priority` and
-/// is identical for every item in a heap, so the order stays total.
+/// Ordering (max-heap): higher summed log evidence first, with smaller
+/// monoisotope index then smaller charge as deterministic ties. Envelope
+/// length and the diagnostic isotope score never override the evidence.
 struct HeapItem {
     chain: Vec<usize>, // m/z-sorted, monoisotope first
     charge: u8,
-    composite: f64,
-    isotope_score: f64,
-    iso_priority: bool,
+    log_evidence: f64,
 }
 
 impl HeapItem {
@@ -324,21 +397,8 @@ impl PartialOrd for HeapItem {
 }
 impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> Ordering {
-        let f = |x: f64, y: f64| x.partial_cmp(&y).unwrap_or(Ordering::Equal);
-        // length ascending in Ord => longer is "greater" => pops first.
-        self.chain
-            .len()
-            .cmp(&other.chain.len())
-            // #2: when iso_priority, best averagine fit wins the contested hill
-            // within a length class, before falling back to composite.
-            .then_with(|| {
-                if self.iso_priority {
-                    f(self.isotope_score, other.isotope_score)
-                } else {
-                    Ordering::Equal
-                }
-            })
-            .then_with(|| f(self.composite, other.composite))
+        self.log_evidence
+            .total_cmp(&other.log_evidence)
             // smaller mono index should pop first => compare as GREATER (reverse).
             .then_with(|| other.mono().cmp(&self.mono()))
             // smaller charge pops first => reverse.
@@ -349,10 +409,10 @@ impl Ord for HeapItem {
 /// Non-destructive, confidence-ordered conflict resolution.
 ///
 /// Generates one candidate per `(seed, charge)` with ≥1 isotope partner, then
-/// resolves contested hills by envelope length (longest first). A candidate whose
-/// isotope hills are partly claimed is truncated to its free monoisotope-anchored
-/// prefix, re-scored, and re-queued — only dropped when its monoisotope hill is
-/// taken, nothing but the mono survives, or it fails the isotope-score claim gate.
+/// resolves contested hills by the maximum summed log evidence over valid
+/// prefixes. Conflicts restrict the feasible set to still-free prefixes, whose
+/// maximum cannot exceed the previously queued score. Drop only when the mono
+/// is taken or no finite-scoring prefix with an isotope partner passes the gate.
 pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
     use std::collections::BinaryHeap;
 
@@ -365,25 +425,16 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
     // (seed, charge) is independent and reads only shared immutable arrays, so
     // generation runs in PARALLEL over seeds (like the main detection loop's
     // `into_par_iter`), then the results are heapified once via an O(n)
-    // `BinaryHeap::from`. The heap's `Ord` is a total order (envelope length,
-    // isotope/composite score, then monoisotope-index and charge tie-breaks), so
-    // the pop sequence is independent of insertion order — this stays
-    // byte-identical to the former sequential push loop. `flat_map_iter` keeps
+    // `BinaryHeap::from`. The heap's `Ord` orders by log evidence, then
+    // monoisotope index and charge, so the pop sequence is independent of
+    // insertion order. `flat_map_iter` keeps
     // the per-seed charge loop sequential inside each parallel task.
     let items: Vec<HeapItem> = (0..sorted_hills.len())
         .into_par_iter()
         .flat_map_iter(|seed_idx| {
             (config.min_charge..=config.max_charge).filter_map(move |charge| {
-                build_charge_candidate(ctx, seed_idx, charge).map(|c| {
-                    let (composite, _mc, isotope_score) =
-                        rescore_chain(&c.hill_indices, c.charge, sorted_hills, config, polarity);
-                    HeapItem {
-                        chain: c.hill_indices,
-                        charge: c.charge,
-                        composite,
-                        isotope_score,
-                        iso_priority: config.exhaustive_isotope_priority,
-                    }
+                build_charge_candidate(ctx, seed_idx, charge).and_then(|c| {
+                    rescore_chain(&c.hill_indices, c.charge, sorted_hills, config, polarity)
                 })
             })
         })
@@ -405,12 +456,6 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
             k += 1;
         }
         if k == item.chain.len() {
-            // #1 quality gate: drop (without claiming) a candidate that can't
-            // clear the isotope-pattern bar, so its hills stay free for a
-            // better-fitting feature. No-op when the bar is 0.
-            if item.isotope_score < config.exhaustive_min_isotope_score {
-                continue;
-            }
             for &i in &item.chain {
                 claimed[i] = true;
             }
@@ -419,20 +464,17 @@ pub(super) fn resolve_exhaustive(ctx: &ChainCtx) -> Vec<Candidate> {
                 charge: item.charge,
             });
         } else if k >= 2 {
-            // Truncate to the free prefix, re-score, re-queue at reduced
-            // confidence. Drop the remnant if it fails the #1 gate (freeing its
-            // hills) rather than re-queuing junk.
-            let prefix: Vec<usize> = item.chain[..k].to_vec();
-            let (composite, _mc, isotope_score) =
-                rescore_chain(&prefix, item.charge, sorted_hills, config, polarity);
-            if isotope_score >= config.exhaustive_min_isotope_score {
-                heap.push(HeapItem {
-                    chain: prefix,
-                    charge: item.charge,
-                    composite,
-                    isotope_score,
-                    iso_priority: config.exhaustive_isotope_priority,
-                });
+            // Re-select among all still-free prefixes. The queued score was
+            // already their maximum, so rescoring cannot increase priority.
+            if let Some(prefix) = rescore_chain(
+                &item.chain[..k],
+                item.charge,
+                sorted_hills,
+                config,
+                polarity,
+            ) {
+                debug_assert!(prefix.log_evidence <= item.log_evidence);
+                heap.push(prefix);
             }
         }
         // k == 1: only the monoisotope survives — drop (a lone hill is not a

@@ -69,6 +69,13 @@ fn ensure_dotnet_root() {
 /// Read all MS1 (centroided) spectra from a Thermo `.raw` file, returning the same
 /// `Vec<Spectrum>` shape as [`crate::io::mzml::read_mzml`].
 pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
+    stream_thermo(path)?.collect()
+}
+
+/// Index scan metadata without loading signal arrays, then decode MS1 spectra
+/// lazily in stable retention-time order. Errors stop the stream; empty spectra
+/// are skipped and emitted spectra receive contiguous scan indices.
+pub fn stream_thermo(path: &Path) -> Result<super::SpectrumStream, KothError> {
     ensure_dotnet_root();
     let mut reader = RawFileReader::open(path).map_err(|e| {
         KothError::ThermoError(format!(
@@ -81,51 +88,64 @@ pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
     // Thermo reader to centroid so profile-mode MS1 scans arrive as peak lists.
     reader.set_centroid_spectra(true);
 
-    let n = reader.len();
-    let mut spectra: Vec<Spectrum> = Vec::with_capacity(n);
-
-    for i in 0..n {
-        let Some(spec) = reader.get(i) else { continue };
-        if spec.ms_level() != 1 {
-            continue; // MS1 only, matching read_mzml
+    reader.set_signal_loading(false);
+    let mut indices = Vec::new();
+    for i in 0..reader.len() {
+        let spec = reader
+            .get(i)
+            .ok_or_else(|| KothError::ThermoError(format!("could not read scan {i} metadata")))?;
+        if spec.ms_level() == 1 {
+            if !spec.time().is_finite() {
+                return Err(KothError::ThermoError(format!(
+                    "non-finite RT for scan {i}"
+                )));
+            }
+            indices.push((i, spec.time()));
         }
-
-        let peaks = centroid_peaks(&spec);
-        if peaks.is_empty() {
-            continue;
+    }
+    indices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    reader.set_signal_loading(true);
+    let mut indices = indices.into_iter();
+    let mut count = 0;
+    let mut finished = false;
+    Ok(Box::new(std::iter::from_fn(move || {
+        if finished {
+            return None;
         }
-        let faims_cv = reader.get_raw_trailers_for(i).and_then(|trailers| {
-            trailers
-                .get_label("FAIMS CV")
-                .and_then(|v| parse_faims_cv(v.value))
-        });
-
-        spectra.push(Spectrum {
-            scan_index: 0,               // assigned after the RT sort below
-            retention_time: spec.time(), // Thermo reports scan time in minutes
-            peaks,
-            ms_level: 1,
-            isolation_window: None,
-            faims_cv,
-        });
-    }
-
-    if spectra.is_empty() {
-        return Err(KothError::NoSpectra);
-    }
-
-    // Sort by retention time and re-index, identical to `read_mzml`.
-    spectra.sort_by(|a, b| {
-        a.retention_time
-            .partial_cmp(&b.retention_time)
-            .unwrap_or(Ordering::Equal)
-    });
-    for (i, s) in spectra.iter_mut().enumerate() {
-        s.scan_index = i;
-    }
-
-    log::info!("Read {} MS1 spectra from Thermo .raw", spectra.len());
-    Ok(spectra)
+        for (i, retention_time) in indices.by_ref() {
+            let Some(spec) = reader.get(i) else {
+                finished = true;
+                return Some(Err(KothError::ThermoError(format!(
+                    "could not read MS1 scan {i}"
+                ))));
+            };
+            let peaks = centroid_peaks(&spec);
+            if peaks.is_empty() {
+                continue;
+            }
+            let faims_cv = reader.get_raw_trailers_for(i).and_then(|trailers| {
+                trailers
+                    .get_label("FAIMS CV")
+                    .and_then(|v| parse_faims_cv(v.value))
+            });
+            let spectrum = Spectrum {
+                scan_index: count,
+                retention_time,
+                peaks,
+                ms_level: 1,
+                isolation_window: None,
+                faims_cv,
+            };
+            count += 1;
+            return Some(Ok(spectrum));
+        }
+        finished = true;
+        if count == 0 {
+            Some(Err(KothError::NoSpectra))
+        } else {
+            None
+        }
+    })))
 }
 
 /// Parse the Thermo `FAIMS CV` trailer value. Trailer values normally contain

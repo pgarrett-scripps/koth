@@ -1,6 +1,7 @@
 pub mod consensus;
 pub mod grid;
 pub mod integrate;
+mod ownership;
 pub mod rescore;
 pub mod score;
 pub mod tdc;
@@ -16,9 +17,11 @@ use serde::{Deserialize, Serialize};
 use crate::alignment::{AlignmentResult, RunInput};
 
 use consensus::{build_consensus, ConsensusConfig, ConsensusFeature};
-use grid::{build_grid, SortedHills, XicGrid};
+use grid::{build_grid_excluding, SampleId, SortedHills, XicGrid};
 use integrate::{integrate, PeakResult};
+use ownership::CellCandidate;
 use score::{score_grid, ColumnScores};
+use std::collections::HashSet;
 
 use crate::models::Hill;
 use crate::scoring::elements::K_PATTERN;
@@ -118,7 +121,8 @@ pub struct LfqConfig {
     /// and validated as a win on Orbitrap too (PXD003881: gated matrix CV
     /// 14.27 → 12.31 %, ECOLI bias −0.067 → −0.020, HUMAN IQR 0.219 → 0.194).
     /// Default TRUE since 2026-08-27: one estimator, one scale, everywhere.
-    /// Set false only to reproduce pre-2026-08-27 mixed-scale matrices.
+    /// Legacy false values now warn and use grid intensities: exclusive native
+    /// signal ownership cannot validate a feature-intensity override.
     #[serde(default = "default_detected_use_grid")]
     pub detected_use_grid: bool,
     /// Replace the raw RT closeness term in the hybrid score with a
@@ -366,6 +370,13 @@ fn apply_median_ratio_normalization(
 /// chromatographic cosine between isotope hills).
 #[derive(Debug, Clone)]
 pub struct LfqEntry {
+    /// Exclusive raw-sample accounting, separately for targets and controls.
+    pub owned_samples: usize,
+    /// Co-eluting preceding-isotope signal unexplained by this mono hypothesis.
+    pub preceding_signal_fraction: f32,
+    pub excluded_samples: usize,
+    pub competing_feature: Option<usize>,
+    pub ownership_status: &'static str,
     pub feature_idx: usize,
     pub run_idx: usize,
     pub intensity: f64,
@@ -384,7 +395,8 @@ pub struct LfqEntry {
     pub is_decoy: bool,
     /// True when this run did NOT contribute a feature to the consensus group,
     /// so the intensity was re-integrated from raw hills at the predicted RT/mz
-    /// (match-between-runs). False = the run's own detected feature intensity.
+    /// (match-between-runs). False = an original detection contributed to the
+    /// group; both kinds are quantified by the same exclusive grid extraction.
     pub is_mbr: bool,
     /// Expected RT in native run space used to centre the XIC grid. For
     /// targets this is the alignment-predicted RT; for decoys it is the
@@ -507,10 +519,8 @@ impl PhaseTimers {
 
 /// Quantify a single (feature, run) cell — target OR decoy — by the shared
 /// build_grid → score_grid → integrate → peak_rt_stats → `LfqEntry` sequence.
-/// The scratch buffers (`grid`, `scores`, `col_totals`, `obs`) are reused across
-/// the target and decoy calls for one feature. `intensity_override` supplies the
-/// per-run detected-feature intensity for detected target cells; when `None` the
-/// grid re-integration intensity (apex or summed, per `quant_estimator`) is used.
+/// Grid intensity (apex or summed, per `quant_estimator`) is always used so
+/// every reported quantity has original-sample provenance.
 #[allow(clippy::too_many_arguments)]
 fn quantify_cell(
     grid: &mut XicGrid,
@@ -534,10 +544,10 @@ fn quantify_cell(
     rt_sigma: Option<f32>,
     is_decoy: bool,
     is_mbr: bool,
-    intensity_override: Option<f64>,
-) -> LfqEntry {
+    excluded: &HashSet<SampleId>,
+) -> CellCandidate {
     let t_b = Instant::now();
-    build_grid(
+    build_grid_excluding(
         grid,
         hills_vec,
         sorted,
@@ -548,6 +558,7 @@ fn quantify_cell(
         im,
         half_window,
         config,
+        excluded,
     );
     timers.add_build(t_b.elapsed());
     let slots = grid.n_slots_filled;
@@ -573,32 +584,109 @@ fn quantify_cell(
     let (apex_rt, peak_width) = peak_rt_stats(grid, config.grid_cols, &peak);
 
     let use_apex = config.quant_estimator.eq_ignore_ascii_case("apex");
-    let grid_intensity = if use_apex {
+    let intensity = if use_apex {
         peak.apex_intensity
     } else {
         peak.intensity
     };
-    let intensity = intensity_override.unwrap_or(grid_intensity);
 
-    LfqEntry {
-        feature_idx: feat_idx,
-        run_idx,
-        intensity,
-        hybrid_score: peak.hybrid_score,
-        spectral_bhattacharyya: peak.bhattacharyya_at_apex,
-        n_isotopes_found: slots,
-        rt_score: peak.rt_score_at_apex,
-        int_score: peak.int_score_at_apex,
-        coelution: peak.coelution,
-        is_decoy,
-        is_mbr,
-        expected_rt: rt,
-        apex_rt,
-        peak_width_rt: peak_width,
-        expected_mz: mz,
-        observed_mz: obs_mz,
-        expected_im: im,
-        observed_im: obs_im,
+    let mut support: Vec<_> = grid
+        .samples
+        .iter()
+        .filter(|s| peak.intensity > 0.0 && s.col >= peak.start_bin && s.col <= peak.end_bin)
+        .map(|s| s.id)
+        .collect();
+    support.sort_unstable();
+    support.dedup();
+    let mut rows = vec![false; config.n_isotopes];
+    for s in &grid.samples {
+        if peak.intensity > 0.0 && s.col >= peak.start_bin && s.col <= peak.end_bin {
+            rows[s.row] = true;
+        }
+    }
+    // Compare mono hypotheses against the preceding isotope position as well.
+    // An M+1 alias may fit its truncated right-hand envelope while leaving a
+    // substantial co-eluting M peak unexplained. This is ranking evidence only;
+    // the preceding row is never included in this candidate's reported quantity.
+    let preceding_signal_fraction = if peak.intensity > 0.0 {
+        let mut preceding = XicGrid::empty(1, config.grid_cols, 0.0, 1.0);
+        let mut one_row = config.clone();
+        one_row.n_isotopes = 1;
+        build_grid_excluding(
+            &mut preceding,
+            hills_vec,
+            sorted,
+            scan_times,
+            mz - grid::C13_NEUTRON / charge as f64,
+            charge,
+            rt,
+            im,
+            half_window,
+            &one_row,
+            excluded,
+        );
+        let (mut dot, mut norm_a, mut norm_b) = (0.0f64, 0.0f64, 0.0f64);
+        for (&a, &b) in preceding.intensities[0].iter().zip(&grid.intensities[0]) {
+            let (a, b) = (f64::from(a), f64::from(b));
+            dot += a * b;
+            norm_a += a * a;
+            norm_b += b * b;
+        }
+        let coelution = if norm_a > 0.0 && norm_b > 0.0 {
+            (dot / (norm_a * norm_b).sqrt()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let previous: f64 = preceding.intensities[0][peak.start_bin..=peak.end_bin]
+            .iter()
+            .map(|&v| f64::from(v))
+            .sum();
+        let positive: f64 = col_totals[peak.start_bin..=peak.end_bin]
+            .iter()
+            .map(|&v| f64::from(v))
+            .sum();
+        (coelution * previous / (previous + positive).max(f64::MIN_POSITIVE)) as f32
+    } else {
+        0.0
+    };
+    let bin_width = (grid.rt_max - grid.rt_min) / config.grid_cols as f64;
+    CellCandidate {
+        peak_start: grid.rt_min + peak.start_bin as f64 * bin_width,
+        peak_end: grid.rt_min + (peak.end_bin + 1) as f64 * bin_width,
+        peak_rows: rows.iter().filter(|&&v| v).count(),
+        entry: LfqEntry {
+            owned_samples: support.len(),
+            preceding_signal_fraction,
+            excluded_samples: 0,
+            competing_feature: None,
+            ownership_status: "exclusive",
+
+            feature_idx: feat_idx,
+            run_idx,
+            intensity,
+            hybrid_score: peak.hybrid_score,
+            spectral_bhattacharyya: peak.bhattacharyya_at_apex,
+            n_isotopes_found: slots,
+            rt_score: peak.rt_score_at_apex,
+            int_score: peak.int_score_at_apex,
+            coelution: peak.coelution,
+            is_decoy,
+            is_mbr,
+            expected_rt: rt,
+            apex_rt,
+            peak_width_rt: peak_width,
+            expected_mz: mz,
+            observed_mz: obs_mz,
+            expected_im: im,
+            observed_im: obs_im,
+        },
+        context: {
+            let mut ids: Vec<_> = grid.samples.iter().map(|s| s.id).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        },
+        support,
     }
 }
 
@@ -728,6 +816,21 @@ pub fn quantify(
     config: &LfqConfig,
     load_hills: impl Fn(usize) -> Vec<crate::models::Hill>,
 ) -> IntensityMatrix {
+    let t_consensus = Instant::now();
+    let consensus = build_consensus(runs, alignment, config);
+    log::info!("[timing] build_consensus: {:.2?}", t_consensus.elapsed());
+    quantify_consensus(runs, alignment, config, consensus, load_hills)
+}
+
+/// Quantify an already selected candidate set using the shared exclusive
+/// extraction and cell-rescoring pipeline. Used by controlled grouping comparisons.
+pub fn quantify_consensus(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+    consensus: Vec<ConsensusFeature>,
+    load_hills: impl Fn(usize) -> Vec<crate::models::Hill>,
+) -> IntensityMatrix {
     // Guard against a degenerate grid: grid_cols / n_isotopes of 0 would make
     // `n_cols - 1` underflow and index into empty rows (panic). Clamp to 1 and
     // warn rather than crash on a misconfigured TOML.
@@ -744,10 +847,6 @@ pub fn quantify(
     } else {
         config.clone()
     };
-
-    let t_consensus = Instant::now();
-    let consensus: Vec<ConsensusFeature> = build_consensus(runs, alignment, config);
-    log::info!("[timing] build_consensus: {:.2?}", t_consensus.elapsed());
 
     let n_features = consensus.len();
     let n_runs = runs.len();
@@ -815,37 +914,40 @@ pub fn quantify(
     let mut all_entries: Vec<LfqEntry> = Vec::new();
     let mut hills_per_run: Vec<usize> = vec![0; n_runs];
 
-    for run_idx in 0..n_runs {
-        let run = &runs[run_idx];
-        let run_rt_range = run_rt_ranges[run_idx];
-        let t_load = Instant::now();
-        let hills_vec = load_hills(run_idx);
-        hills_per_run[run_idx] = hills_vec.len();
-        let sorted = SortedHills::from_hills(&hills_vec);
-        log::info!(
-            "[lfq] run {}/{} '{}': {} hills loaded [{:.2?}]",
-            run_idx + 1,
-            n_runs,
-            run.name,
-            hills_vec.len(),
-            t_load.elapsed()
-        );
+    if !config.detected_use_grid {
+        log::warn!("Exclusive LFQ extraction requires grid intensities; detected_use_grid=false is ignored");
+    }
+    let mut priority = [Vec::new(), Vec::new()];
+    // First inspect the immutable signal in every run. Then use one cross-run
+    // preference per hypothesis, avoiding run-specific switching of aliases.
+    // Hills remain streamed; only scalar candidate evidence survives pass one.
+    for pass in 0..2 {
+        if pass == 1 {
+            priority = ownership::global_priority(&all_entries, &consensus);
+            all_entries.clear();
+        }
+        for run_idx in 0..n_runs {
+            let run = &runs[run_idx];
+            let run_rt_range = run_rt_ranges[run_idx];
+            let t_load = Instant::now();
+            let hills_vec = load_hills(run_idx);
+            hills_per_run[run_idx] = hills_vec.len();
+            let sorted = SortedHills::from_hills(&hills_vec);
+            log::info!(
+                "[lfq] run {}/{} '{}': {} hills loaded [{:.2?}]",
+                run_idx + 1,
+                n_runs,
+                run.name,
+                hills_vec.len(),
+                t_load.elapsed()
+            );
 
-        let run_entries: Vec<LfqEntry> = (0..n_features)
-            .into_par_iter()
-            .flat_map_iter(|feat_idx| {
+            let extract = |feat_idx: usize, is_decoy: bool, excluded: &HashSet<SampleId>| {
                 let cf = &consensus[feat_idx];
-                let mut entries = Vec::with_capacity(2);
-
-                // Per-task scratch — allocated once per feature, reused for target + decoy.
                 let mut grid = XicGrid::empty(config.n_isotopes, config.grid_cols, 0.0, 1.0);
                 let mut scores = ColumnScores::new(config.grid_cols);
                 let mut col_totals = vec![0.0f32; config.grid_cols];
                 let mut obs = vec![0.0f64; config.n_isotopes];
-
-                // Seed coordinates are already in reference-run space.
-                // For the reference run use them directly; for other runs invert
-                // the alignment warp to get expected native-space coordinates.
                 let (corr_rt, corr_mz, corr_im) = if run_idx == alignment.reference_idx {
                     (cf.ref_rt, cf.ref_mz, cf.ref_im)
                 } else {
@@ -856,60 +958,41 @@ pub fn quantify(
                         al.predict_run_im(cf.ref_im, cf.ref_rt),
                     )
                 };
-
-                let half_window = config.rt_window_pct * (run_rt_range.1 - run_rt_range.0);
-
-                // Region-aware RT term (LfqConfig.rt_spread_scoring): convert the
-                // per-run normalised residual σ at a given native RT into grid-
-                // column units. σ_cols = σ_norm · grid_cols / (2·rt_window_pct);
-                // the run RT span cancels because half_window = rt_window_pct·span.
-                // Returns None (⇒ raw RT term) for the reference run, when the flag
-                // is off, or when the run has no σ model. Evaluated per-cell so the
-                // target and its decoy use the same model at their own centres.
-                let rt_sigma_cols_at = |native_rt: f64| -> Option<f32> {
-                    if !config.rt_spread_scoring || run_idx == alignment.reference_idx {
-                        return None;
-                    }
+                let span = run_rt_range.1 - run_rt_range.0;
+                let rt = corr_rt
+                    - if is_decoy {
+                        config.decoy_rt_shift_pct * span
+                    } else {
+                        0.0
+                    };
+                let mz = corr_mz
+                    + if is_decoy {
+                        config.decoy_mz_shift_da / cf.charge as f64
+                    } else {
+                        0.0
+                    };
+                let rt_sigma = if config.rt_spread_scoring && run_idx != alignment.reference_idx {
                     let al = &alignment.alignments[&run.name];
-                    let span = run_rt_range.1 - run_rt_range.0;
-                    let run_norm = if span > 0.0 {
-                        ((native_rt - run_rt_range.0) / span).clamp(0.0, 1.0)
+                    let norm = if span > 0.0 {
+                        ((rt - run_rt_range.0) / span).clamp(0.0, 1.0)
                     } else {
                         0.5
                     };
-                    al.rt_sigma.sigma_norm_at(run_norm).map(|s_norm| {
-                        (s_norm * config.grid_cols as f64 / (2.0 * config.rt_window_pct)) as f32
+                    al.rt_sigma.sigma_norm_at(norm).map(|s| {
+                        (s * config.grid_cols as f64 / (2.0 * config.rt_window_pct)) as f32
                     })
-                };
-
-                // Target. Override the XIC intensity with the contributing
-                // per-run feature's `total_intensity()` whenever this run was a
-                // member of the consensus group. The feature finder's own
-                // isotope-pattern + peak-shape match is more reliable than a
-                // closest-RT hill lookup; using the feature intensity here
-                // restores Sage-style MBR semantics ("detected ⇒ trust the
-                // feature; otherwise re-integrate at the predicted RT").
-                //
-                // `detected_use_grid` instead quantifies EVERY cell (detected +
-                // MBR) by the same grid re-integration so the whole replicate row
-                // is commensurate — detected cells otherwise sit on a different
-                // SCALE than MBR cells, inflating CV on timsTOF (the feature
-                // integrates the IM dimension; the 2-D grid does not).
-                let contributed = cf.per_run_feature.get(run_idx).and_then(|x| *x);
-                let use_apex = config.quant_estimator.eq_ignore_ascii_case("apex");
-                let intensity_override = if config.detected_use_grid {
-                    None
                 } else {
-                    contributed.map(|fi| {
-                        let feat = &runs[run_idx].features[fi as usize].feature;
-                        if use_apex {
-                            feat.total_intensity_at_apex()
-                        } else {
-                            feat.total_intensity()
-                        }
-                    })
+                    None
                 };
-                entries.push(quantify_cell(
+                let (pattern, template) = if is_decoy && config.decoy_own_template {
+                    (
+                        decoy_theoretical_patterns[feat_idx].as_slice(),
+                        &decoy_bc_templates[feat_idx],
+                    )
+                } else {
+                    (cf.theoretical_pattern.as_slice(), &bc_templates[feat_idx])
+                };
+                quantify_cell(
                     &mut grid,
                     &mut scores,
                     &mut col_totals,
@@ -917,71 +1000,48 @@ pub fn quantify(
                     &hills_vec,
                     &sorted,
                     &run.scan_times,
-                    &cf.theoretical_pattern,
-                    &bc_templates[feat_idx],
+                    pattern,
+                    template,
                     config,
                     &timers,
                     feat_idx,
                     run_idx,
                     cf.charge,
-                    corr_mz,
-                    corr_rt,
+                    mz,
+                    rt,
                     corr_im,
-                    half_window,
-                    rt_sigma_cols_at(corr_rt),
-                    false,
-                    contributed.is_none(),
-                    intensity_override,
-                ));
-
-                // Decoy grid: shifted by `decoy_mz_shift_da / charge` in m/z
-                // and by `−decoy_rt_shift_pct · rt_span` in RT.
-                // Reuses the same scratch buffers sequentially.
-                if config.run_tdc {
-                    let dec_mz = corr_mz + config.decoy_mz_shift_da / cf.charge as f64;
-                    let dec_rt =
-                        corr_rt - config.decoy_rt_shift_pct * (run_rt_range.1 - run_rt_range.0);
-                    // (Audit A2) Judge the decoy against the averagine envelope at
-                    // its OWN shifted mass, not the target's, when the fix is on.
-                    let (dec_pattern, dec_bc) = if config.decoy_own_template {
-                        (
-                            decoy_theoretical_patterns[feat_idx].as_slice(),
-                            &decoy_bc_templates[feat_idx],
-                        )
-                    } else {
-                        (cf.theoretical_pattern.as_slice(), &bc_templates[feat_idx])
-                    };
-                    entries.push(quantify_cell(
-                        &mut grid,
-                        &mut scores,
-                        &mut col_totals,
-                        &mut obs,
-                        &hills_vec,
-                        &sorted,
-                        &run.scan_times,
-                        dec_pattern,
-                        dec_bc,
-                        config,
-                        &timers,
-                        feat_idx,
-                        run_idx,
-                        cf.charge,
-                        dec_mz,
-                        dec_rt,
-                        corr_im,
-                        half_window,
-                        rt_sigma_cols_at(dec_rt),
-                        true,
-                        false,
-                        None,
-                    ));
-                }
-
-                entries
-            })
-            .collect();
-        all_entries.extend(run_entries);
-        // `hills_vec` and `sorted` are dropped here before the next run loads.
+                    config.rt_window_pct * span,
+                    rt_sigma,
+                    is_decoy,
+                    !is_decoy && cf.per_run_feature[run_idx].is_none(),
+                    excluded,
+                )
+            };
+            let empty = HashSet::new();
+            let candidates: Vec<CellCandidate> = (0..n_features)
+                .into_par_iter()
+                .flat_map_iter(|i| {
+                    let mut cells = vec![extract(i, false, &empty)];
+                    if config.run_tdc {
+                        cells.push(extract(i, true, &empty));
+                    }
+                    cells
+                })
+                .collect();
+            if pass == 0 {
+                all_entries.extend(candidates.into_iter().map(|c| c.entry));
+            } else {
+                let resolved = ownership::resolve_run(candidates, &priority, &hills_vec, extract);
+                let conflicts = resolved.iter().filter(|e| e.excluded_samples > 0).count();
+                log::info!(
+                    "[lfq ownership] '{}': {} cells reassessed for shared signal",
+                    run.name,
+                    conflicts
+                );
+                all_entries.extend(resolved);
+            }
+            // `hills_vec` and `sorted` are dropped here before the next run loads.
+        }
     }
     log::info!(
         "[timing] quantification loop ({} entries, {} runs streamed): {:.2?}",

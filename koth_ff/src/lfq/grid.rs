@@ -1,10 +1,21 @@
 use crate::models::Hill;
+use std::collections::HashSet;
 
 use super::LfqConfig;
 
 #[cfg(test)]
 #[path = "grid_tests.rs"]
 mod tests;
+
+/// Original sample identity, independent of grid coordinates and isotope row.
+pub type SampleId = (u32, usize);
+
+#[derive(Debug, Clone)]
+pub struct GridSample {
+    pub id: SampleId,
+    pub row: usize,
+    pub col: usize,
+}
 
 pub const C13_NEUTRON: f64 = 1.003_354_835;
 
@@ -71,6 +82,8 @@ impl SortedHills {
 /// - Columns 0..grid_cols span [rt_min, rt_max] in equal-width bins.
 #[derive(Debug, Clone)]
 pub struct XicGrid {
+    /// Positive original samples admitted to this grid (for exclusive extraction).
+    pub samples: Vec<GridSample>,
     /// `[isotopologue][rt_bin]` intensities (summed from matching hills)
     pub intensities: Vec<Vec<f32>>,
     pub rt_min: f64,
@@ -88,6 +101,7 @@ pub struct XicGrid {
 impl XicGrid {
     pub fn empty(n_rows: usize, n_cols: usize, rt_min: f64, rt_max: f64) -> Self {
         Self {
+            samples: Vec::new(),
             intensities: vec![vec![0.0f32; n_cols]; n_rows],
             rt_min,
             rt_max,
@@ -102,6 +116,7 @@ impl XicGrid {
         for row in &mut self.intensities {
             row.fill(0.0);
         }
+        self.samples.clear();
         self.rt_min = rt_min;
         self.rt_max = rt_max;
         self.n_slots_filled = 0;
@@ -147,6 +162,36 @@ pub fn build_grid(
     half_window: f64,
     config: &LfqConfig,
 ) {
+    build_grid_excluding(
+        grid,
+        hills_data,
+        hills,
+        scan_times,
+        target_mz,
+        charge,
+        target_rt,
+        target_im,
+        half_window,
+        config,
+        &HashSet::new(),
+    );
+}
+
+/// Same extraction for targets, controls and residual candidates. Raw hills are
+/// immutable; exclusions use original profile indices, never shifted grid bins.
+pub fn build_grid_excluding(
+    grid: &mut XicGrid,
+    hills_data: &[Hill],
+    hills: &SortedHills,
+    scan_times: &[f64],
+    target_mz: f64,
+    charge: u8,
+    target_rt: f64,
+    target_im: f64,
+    half_window: f64,
+    config: &LfqConfig,
+    excluded: &HashSet<SampleId>,
+) {
     let n_rows = config.n_isotopes;
     let n_cols = config.grid_cols;
 
@@ -190,14 +235,29 @@ pub fn build_grid(
                 continue;
             }
             let hill = &hills_data[k.hill_idx as usize];
-            let added = fill_row_from_hill(
-                hill,
-                &mut grid.intensities[iso],
-                rt_min,
-                rt_max,
-                n_cols,
-                scan_times,
-            );
+            let mut added = false;
+            let span = rt_max - rt_min;
+            if span <= 0.0 || n_cols == 0 {
+                continue;
+            }
+            for (i, &intensity) in hill.intensity_profile.iter().enumerate() {
+                if intensity <= 0.0 || !intensity.is_finite() || excluded.contains(&(k.hill_idx, i))
+                {
+                    continue;
+                }
+                let t = (scan_rt(hill, i, scan_times) - rt_min) / span;
+                if !(0.0..1.0).contains(&t) {
+                    continue;
+                }
+                let col = ((t * n_cols as f64) as usize).min(n_cols - 1);
+                grid.intensities[iso][col] += intensity;
+                grid.samples.push(GridSample {
+                    id: (k.hill_idx, i),
+                    row: iso,
+                    col,
+                });
+                added = true;
+            }
             if added {
                 any_added = true;
                 let intensity_sum = hill.intensity_sum as f32;
@@ -216,6 +276,7 @@ pub fn build_grid(
 
 /// Splat a hill's per-scan intensities into a single grid row.
 /// Returns true if at least one sample fell within the window.
+#[cfg(test)]
 fn fill_row_from_hill(
     hill: &Hill,
     row: &mut [f32],

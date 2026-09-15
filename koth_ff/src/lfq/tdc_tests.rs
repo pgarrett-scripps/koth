@@ -5,6 +5,11 @@ use crate::lfq::LfqEntry;
 /// reads (feature_idx, run_idx, hybrid_score, is_decoy) are meaningful.
 fn entry(feature_idx: usize, run_idx: usize, score: f32, is_decoy: bool) -> LfqEntry {
     LfqEntry {
+        owned_samples: 0,
+        preceding_signal_fraction: 0.0,
+        excluded_samples: 0,
+        competing_feature: None,
+        ownership_status: "exclusive",
         feature_idx,
         run_idx,
         intensity: 1.0,

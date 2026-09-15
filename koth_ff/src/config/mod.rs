@@ -56,7 +56,10 @@ pub struct AlignConfig {
 impl AlignConfig {
     pub fn from_toml(path: &std::path::Path) -> Result<Self, crate::error::KothError> {
         let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content).map_err(|e| crate::error::KothError::ConfigError(e.to_string()))
+        let cfg: Self = toml::from_str(&content)
+            .map_err(|e| crate::error::KothError::ConfigError(e.to_string()))?;
+        cfg.lfq.consensus.validate()?;
+        Ok(cfg)
     }
 
     pub fn to_toml_string(&self) -> Result<String, crate::error::KothError> {
@@ -139,6 +142,32 @@ mod config_parse_tests {
             "example_config_align.toml",
             include_str!("../../../example_config_align.toml"),
         );
+    }
+
+    #[test]
+    fn removed_consensus_gates_are_rejected_instead_of_ignored() {
+        for (key, value) in [
+            ("min_member_combined_score", "0.5"),
+            ("min_seed_combined_score", "0.75"),
+            ("min_group_size", "2"),
+            ("allow_replicated_weak_seeds", "true"),
+        ] {
+            let source = format!("[lfq.consensus]\n{key} = {value}\n");
+            let err = toml::from_str::<AlignConfig>(&source).unwrap_err();
+            assert!(err.to_string().contains(key));
+        }
+    }
+
+    #[test]
+    fn consensus_gate_rejects_invalid_values() {
+        let mut cfg = AlignConfig::default();
+        for value in [f64::NAN, f64::INFINITY, -0.01, 1.01] {
+            cfg.lfq.consensus.max_group_qvalue = value;
+            assert!(cfg.lfq.consensus.validate().is_err());
+        }
+        cfg.lfq.consensus.max_group_qvalue = 0.05;
+        cfg.lfq.consensus.rt_window_pct = -0.1;
+        assert!(cfg.lfq.consensus.validate().is_err());
     }
 
     #[test]

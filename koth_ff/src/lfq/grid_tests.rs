@@ -190,3 +190,25 @@ fn build_grid_excludes_hills_outside_rt_window_and_im_tolerance() {
     );
     assert!(grid.is_empty());
 }
+
+// Diagnostic witness: separate group queries have no shared signal ownership.
+#[test]
+fn isotope_alias_queries_can_reuse_the_same_hill() {
+    let cfg = grid_config();
+    let mono = 500.0;
+    let shifted = mono + C13_NEUTRON / 2.0;
+    let hills = vec![hill(shifted, 0.4, 0.6, 0.0, 1, vec![80.0])];
+    let sorted = SortedHills::from_hills(&hills);
+    let times = [0.0, 0.5, 1.0];
+    let mut a = XicGrid::empty(cfg.n_isotopes, cfg.grid_cols, 0.0, 1.0);
+    let mut b = XicGrid::empty(cfg.n_isotopes, cfg.grid_cols, 0.0, 1.0);
+    build_grid(
+        &mut a, &hills, &sorted, &times, mono, 2, 0.5, 0.0, 0.5, &cfg,
+    );
+    build_grid(
+        &mut b, &hills, &sorted, &times, shifted, 2, 0.5, 0.0, 0.5, &cfg,
+    );
+    assert_eq!(a.intensities[1], b.intensities[0]);
+    assert!(a.intensities[1].iter().sum::<f32>() > 0.0);
+    // This demonstrates input reuse, not that both cells pass downstream scoring.
+}
