@@ -93,9 +93,15 @@ pub struct FeaturesConfig {
     /// feature. Default 0.0 = no gate.
     #[serde(default = "default_exhaustive_min_isotope_score")]
     pub exhaustive_min_isotope_score: f64,
-    /// When true, contested-hill claim priority is ordered by envelope length,
-    /// then isotope-pattern score, then composite — so the best averagine fit
-    /// wins a shared hill within a length class. Default false.
+    /// Signal standard deviation of seed-relative log2 isotope-ratio errors.
+    /// The broad noise null has fixed sigma 2; valid range is 0 < sigma < 2.
+    pub isotope_evidence_ratio_sigma: f64,
+    /// Shape of the Beta(shape, 1) co-elution model against a uniform null.
+    /// Must be finite and > 1; larger values favor tighter co-elution.
+    pub isotope_evidence_cosine_shape: f64,
+    /// Legacy compatibility field; no longer affects claim ordering.
+    /// The exhaustive resolver always ranks by additive isotope log evidence.
+    /// Accepted so existing configuration files continue to deserialize.
     #[serde(default)]
     pub exhaustive_isotope_priority: bool,
     /// Chromatographic-cosine **anchor** for isotope-chain extension: which hill
@@ -231,6 +237,8 @@ impl Default for FeaturesConfig {
             min_scan_overlap: 3,
             exhaustive_min_isotope_score: 0.0,
             exhaustive_isotope_priority: false,
+            isotope_evidence_ratio_sigma: 0.75,
+            isotope_evidence_cosine_shape: 2.0,
             cosine_anchor: default_cosine_anchor(),
             sulfur_offsets: default_sulfur_offsets(),
             isotope_model: IsotopeModelSpec::default(),
@@ -243,11 +251,26 @@ impl Default for FeaturesConfig {
 }
 
 impl FeaturesConfig {
-    /// Validate string-valued knobs that serde alone cannot check. Called after
-    /// TOML deserialization so an unrecognised value is rejected at load time
+    /// Validate distribution parameters and strings that serde alone cannot
+    /// check. Called after TOML deserialization so invalid values fail at load time
     /// rather than silently falling back at runtime.
     pub fn validate(&self) -> Result<(), crate::error::KothError> {
         CosineAnchor::parse(&self.cosine_anchor)?;
+        if !self.isotope_evidence_ratio_sigma.is_finite()
+            || self.isotope_evidence_ratio_sigma <= 0.0
+            || self.isotope_evidence_ratio_sigma >= 2.0
+        {
+            return Err(crate::error::KothError::ConfigError(
+                "features.isotope_evidence_ratio_sigma must be finite and between 0 and 2 (exclusive)".into(),
+            ));
+        }
+        if !self.isotope_evidence_cosine_shape.is_finite()
+            || self.isotope_evidence_cosine_shape <= 1.0
+        {
+            return Err(crate::error::KothError::ConfigError(
+                "features.isotope_evidence_cosine_shape must be finite and greater than 1".into(),
+            ));
+        }
         Ok(())
     }
 

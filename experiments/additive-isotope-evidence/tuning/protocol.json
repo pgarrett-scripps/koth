@@ -1,0 +1,21 @@
+{
+  "training": [["A",10],["A",11],["E",5],["E",6]],
+  "heldout": [["A",20],["A",21],["E",15],["E",16]],
+  "ratio_sigma": [0.4,0.5,0.75],
+  "cosine_shape": [2.0,4.0,8.0],
+  "noise_sigma": 2.0,
+  "reference": [0.5,4.0],
+  "threads": 8,
+  "guardrails_vs_baseline": {
+    "minimum_per_file_recall_delta": 0.0,
+    "maximum_feature_count_relative_increase": 0.05,
+    "maximum_species_median_absolute_log2_error_increase": 0.01,
+    "maximum_species_median_cv_increase": 0.005,
+    "maximum_species_fraction_abs_log2_error_gt_0_5_increase": 0.01,
+    "maximum_shifted_mass_match_rate_increase": 0.002,
+    "maximum_wrong_charge_only_rate_increase": 0.002,
+    "maximum_isotope_shift_only_rate_increase": 0.002
+  },
+  "selection": "Highest pooled interval recall among guardrail-passing candidates; within 0.0005 recall of the best prefer the parameter pair closest to reference in squared log-ratio distance. Quantification uses the fixed complete-pair intersection across baseline and all nine candidates. Freeze selection before loading held-out IDs or producing held-out candidate outputs. No held-out retuning.",
+  "limitations": "Assignment and shifted-mass diagnostics are proxies, not feature FDR or confirmed false positives. Thresholds are predefined practical tolerances, not significance tests. All models share the same generation gates and downstream filtering."
+}

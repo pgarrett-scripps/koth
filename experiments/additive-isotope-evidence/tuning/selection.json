@@ -1,0 +1,11 @@
+{
+  "label": "s0.75_c2",
+  "sigma": 0.75,
+  "shape": 2.0,
+  "recall": 0.845873058039887,
+  "failures": [],
+  "created_utc": "2026-09-14T21:23:00.949504+00:00",
+  "protocol_sha256": "450a9faabb0c4265921a053dfd6444a14be46672d1a18157b255fc77677efa51",
+  "training_summary_sha256": "4450660d6a14a560fede94cd4cb78caae492cc8d0f1d246db2d76f009043091e",
+  "config_sha256": "3eb2044454f8d1bde58421b632e9fbf50c18ae3a225c187dd72ff20ef78d0221"
+}

@@ -73,3 +73,60 @@ fn streaming_no_halo_matches_local() {
         local.len()
     );
 }
+
+/// Fingerprints captured from the collecting readers and detector at 0908b50.
+/// Compare every spectrum field/peak and every hill field/profile, not just counts.
+#[test]
+#[ignore = "reads the real .d fixture six times; run in release mode"]
+fn bounded_ms1_matches_frozen_batch_outputs() {
+    use koth_ff::{config::KothConfig, io::stream_spectra, run_hills_streaming};
+    use sha2::{Digest, Sha256};
+    for (streaming, halo, spectrum_hash, hill_hash) in [
+        (
+            false,
+            false,
+            "1a09e43618b74d1d84cba031f13d0251a40747d602314645b1955f350c99483d",
+            "3fd083ac9866751ab01de0720e9a7e762c2bedd08c3377898c740f58a49477c4",
+        ),
+        (
+            true,
+            false,
+            "1a09e43618b74d1d84cba031f13d0251a40747d602314645b1955f350c99483d",
+            "3fd083ac9866751ab01de0720e9a7e762c2bedd08c3377898c740f58a49477c4",
+        ),
+        (
+            true,
+            true,
+            "972d279ae68d29ea83bfe092f35322e852c0a87203fb97f4f3a501f995670a53",
+            "2fc7b7d85fadb4fb4eda37550e2925a49dbc85ad8aadead6d42c4a8da31e9fe4",
+        ),
+    ] {
+        let mut cfg = KothConfig::default();
+        cfg.file.bruker_streaming = streaming;
+        cfg.file.bruker_halo = halo;
+        let spectra = stream_spectra(&fixture(), &cfg.file)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(format!("{spectra:?}").as_bytes())),
+            spectrum_hash
+        );
+        drop(spectra);
+        let hills = run_hills_streaming(&fixture(), &cfg.hills, &cfg.file).unwrap();
+        // HashMap channel iteration need not preserve hill order. Normalize IDs
+        // and sort complete records; all numerical values must remain identical.
+        let mut rows: Vec<_> = hills
+            .into_iter()
+            .map(|mut h| {
+                h.hill_id = 0;
+                format!("{h:?}")
+            })
+            .collect();
+        rows.sort();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(format!("{rows:?}").as_bytes())),
+            hill_hash
+        );
+    }
+}

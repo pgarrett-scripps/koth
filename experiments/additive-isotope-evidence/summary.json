@@ -1,0 +1,61 @@
+{
+  "anchor_definition": "1% peptide-q target Sage IDs, deduplicated per run/peptide/charge",
+  "matching": "same charge, 10 ppm, PSM RT inside feature interval; apex +/-0.5 min sensitivity",
+  "files": [
+    "B03_10_150304_human_ecoli_A_3ul_3um_column_95_HCD_OT_2hrs_30B_9B",
+    "B03_11_150304_human_ecoli_A_3ul_3um_column_95_HCD_OT_2hrs_30B_9B",
+    "B03_05_150304_human_ecoli_E_3ul_3um_column_95_HCD_OT_2hrs_30B_9B",
+    "B03_06_150304_human_ecoli_E_3ul_3um_column_95_HCD_OT_2hrs_30B_9B"
+  ],
+  "common_complete_quant_pairs": 12640,
+  "variants": {
+    "baseline": {
+      "features": 538024,
+      "anchors": 101637,
+      "matched": 85327,
+      "recall": 0.8395269439279003,
+      "apex_recall": 0.8128732646575558,
+      "features_per_matched_anchor": 1.0015352701958349,
+      "quant": {
+        "HUMAN": {
+          "n": 11745,
+          "median_abs_log2_error": 0.3215346375686791,
+          "median_log2_bias": 0.30881725486903266,
+          "median_within_level_cv": 0.08523728763492189
+        },
+        "ECOLI": {
+          "n": 891,
+          "median_abs_log2_error": 0.17368316414473517,
+          "median_log2_bias": -0.021472136893656124,
+          "median_within_level_cv": 0.07709513073663884
+        }
+      }
+    },
+    "additive": {
+      "features": 541568,
+      "anchors": 101637,
+      "matched": 85660,
+      "recall": 0.8428033098182749,
+      "apex_recall": 0.8150771864576877,
+      "features_per_matched_anchor": 1.0015993462526267,
+      "quant": {
+        "HUMAN": {
+          "n": 11745,
+          "median_abs_log2_error": 0.3214952651344992,
+          "median_log2_bias": 0.30874623229853015,
+          "median_within_level_cv": 0.08522339277548942
+        },
+        "ECOLI": {
+          "n": 891,
+          "median_abs_log2_error": 0.17368316414473517,
+          "median_log2_bias": -0.02143926341784197,
+          "median_within_level_cv": 0.07794597129573744
+        }
+      }
+    }
+  },
+  "paired_recall": {
+    "gained": 1905,
+    "lost": 1572
+  }
+}
