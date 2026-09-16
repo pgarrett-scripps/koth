@@ -8,7 +8,26 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_Nothing yet._
+### 0.8.0 release development: search-guided LFQ
+- Add optional `koth_align --sage-psms` TSV/Parquet import and engine-neutral
+  `--targets` identification TSV. Filter Sage rank-1 target PSMs by both
+  spectrum and peptide confidence; preserve modification and charge identity.
+- Quantify identified targets without requiring complete detected features,
+  reusing the existing hill extraction, estimator, and exclusive ownership.
+  `--no-mbr` limits extraction to directly identified runs; transfers require
+  usable feature-based alignment and retain their donor provenance.
+- Reject incompatible target masses and ambiguous RT/IM observations. Export
+  peptide quantities, confidence-gated peptide matrices, rejection reasons,
+  source-row links, and a hashed search manifest.
+- Rank direct and transferred extraction evidence separately. Imported ID
+  confidence remains distinct from exploratory extraction q-values; peptide
+  transfer FDR calibration and quantitative accuracy remain unvalidated.
+- Search-guided long exports use schema 4 with no fabricated feature links.
+  Identification-free mode retains its existing schema and extraction path.
+  See `docs/search-guided-lfq.md` for the interface and limitations.
+- Add optional `RunInput.rt_bounds` metadata for featureless runs. Library
+  callers initializing `RunInput` should set it to `None` unless needed.
+- Bump the development workspace version to 0.8.0. No release tag is created.
 
 ## [0.7.0] — 2026-09-14
 

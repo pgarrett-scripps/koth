@@ -91,6 +91,9 @@ pub struct RunInput {
     /// Retention time (minutes) indexed by absolute scan index.
     /// If empty, hill RT positions are interpolated from rt_start / rt_end.
     pub scan_times: Vec<f64>,
+    /// Optional measured RT bounds when hills are streamed and features are absent.
+    /// This is metadata, not an indexed scan-time vector.
+    pub rt_bounds: Option<(f64, f64)>,
 }
 
 impl RunInput {
@@ -109,6 +112,11 @@ impl RunInput {
                 .fold(f64::NEG_INFINITY, f64::max);
             return (min, max);
         }
+        if let Some((min, max)) = self.rt_bounds {
+            if min.is_finite() && max.is_finite() && max > min {
+                return (min, max);
+            }
+        }
         // Derive from feature RT extents as fallback
         let min = self
             .features
@@ -123,7 +131,21 @@ impl RunInput {
         if min.is_finite() && max.is_finite() && max > min {
             (min, max)
         } else {
-            (0.0, 1.0)
+            let min = self
+                .hills
+                .iter()
+                .map(|h| h.rt_start)
+                .fold(f64::INFINITY, f64::min);
+            let max = self
+                .hills
+                .iter()
+                .map(|h| h.rt_end)
+                .fold(f64::NEG_INFINITY, f64::max);
+            if min.is_finite() && max.is_finite() && max > min {
+                (min, max)
+            } else {
+                (0.0, 1.0)
+            }
         }
     }
 }

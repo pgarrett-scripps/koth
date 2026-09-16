@@ -58,6 +58,7 @@ fn main() -> anyhow::Result<()> {
             features: read_features(&p.features_path)?,
             hills: Vec::new(),
             scan_times: Vec::new(),
+            rt_bounds: None,
         });
     }
     if let Some(name) = &config.alignment.reference_run {

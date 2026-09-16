@@ -92,7 +92,9 @@ pub struct ConsensusFeature {
     pub per_run_feature: Vec<Option<u32>>,
     /// Every original member, including alternatives to the primary per run.
     pub members: Vec<(usize, u32)>,
-    /// Original feature index of the seed in its source run.
+    /// Original feature index of the seed in its source run. Search-guided
+    /// candidates have no feature seed and use u32::MAX; their ID provenance
+    /// is carried separately by SearchGuidance.
     pub seed_feature_idx: u32,
     /// Continuous cross-run evidence; the detector score is not a probability.
     pub group_score: f64,

@@ -74,3 +74,13 @@ Schema version 3 adds `lfq_ownership_status`, `lfq_owned_samples`,
 ambiguous residual signal has intensity zero; original observations and group
 statistics are retained. See [lfq-signal-ownership.md](lfq-signal-ownership.md)
 for native peak ownership, control symmetry and limitations.
+
+## Search-guided exports (0.8.0)
+
+Search-guided mode uses schema 4 and sets `search_guided: true` in the manifest.
+Peptide targets have no original feature membership or seed-observation link.
+`lfq_is_mbr` indicates absence of an accepted same-run MS2 identification.
+Consensus row IDs link to `peptide_quant.tsv` and the donor records in
+`search_manifest.json`; detector and group scores are blank.
+Identification-free exports remain schema 3. See
+[search-guided LFQ](search-guided-lfq.md) for the full evidence contract.

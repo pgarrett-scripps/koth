@@ -4,6 +4,7 @@ pub mod integrate;
 mod ownership;
 pub mod rescore;
 pub mod score;
+pub mod targets;
 pub mod tdc;
 
 use crate::scoring::model::IsotopeModelSpec;
@@ -397,6 +398,7 @@ pub struct LfqEntry {
     /// so the intensity was re-integrated from raw hills at the predicted RT/mz
     /// (match-between-runs). False = an original detection contributed to the
     /// group; both kinds are quantified by the same exclusive grid extraction.
+    /// In search-guided mode this instead means no accepted same-run MS2 ID.
     pub is_mbr: bool,
     /// Expected RT in native run space used to centre the XIC grid. For
     /// targets this is the alignment-predicted RT; for decoys it is the
@@ -426,6 +428,8 @@ pub struct LfqEntry {
 
 /// Final intensity matrix: features (rows) × runs (columns).
 pub struct IntensityMatrix {
+    /// Peptide identities and donor evidence, present only in search-guided mode.
+    pub search_guidance: Option<targets::SearchGuidance>,
     /// Original consensus membership retained for long-format evidence export.
     pub consensus: Vec<consensus::ConsensusFeature>,
     pub n_features: usize,
@@ -786,6 +790,7 @@ fn assemble_matrix(
     }
 
     IntensityMatrix {
+        search_guidance: None,
         consensus: consensus.to_vec(),
         n_features,
         n_runs,
@@ -829,6 +834,40 @@ pub fn quantify_consensus(
     alignment: &AlignmentResult,
     config: &LfqConfig,
     consensus: Vec<ConsensusFeature>,
+    load_hills: impl Fn(usize) -> Vec<crate::models::Hill>,
+) -> IntensityMatrix {
+    quantify_candidates(runs, alignment, config, consensus, None, load_hills)
+}
+
+/// Quantify imported peptide targets with the same signal ownership and estimator
+/// as identification-free LFQ. The guidance and consensus rows must correspond.
+pub fn quantify_guided(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+    consensus: Vec<ConsensusFeature>,
+    guidance: targets::SearchGuidance,
+    load_hills: impl Fn(usize) -> Vec<crate::models::Hill>,
+) -> IntensityMatrix {
+    assert_eq!(consensus.len(), guidance.targets.len());
+    let mut matrix = quantify_candidates(
+        runs,
+        alignment,
+        config,
+        consensus,
+        Some(&guidance),
+        load_hills,
+    );
+    matrix.search_guidance = Some(guidance);
+    matrix
+}
+
+fn quantify_candidates(
+    runs: &[RunInput],
+    alignment: &AlignmentResult,
+    config: &LfqConfig,
+    consensus: Vec<ConsensusFeature>,
+    guidance: Option<&targets::SearchGuidance>,
     load_hills: impl Fn(usize) -> Vec<crate::models::Hill>,
 ) -> IntensityMatrix {
     // Guard against a degenerate grid: grid_cols / n_isotopes of 0 would make
@@ -948,7 +987,7 @@ pub fn quantify_consensus(
                 let mut scores = ColumnScores::new(config.grid_cols);
                 let mut col_totals = vec![0.0f32; config.grid_cols];
                 let mut obs = vec![0.0f64; config.n_isotopes];
-                let (corr_rt, corr_mz, corr_im) = if run_idx == alignment.reference_idx {
+                let (mut corr_rt, corr_mz, mut corr_im) = if run_idx == alignment.reference_idx {
                     (cf.ref_rt, cf.ref_mz, cf.ref_im)
                 } else {
                     let al = &alignment.alignments[&run.name];
@@ -958,6 +997,16 @@ pub fn quantify_consensus(
                         al.predict_run_im(cf.ref_im, cf.ref_rt),
                     )
                 };
+                if let Some(g) = guidance {
+                    // A same-run MS2 observation supplies native RT/IM. Its paired
+                    // decoy uses the same centre before the usual coordinate shifts.
+                    if let Some(id) = &g.targets[feat_idx].donors[run_idx] {
+                        corr_rt = id.rt_minutes;
+                        corr_im = id.im;
+                    } else if cf.ref_im == 0.0 {
+                        corr_im = 0.0;
+                    }
+                }
                 let span = run_rt_range.1 - run_rt_range.0;
                 let rt = corr_rt
                     - if is_decoy {
@@ -1013,13 +1062,17 @@ pub fn quantify_consensus(
                     config.rt_window_pct * span,
                     rt_sigma,
                     is_decoy,
-                    !is_decoy && cf.per_run_feature[run_idx].is_none(),
+                    !is_decoy
+                        && guidance.map_or(cf.per_run_feature[run_idx].is_none(), |g| {
+                            !g.is_direct(feat_idx, run_idx)
+                        }),
                     excluded,
                 )
             };
             let empty = HashSet::new();
             let candidates: Vec<CellCandidate> = (0..n_features)
                 .into_par_iter()
+                .filter(|&i| guidance.is_none_or(|g| g.attempted(i, run_idx)))
                 .flat_map_iter(|i| {
                     let mut cells = vec![extract(i, false, &empty)];
                     if config.run_tdc {
@@ -1074,7 +1127,22 @@ pub fn quantify_consensus(
     // Target-decoy q-values
     let t_tdc = Instant::now();
     let q_map: HashMap<(usize, usize), f64> = if config.run_tdc {
-        rescore::compute_qvalues_qda(&all_entries)
+        if let Some(g) = guidance {
+            // Do not let abundant direct IDs dilute the transferred-cell null.
+            // Partition paired decoys using the same donor mask as targets.
+            let mut q = HashMap::new();
+            for direct in [false, true] {
+                let entries: Vec<_> = all_entries
+                    .iter()
+                    .filter(|e| g.is_direct(e.feature_idx, e.run_idx) == direct)
+                    .cloned()
+                    .collect();
+                q.extend(rescore::compute_qvalues_qda(&entries));
+            }
+            q
+        } else {
+            rescore::compute_qvalues_qda(&all_entries)
+        }
     } else {
         all_entries
             .iter()

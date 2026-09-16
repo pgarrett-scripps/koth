@@ -23,6 +23,7 @@ fn main() -> anyhow::Result<()> {
                 features: read_features(&r.features_path)?,
                 hills: Vec::new(),
                 scan_times: Vec::new(),
+                rt_bounds: None,
             })
         })
         .collect::<anyhow::Result<_>>()?;

@@ -9,7 +9,11 @@ use koth_ff::{
     alignment::{align_runs, RunInput},
     config::{AlignConfig, OutputFormat},
     input::{discover_runs, read_features, read_hills},
-    lfq::{quantify, IntensityMatrix},
+    lfq::{
+        quantify, quantify_guided,
+        targets::{build_targets, read_identifications, write_search_outputs, TargetFormat},
+        IntensityMatrix,
+    },
     mem::log_mem,
     output::{build_align_report, write_align_report, AlignTiming},
 };
@@ -36,6 +40,30 @@ struct Args {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
+    /// Generic identification target TSV (see docs/search-guided-lfq.md).
+    #[arg(long, conflicts_with = "sage_psms")]
+    targets: Option<PathBuf>,
+
+    /// Sage results.sage.tsv or results.sage.parquet (rank-1, target PSMs).
+    #[arg(long, conflicts_with = "targets")]
+    sage_psms: Option<PathBuf>,
+
+    /// Maximum imported identification q-value (both spectrum_q and peptide_q for Sage).
+    #[arg(long, default_value_t = 0.01)]
+    max_id_qvalue: f64,
+
+    /// Extract only in runs with accepted same-run identifications; disable transfers.
+    #[arg(long)]
+    no_mbr: bool,
+
+    /// Maximum exploratory extraction q-value in the peptide intensity matrix.
+    #[arg(long, default_value_t = 0.01)]
+    max_extraction_qvalue: f64,
+
+    /// Ignore imported IM when search-engine coordinates are not native 1/K0.
+    #[arg(long)]
+    ignore_target_im: bool,
+
     /// Log level: error, warn, info, debug, trace
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -52,6 +80,21 @@ fn main() -> anyhow::Result<()> {
             .with_context(|| format!("Failed to load config from {}", p.display()))?,
         None => AlignConfig::default(),
     };
+
+    let guided = args.targets.is_some() || args.sage_psms.is_some();
+    anyhow::ensure!(
+        guided || (!args.no_mbr && !args.ignore_target_im),
+        "--no-mbr and --ignore-target-im require --targets or --sage-psms"
+    );
+    for (name, q) in [
+        ("--max-id-qvalue", args.max_id_qvalue),
+        ("--max-extraction-qvalue", args.max_extraction_qvalue),
+    ] {
+        anyhow::ensure!(
+            q.is_finite() && (0.0..=1.0).contains(&q),
+            "{name} must be in [0, 1]"
+        );
+    }
 
     let out_dir = args
         .output
@@ -110,11 +153,33 @@ fn main() -> anyhow::Result<()> {
             t.elapsed()
         );
 
+        // A targeted run can have hills but no complete isotope features.
+        // Recover only its RT bounds; hills remain streamed during extraction.
+        let rt_bounds = if guided && features.is_empty() {
+            let hills = read_hills(&rp.hills_path)?;
+            let lo = hills
+                .iter()
+                .map(|h| h.rt_start)
+                .fold(f64::INFINITY, f64::min);
+            let hi = hills
+                .iter()
+                .map(|h| h.rt_end)
+                .fold(f64::NEG_INFINITY, f64::max);
+            anyhow::ensure!(
+                lo.is_finite() && hi > lo,
+                "Run '{}' has no usable RT range",
+                rp.name
+            );
+            Some((lo, hi))
+        } else {
+            None
+        };
         runs.push(RunInput {
             name: rp.name.clone(),
             features,
             hills: Vec::new(),      // streamed per-run in quantify()
-            scan_times: Vec::new(), // not stored in output files; grid uses rt interpolation
+            scan_times: Vec::new(), // not stored in output files; interpolate hill RTs
+            rt_bounds,
         });
     }
 
@@ -151,7 +216,24 @@ fn main() -> anyhow::Result<()> {
     // ── LFQ ───────────────────────────────────────────────────────────────────
     log::info!("Running LFQ quantification...");
     let t = Instant::now();
-    let matrix = quantify(&runs, &alignment, &config.lfq, |i| {
+    let imported = match (&args.targets, &args.sage_psms) {
+        (Some(path), _) => Some(read_identifications(
+            path,
+            TargetFormat::Generic,
+            &runs,
+            args.max_id_qvalue,
+            args.ignore_target_im,
+        )?),
+        (_, Some(path)) => Some(read_identifications(
+            path,
+            TargetFormat::Sage,
+            &runs,
+            args.max_id_qvalue,
+            args.ignore_target_im,
+        )?),
+        _ => None,
+    };
+    let load_hills = |i: usize| {
         // Stream this run's hills on demand; dropped inside quantify() before
         // the next run loads. Discovery already verified the file exists, so
         // a failure here means it vanished or was corrupted mid-run — fail
@@ -165,7 +247,48 @@ fn main() -> anyhow::Result<()> {
                 run_paths[i].hills_path.display()
             )
         })
-    });
+    };
+    let matrix = if let Some((ids, summary)) = imported {
+        let (candidates, guidance) = build_targets(
+            ids,
+            summary,
+            &runs,
+            &alignment,
+            &config.lfq,
+            config.alignment.min_anchor_count,
+            !args.no_mbr,
+        )?;
+        log::info!(
+            "Search targets: {} accepted, {} rejected as ambiguous/inconsistent",
+            candidates.len(),
+            guidance.rejected_targets.len()
+        );
+        for (run, aligned) in runs.iter().zip(&guidance.aligned_runs) {
+            if !aligned && !args.no_mbr {
+                log::warn!(
+                    "Run '{}': insufficient alignment inliers; direct extraction only",
+                    run.name
+                );
+            }
+        }
+        let matrix = quantify_guided(
+            &runs,
+            &alignment,
+            &config.lfq,
+            candidates,
+            guidance,
+            load_hills,
+        );
+        write_search_outputs(
+            &matrix,
+            &out_dir,
+            args.max_extraction_qvalue,
+            config.lfq.run_tdc,
+        )?;
+        matrix
+    } else {
+        quantify(&runs, &alignment, &config.lfq, load_hills)
+    };
     let lfq_elapsed = t.elapsed();
     log::info!(
         "[timing] LFQ: {:.2?} ({} features × {} runs)",

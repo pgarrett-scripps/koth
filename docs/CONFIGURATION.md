@@ -507,3 +507,15 @@ competing LFQ groups and rebuilds residual extractions before cell scoring. This
 requires grid quantification: `detected_use_grid=false` now warns and uses the
 grid estimator. There are no additional user settings. See
 [signal ownership](lfq-signal-ownership.md) for behavior, provenance and limits.
+
+### Search-guided CLI options (0.8.0)
+
+`koth_align --sage-psms results.sage.tsv` (or `.parquet`) and
+`--targets targets.tsv` select optional identification-guided quantification.
+`--max-id-qvalue` and `--max-extraction-qvalue` both default to `0.01`;
+`--no-mbr` disables transfers and `--ignore-target-im` ignores imported IM.
+These are CLI options, not TOML fields. Existing LFQ extraction settings apply;
+search targets bypass identification-free group support and group-q gating.
+The consensus coordinate-span limits still reject ambiguous peptide targets.
+See [search-guided LFQ](search-guided-lfq.md) for schemas, output confidence
+semantics, alignment requirements, and validation limits.

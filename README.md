@@ -104,6 +104,22 @@ Output in `<output>/` (default: `<batch_dir>/align_output/`):
 - `qvalue_matrix.tsv` — TDC q-values for each (feature, sample) cell; only written when `run_tdc = true`; use to filter intensity_matrix by FDR
 - `align_config.toml` — copy of config used
 
+### Search-guided LFQ and MBR (0.8.0)
+
+Use accepted peptide identifications to target the existing extraction engine:
+
+```bash
+koth_align batch/ --sage-psms results.sage.tsv --output search_quant/
+koth_align batch/ --targets targets.tsv --output search_quant/
+koth_align batch/ --sage-psms results.sage.parquet --no-mbr --output direct_quant/
+```
+
+Sage TSV/Parquet imports and a generic identification TSV are supported. Peptide
+outputs distinguish same-run MS2 evidence from transferred extraction, with
+separate identification and exploratory extraction confidence. Omitting these
+options preserves identification-free LFQ. See the [input schema, outputs, and
+validation limits](docs/search-guided-lfq.md).
+
 ## justfile recipes
 
 ```bash

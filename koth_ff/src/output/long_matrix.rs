@@ -58,7 +58,7 @@ const OBS: &[&str] = &[
 ];
 
 /// Stream TSV or Parquet rows without retaining elution profiles in memory.
-fn source_rows(
+pub(crate) fn source_rows(
     path: &Path,
     mut visit: impl FnMut(&csv::StringRecord, &csv::StringRecord) -> Result<()>,
 ) -> Result<()> {
@@ -315,7 +315,11 @@ pub fn write_bundle(
             if e.is_decoy { "decoy" } else { "target" }.into(),
             original.map(|x| x.to_string()).unwrap_or_default(),
             g.seed_run_idx.to_string(),
-            source_ids[g.seed_run_idx][g.seed_feature_idx as usize].to_string(),
+            if matrix.search_guidance.is_some() {
+                String::new()
+            } else {
+                source_ids[g.seed_run_idx][g.seed_feature_idx as usize].to_string()
+            },
             g.neutral_mass.to_string(),
             g.ref_mz.to_string(),
             g.charge.to_string(),
@@ -325,17 +329,17 @@ pub fn write_bundle(
             } else {
                 g.ref_im.to_string()
             },
-            g.seed_combined_score.to_string(),
+            finite(g.seed_combined_score),
             g.n_contributing_runs.to_string(),
-            g.group_score.to_string(),
-            g.group_qvalue.to_string(),
+            finite(g.group_score),
+            finite(g.group_qvalue),
             intensity.to_string(),
             if e.is_decoy || !config.lfq.run_tdc {
                 String::new()
             } else {
                 matrix.q_value(c, r).to_string()
             },
-            (!e.is_decoy && original.is_none()).to_string(),
+            e.is_mbr.to_string(),
             finite(e.hybrid_score as f64),
             finite(e.spectral_bhattacharyya as f64),
             finite(e.coelution as f64),
@@ -360,7 +364,7 @@ pub fn write_bundle(
         ])?;
     }
     cells.flush()?;
-    let manifest = serde_json::json!({"schema_version":3,"n_consensus":matrix.n_features,"reference_run_id":alignment.reference_idx,
+    let manifest = serde_json::json!({"schema_version":if matrix.search_guidance.is_some() { 4 } else { 3 },"search_guided":matrix.search_guidance.is_some(),"n_consensus":matrix.n_features,"reference_run_id":alignment.reference_idx,
         "runs":run_manifest,"config":config,"units":{"mass":"Da","rt":"minutes","im":"1/K0"},
         "observations":{"path":"feature_observations.tsv","sha256":sha256(&obs_path)?},
         "cells":{"path":"lfq_matrix.long.tsv","sha256":sha256(&cells_path)?}});
