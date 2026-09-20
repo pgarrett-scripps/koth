@@ -221,10 +221,12 @@ fn bounded_cluster_rescue_records_outliers_and_rejects_ties() {
     let mut far = id(0);
     far.rt_minutes = 8.0;
     far.source_row = 3;
-    let (kept, excluded, _) = supported_rt_ids(vec![id(0), close, far.clone()], &r, 0.02);
+    let ranges: Vec<(f64, f64)> = r.iter().map(|x| x.rt_range()).collect();
+    let (kept, excluded, _) =
+        supported_rt_ids(vec![id(0), close, far.clone()], &r, &ranges, 0.02);
     assert_eq!(kept.len(), 2);
     assert_eq!(excluded, vec![3]);
-    let (kept, _, _) = supported_rt_ids(vec![id(0), far], &r, 0.02);
+    let (kept, _, _) = supported_rt_ids(vec![id(0), far], &r, &ranges, 0.02);
     assert!(kept.is_empty());
 }
 

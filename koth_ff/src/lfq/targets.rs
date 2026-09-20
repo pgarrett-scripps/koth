@@ -245,6 +245,7 @@ pub struct RtRescue {
 fn supported_rt_ids(
     ids: Vec<Identification>,
     runs: &[RunInput],
+    rt_ranges: &[(f64, f64)],
     fraction: f64,
 ) -> (Vec<Identification>, Vec<usize>, Vec<bool>) {
     let mut retained = Vec::new();
@@ -252,14 +253,14 @@ fn supported_rt_ids(
     // A run that offered identifications but kept none has genuinely ambiguous
     // chromatography for this peptide, so it must not receive a transfer.
     let mut withheld = vec![false; runs.len()];
-    for (r, run) in runs.iter().enumerate() {
+    for r in 0..runs.len() {
         let mut rows: Vec<_> = ids.iter().filter(|id| id.run_idx == r).collect();
         rows.sort_by(|a, b| {
             a.rt_minutes
                 .total_cmp(&b.rt_minutes)
                 .then(a.source_row.cmp(&b.source_row))
         });
-        let (lo, hi) = run.rt_range();
+        let (lo, hi) = rt_ranges[r];
         let limit = (hi - lo) * fraction;
         let mut windows = Vec::new();
         for start in 0..rows.len() {
@@ -381,7 +382,11 @@ pub fn build_targets(
         rejected_targets: Vec::new(),
     };
     let mut consensus = Vec::new();
-    let range = runs[alignment.reference_idx].rt_range();
+    // `rt_range` rescans a run's whole feature list on every call and the loops
+    // below ask for it per target per run. Compute it once; the LFQ loop takes
+    // the same precaution.
+    let rt_ranges: Vec<(f64, f64)> = runs.iter().map(|r| r.rt_range()).collect();
+    let range = rt_ranges[alignment.reference_idx];
     let rt_limit = (range.1 - range.0) * config.consensus.rt_window_pct;
     for ((peptide, charge), mut ids) in grouped {
         // Never use RT rescue to hide incompatible mass or mobility evidence.
@@ -398,7 +403,7 @@ pub fn build_targets(
         let mut withheld_runs = vec![false; runs.len()];
         if config.search_rt_rescue && !mass_conflict && ids.iter().all(|id| id.im == 0.0) {
             (ids, excluded_source_rows, withheld_runs) =
-                supported_rt_ids(ids, runs, config.consensus.rt_window_pct);
+                supported_rt_ids(ids, runs, &rt_ranges, config.consensus.rt_window_pct);
             if ids.is_empty() {
                 guidance.rejected_targets.push(RejectedTarget {
                     modified_peptide: peptide,
@@ -418,7 +423,7 @@ pub fn build_targets(
                 .then(a.source_row.cmp(&b.source_row))
         });
         let transferable = |id: &Identification| {
-            let (lo, hi) = runs[id.run_idx].rt_range();
+            let (lo, hi) = rt_ranges[id.run_idx];
             guidance.aligned_runs[id.run_idx] && id.rt_minutes >= lo && id.rt_minutes <= hi
         };
         let seed = ids.iter().find(|id| transferable(id)).unwrap_or(&ids[0]);
@@ -478,7 +483,7 @@ pub fn build_targets(
                 .filter(|id| id.run_idx == r && id.im > 0.0)
                 .map(|id| id.im)
                 .collect();
-            let range = runs[r].rt_range();
+            let range = rt_ranges[r];
             if span(&native_rt) > (range.1 - range.0) * config.consensus.rt_window_pct {
                 reason = Some("ambiguous_retention_time");
             }
@@ -556,7 +561,7 @@ pub fn build_targets(
         });
     }
     if config.search_expand_charges {
-        expand_charges(&mut consensus, &mut guidance, runs, config, rt_limit);
+        expand_charges(&mut consensus, &mut guidance, runs, &rt_ranges, config, rt_limit);
     }
     // Empty candidate sets still produce an auditable rejection report.
     Ok((consensus, guidance))
@@ -568,6 +573,7 @@ fn expand_charges(
     consensus: &mut Vec<ConsensusFeature>,
     g: &mut SearchGuidance,
     runs: &[RunInput],
+    rt_ranges: &[(f64, f64)],
     config: &LfqConfig,
     rt_limit: f64,
 ) {
@@ -632,7 +638,7 @@ fn expand_charges(
             let anchors: Vec<_> = runs
                 .iter()
                 .enumerate()
-                .map(|(r, run)| {
+                .map(|(r, _run)| {
                     if mz < bounds[r].0 || mz > bounds[r].1 {
                         return None;
                     }
@@ -648,7 +654,7 @@ fn expand_charges(
                         .iter()
                         .map(|id| id.rt_minutes)
                         .fold(f64::NEG_INFINITY, f64::max);
-                    let range = run.rt_range();
+                    let range = rt_ranges[r];
                     if hi - lo > (range.1 - range.0) * config.consensus.rt_window_pct
                         || ids.iter().any(|id| id.im != 0.0)
                     {
