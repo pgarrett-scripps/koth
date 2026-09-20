@@ -144,9 +144,25 @@ pub struct LfqConfig {
     /// Ambiguous targets remain ineligible for cross-run transfer.
     #[serde(default)]
     pub search_rt_rescue: bool,
+    /// Decide transfer eligibility per recipient run rather than per target.
+    /// Without this, pruning one run's ambiguous IDs withdraws the peptide from
+    /// transfer in every run, including runs whose chromatography was clean.
+    /// Requires `search_rt_rescue`; runs whose own IDs were withheld as
+    /// unsupported stay ineligible, and a target whose retained IDs still
+    /// disagree across runs remains globally ineligible because its consensus
+    /// coordinate is what a transfer would be centred on.
+    #[serde(default)]
+    pub search_rt_rescue_per_run_transfers: bool,
     /// Experimental inferred 2+/3+/4+ targets, with explicit charge provenance.
     #[serde(default)]
     pub search_expand_charges: bool,
+    /// In search-guided mode, decline to quantify a cell whose signal is
+    /// contested instead of reporting the residual left after a competitor's
+    /// claim. Identification-free grouping still needs the residual, because it
+    /// has no identity with which to declare ambiguity; with imported targets
+    /// the ambiguity can be reported as such. Trades filled cells for accuracy.
+    #[serde(default)]
+    pub search_suppress_residuals: bool,
     /// Report the *averagine-projected* intensity per cell instead of the raw
     /// box-sum. For each grid column the observed isotopologue vector is passed
     /// through a matched filter for the theoretical averagine pattern (the same
@@ -254,7 +270,9 @@ impl Default for LfqConfig {
             rt_spread_scoring: false,
             search_scoring: rescore::search::SearchScoring::Legacy,
             search_rt_rescue: false,
+            search_rt_rescue_per_run_transfers: false,
             search_expand_charges: false,
+            search_suppress_residuals: false,
             averagine_projection: false,
             decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),
@@ -1107,7 +1125,13 @@ fn quantify_candidates(
             if pass == 0 {
                 all_entries.extend(candidates.into_iter().map(|c| c.entry));
             } else {
-                let resolved = ownership::resolve_run(candidates, &priority, &hills_vec, extract);
+                let resolved = ownership::resolve_run(
+                    candidates,
+                    &priority,
+                    &hills_vec,
+                    extract,
+                    config.search_suppress_residuals && guidance.is_some(),
+                );
                 let conflicts = resolved.iter().filter(|e| e.excluded_samples > 0).count();
                 log::info!(
                     "[lfq ownership] '{}': {} cells reassessed for shared signal",

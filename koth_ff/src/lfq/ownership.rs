@@ -138,6 +138,7 @@ pub(super) fn resolve_run(
     priority: &[Vec<usize>; 2],
     hills: &[crate::models::Hill],
     extract: impl Fn(usize, bool, &HashSet<SampleId>) -> CellCandidate,
+    suppress_residuals: bool,
 ) -> Vec<LfqEntry> {
     candidates.sort_by_key(|c| {
         (
@@ -158,7 +159,19 @@ pub(super) fn resolve_run(
         }
         let overlap = c.support.iter().filter(|s| claimed.contains(*s)).count();
         let context_overlap = c.context.iter().filter(|s| claimed.contains(*s)).count();
-        if context_overlap > 0 {
+        if context_overlap > 0 && suppress_residuals {
+            // Report the ambiguity rather than a residual. The competitor keeps
+            // its claim; this cell is declared contested and left unquantified.
+            let competitor = c
+                .context
+                .iter()
+                .filter_map(|s| owner.get(s).copied())
+                .min_by_key(|&i| priority[usize::from(current_side)][i]);
+            let excluded = context_overlap;
+            clear(&mut c, "contested_not_quantified");
+            c.entry.excluded_samples = excluded;
+            c.entry.competing_feature = competitor;
+        } else if context_overlap > 0 {
             let competitor = c
                 .context
                 .iter()
@@ -374,9 +387,13 @@ mod tests {
         if reverse {
             candidates.reverse();
         }
-        resolve_run(candidates, &priority, hills, |i, d, x| {
-            extract(hills, &groups[i], i, d, x)
-        })
+        resolve_run(
+            candidates,
+            &priority,
+            hills,
+            |i, d, x| extract(hills, &groups[i], i, d, x),
+            false,
+        )
     }
 
     #[test]
@@ -427,13 +444,44 @@ mod tests {
             .enumerate()
             .map(|(i, g)| extract(&hills, g, i, false, &empty))
             .collect();
-        let out = resolve_run(candidates, &[vec![0, 1], vec![0, 1]], &hills, |i, d, x| {
-            extract(&hills, &groups[i], i, d, x)
-        });
+        let out = resolve_run(
+            candidates,
+            &[vec![0, 1], vec![0, 1]],
+            &hills,
+            |i, d, x| extract(&hills, &groups[i], i, d, x),
+            false,
+        );
         assert!(out[0].intensity > 0.0 && out[1].intensity > 0.0);
         assert!((out[0].apex_rt - 0.3).abs() < 0.03);
         assert!((out[1].apex_rt - 0.7).abs() < 0.03);
         assert_eq!(out[1].ownership_status, "residual");
+    }
+
+    #[test]
+    fn suppressing_residuals_declares_the_contested_cell_instead_of_quantifying_it() {
+        let hills = envelope(500.0, 2, &[(0.3, 1000.0), (0.7, 700.0)]);
+        let groups = [group(500.0, 0.3, 2), group(500.0, 0.7, 2)];
+        let empty = HashSet::new();
+        let candidates = groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| extract(&hills, g, i, false, &empty))
+            .collect();
+        let out = resolve_run(
+            candidates,
+            &[vec![0, 1], vec![0, 1]],
+            &hills,
+            |i, d, x| extract(&hills, &groups[i], i, d, x),
+            true,
+        );
+        // The winner is untouched; the contested cell reports no quantity and
+        // keeps its competitor and exclusion count for the audit trail.
+        assert!(out[0].intensity > 0.0);
+        assert!((out[0].apex_rt - 0.3).abs() < 0.03);
+        assert_eq!(out[1].intensity, 0.0);
+        assert_eq!(out[1].ownership_status, "contested_not_quantified");
+        assert!(out[1].excluded_samples > 0);
+        assert_eq!(out[1].competing_feature, Some(0));
     }
 
     #[test]
@@ -463,9 +511,13 @@ mod tests {
         }
         let evidence: Vec<_> = candidates.iter().map(|c| c.entry.clone()).collect();
         let priority = global_priority(&evidence, &groups);
-        let out = resolve_run(candidates, &priority, &hills, |i, d, x| {
-            extract(&hills, &groups[i], i, d, x)
-        });
+        let out = resolve_run(
+            candidates,
+            &priority,
+            &hills,
+            |i, d, x| extract(&hills, &groups[i], i, d, x),
+            false,
+        );
         let targets: Vec<_> = out
             .iter()
             .filter(|e| !e.is_decoy)

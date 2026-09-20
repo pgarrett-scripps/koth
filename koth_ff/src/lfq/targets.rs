@@ -214,6 +214,10 @@ pub struct SearchTarget {
     pub donors: Vec<Option<Identification>>,
     pub seed_run_idx: usize,
     pub transfer_eligible: bool,
+    /// Recipient runs this target must not be transferred into, even when it is
+    /// otherwise transfer eligible. Empty unless per-run gating is enabled.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transfer_blocked_runs: Vec<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rt_rescue: Option<RtRescue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -242,9 +246,12 @@ fn supported_rt_ids(
     ids: Vec<Identification>,
     runs: &[RunInput],
     fraction: f64,
-) -> (Vec<Identification>, Vec<usize>) {
+) -> (Vec<Identification>, Vec<usize>, Vec<bool>) {
     let mut retained = Vec::new();
     let mut excluded = Vec::new();
+    // A run that offered identifications but kept none has genuinely ambiguous
+    // chromatography for this peptide, so it must not receive a transfer.
+    let mut withheld = vec![false; runs.len()];
     for (r, run) in runs.iter().enumerate() {
         let mut rows: Vec<_> = ids.iter().filter(|id| id.run_idx == r).collect();
         rows.sort_by(|a, b| {
@@ -277,7 +284,11 @@ fn supported_rt_ids(
         }
     }
     excluded.sort_unstable();
-    (retained, excluded)
+    for (r, flag) in withheld.iter_mut().enumerate() {
+        let offered = ids.iter().any(|id| id.run_idx == r);
+        *flag = offered && !retained.iter().any(|id| id.run_idx == r);
+    }
+    (retained, excluded, withheld)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -306,6 +317,7 @@ impl SearchGuidance {
             || (self.mbr
                 && self.aligned_runs[run]
                 && self.targets[target].transfer_eligible
+                && !self.targets[target].transfer_blocked_runs.contains(&run)
                 && self.targets[target]
                     .inferred_charge
                     .as_ref()
@@ -383,8 +395,9 @@ pub fn build_targets(
             .fold(f64::NEG_INFINITY, f64::max);
         let mass_conflict = (mass_max - mass_min) / mass_min * 1e6 > config.consensus.mz_ppm;
         let mut excluded_source_rows = Vec::new();
+        let mut withheld_runs = vec![false; runs.len()];
         if config.search_rt_rescue && !mass_conflict && ids.iter().all(|id| id.im == 0.0) {
-            (ids, excluded_source_rows) =
+            (ids, excluded_source_rows, withheld_runs) =
                 supported_rt_ids(ids, runs, config.consensus.rt_window_pct);
             if ids.is_empty() {
                 guidance.rejected_targets.push(RejectedTarget {
@@ -511,12 +524,30 @@ pub fn build_targets(
             group_score: f64::NAN,
             group_qvalue: f64::NAN,
         });
+        // Cross-run disagreement invalidates the consensus coordinate a transfer
+        // would be centred on, so it still withdraws the target everywhere. A
+        // pruned row in one run does not, once eligibility is decided per run.
+        let per_run = config.search_rt_rescue && config.search_rt_rescue_per_run_transfers;
+        let transfer_eligible = transferable(seed)
+            && !rt_rescued
+            && (per_run || excluded_source_rows.is_empty());
+        let transfer_blocked_runs: Vec<usize> = if per_run {
+            withheld_runs
+                .iter()
+                .enumerate()
+                .filter(|(_, blocked)| **blocked)
+                .map(|(r, _)| r)
+                .collect()
+        } else {
+            Vec::new()
+        };
         guidance.targets.push(SearchTarget {
             modified_peptide: peptide,
             charge,
             donors,
             seed_run_idx: seed.run_idx,
-            transfer_eligible: transferable(seed) && !rt_rescued && excluded_source_rows.is_empty(),
+            transfer_eligible,
+            transfer_blocked_runs,
             rt_rescue: config.search_rt_rescue.then_some(RtRescue {
                 excluded_source_rows,
                 cross_run_rt_ambiguous: rt_rescued,
@@ -657,6 +688,7 @@ fn expand_charges(
                     donors: vec![None; runs.len()],
                     seed_run_idx: source.seed_run_idx,
                     transfer_eligible: true,
+                    transfer_blocked_runs: Vec::new(),
                     rt_rescue: None,
                     inferred_charge: Some(provenance),
                 });
