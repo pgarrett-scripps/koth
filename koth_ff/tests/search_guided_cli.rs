@@ -165,6 +165,64 @@ fn cli_extracts_direct_targets_with_zero_detected_features() {
     assert_eq!(&r[1][5], "not_attempted");
 }
 #[test]
+fn search_defaults_optionally_match_frozen_release_byte_for_byte() {
+    let Some(binary) = std::env::var_os("KOTH_LEGACY_ALIGN") else {
+        return;
+    };
+    let f = Fixture::new(true);
+    for (name, flags) in [
+        ("mbr", vec!["--targets", "targets.tsv"]),
+        ("direct", vec!["--targets", "targets.tsv", "--no-mbr"]),
+    ] {
+        let out = f.run(name, &flags);
+        let old = format!("legacy_{name}");
+        let result = Command::new(&binary)
+            .current_dir(&f.0)
+            .args([
+                "batch",
+                "--output",
+                &old,
+                "--config",
+                "config.toml",
+                "--log-level",
+                "error",
+            ])
+            .args(&flags)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        for file in [
+            "peptide_quant.tsv",
+            "peptide_intensity_matrix.tsv",
+            "search_rejections.tsv",
+            "lfq_details.tsv",
+            "qvalue_matrix.tsv",
+        ] {
+            assert_eq!(
+                std::fs::read(out.join(file)).unwrap(),
+                std::fs::read(f.0.join(&old).join(file)).unwrap(),
+                "default parity {name}/{file}"
+            );
+        }
+        // Build provenance must differ for an uncommitted development binary;
+        // all scientific fields, input hashes and output hashes must agree.
+        let read_manifest = |path: PathBuf| {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            value.as_object_mut().unwrap().remove("koth_version");
+            value
+        };
+        assert_eq!(
+            read_manifest(out.join("search_manifest.json")),
+            read_manifest(f.0.join(&old).join("search_manifest.json"))
+        );
+    }
+}
+#[test]
 fn id_free_mode_keeps_existing_schema_and_optionally_matches_legacy_binary() {
     let f = Fixture::new(true);
     let out = f.run("unguided", &[]);

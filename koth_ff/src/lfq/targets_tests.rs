@@ -119,6 +119,137 @@ fn config() -> LfqConfig {
 const HEADER: &str = "modified_peptide\trun\tcharge\tneutral_mass\trt_minutes\tid_qvalue\n";
 
 #[test]
+fn inferred_charge_preserves_real_psm_charge_and_no_mbr_semantics() {
+    let mut r = runs();
+    for run in &mut r {
+        run.hills.push(hill(800.0, 5.0, 1.0));
+    }
+    let a = alignment(&r, true);
+    let mut c = config();
+    c.search_expand_charges = true;
+    let (cf, g) = build_targets(vec![id(0)], summary(), &r, &a, &c, 10, false).unwrap();
+    assert_eq!(g.targets.len(), 3);
+    let i = g.targets.iter().position(|t| t.charge == 3).unwrap();
+    assert!(!g.is_direct(i, 0));
+    assert!(g.is_inferred(i, 0));
+    assert!(g.attempted(i, 0));
+    assert!(!g.attempted(i, 1));
+    assert_eq!(g.native_anchor(i, 0).unwrap().charge, 2);
+    assert_eq!(
+        g.targets[i].inferred_charge.as_ref().unwrap().seed.charge,
+        2
+    );
+    assert!((cf[i].ref_mz - (1000.0 / 3.0 + PROTON_MASS)).abs() < 1e-10);
+    let matrix = super::super::quantify_guided(&r, &a, &c, cf, g, |_| vec![]);
+    let tmp = Scratch::new();
+    write_search_outputs(&matrix, &tmp.0, 0.01, true).unwrap();
+    let text = std::fs::read_to_string(tmp.0.join("peptide_quant.tsv")).unwrap();
+    assert!(text.contains("inferred_charge"));
+}
+
+#[test]
+fn charge_expansion_never_recreates_a_rejected_charge() {
+    let mut r = runs();
+    for run in &mut r {
+        run.hills.push(hill(800.0, 5.0, 1.0));
+    }
+    let a = alignment(&r, true);
+    let mut c = config();
+    c.search_expand_charges = true;
+    let mut bad = id(0);
+    bad.charge = 3;
+    let mut conflict = bad.clone();
+    conflict.rt_minutes = 8.0;
+    let (_, g) =
+        build_targets(vec![id(0), bad, conflict], summary(), &r, &a, &c, 10, true).unwrap();
+    assert_eq!(g.targets.len(), 1);
+    assert_eq!(g.targets[0].charge, 2);
+    assert!(g.targets[0].inferred_charge.is_none());
+}
+
+#[test]
+fn inferred_charge_cannot_quantify_a_lone_isotope() {
+    let mut r = runs();
+    for run in &mut r {
+        run.hills.push(hill(800.0, 5.0, 1.0));
+    }
+    let a = alignment(&r, true);
+    let mut c = config();
+    c.search_expand_charges = true;
+    let (cf, g) = build_targets(vec![id(0)], summary(), &r, &a, &c, 10, false).unwrap();
+    let i = g.targets.iter().position(|t| t.charge == 3).unwrap();
+    let matrix = super::super::quantify_guided(&r, &a, &c, cf, g, |_| {
+        vec![hill(1000.0 / 3.0 + PROTON_MASS, 5.0, 10.0)]
+    });
+    assert!(matrix
+        .entries
+        .iter()
+        .any(|e| e.feature_idx == i && !e.is_decoy));
+    assert_eq!(matrix.intensity(i, 0), 0.0);
+}
+
+#[test]
+fn rt_rescue_retains_direct_cells_but_blocks_ambiguous_transfers() {
+    let r = runs();
+    let a = alignment(&r, true);
+    let mut b = id(1);
+    b.rt_minutes = 8.0;
+    let mut c = config();
+    let (_, legacy) =
+        build_targets(vec![id(0), b.clone()], summary(), &r, &a, &c, 10, true).unwrap();
+    assert!(legacy.targets.is_empty());
+    c.search_rt_rescue = true;
+    let (_, rescued) = build_targets(vec![id(0), b], summary(), &r, &a, &c, 10, true).unwrap();
+    assert_eq!(rescued.targets.len(), 1);
+    assert!(rescued.is_direct(0, 0) && rescued.is_direct(0, 1));
+    assert!(!rescued.targets[0].transfer_eligible);
+    assert!(
+        rescued.targets[0]
+            .rt_rescue
+            .as_ref()
+            .unwrap()
+            .cross_run_rt_ambiguous
+    );
+}
+
+#[test]
+fn bounded_cluster_rescue_records_outliers_and_rejects_ties() {
+    let r = runs();
+    let mut close = id(0);
+    close.rt_minutes = 5.05;
+    close.source_row = 2;
+    let mut far = id(0);
+    far.rt_minutes = 8.0;
+    far.source_row = 3;
+    let (kept, excluded) = supported_rt_ids(vec![id(0), close, far.clone()], &r, 0.02);
+    assert_eq!(kept.len(), 2);
+    assert_eq!(excluded, vec![3]);
+    let (kept, _) = supported_rt_ids(vec![id(0), far], &r, 0.02);
+    assert!(kept.is_empty());
+}
+
+#[test]
+fn rt_rescue_never_rescues_mass_or_mobility_conflicts() {
+    let r = runs();
+    let a = alignment(&r, true);
+    let mut c = config();
+    c.search_rt_rescue = true;
+    for mass in [true, false] {
+        let mut first = id(0);
+        let mut second = id(1);
+        second.rt_minutes = 8.0;
+        if mass {
+            second.neutral_mass += 10.0;
+        } else {
+            first.im = 1.0;
+            second.im = 1.5;
+        }
+        let (_, g) = build_targets(vec![first, second], summary(), &r, &a, &c, 10, true).unwrap();
+        assert!(g.targets.is_empty());
+    }
+}
+
+#[test]
 fn generic_import_resolves_paths_and_preserves_modifications() {
     let tmp = Scratch::new();
     let p=tmp.input(&format!("{HEADER}PEP[+15.9949]TIDE\tC:\\data\\A.mzML.gz\t2\t1000\t5\t0.001\nBAD\tA\t2\t900\t5\t0.1\n"));

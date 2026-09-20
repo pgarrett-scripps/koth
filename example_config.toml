@@ -1,4 +1,7 @@
+# Experimental search_scoring also accepts charge_signed and charge_signed_quality.
 # Cross-run LFQ settings and the optional long bundle are in example_config_align.toml.
+# Search-guided ablations (search_scoring, search_rt_rescue, search_expand_charges) also
+# belong in that align config, never in this feature-finder configuration.
 # koth_ff example configuration
 # All values shown are defaults. Uncomment and modify as needed.
 # Usage: koth_ff <input> --config example_config.toml

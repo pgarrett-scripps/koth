@@ -109,6 +109,10 @@ normalize = "none"
 
 # Per-cell intensity estimator over the integrated grid peak: "sum" or "apex".
 quant_estimator = "sum"
+# Experimental search-guided ablations; retain legacy defaults pending validation.
+search_scoring = "legacy" # legacy | peptide_grouped | charge_stratified | charge_signed | charge_signed_quality
+search_rt_rescue = false
+search_expand_charges = false
 
 # Quantify EVERY consensus cell (detected and match-between-runs alike) by the
 # same grid re-integration so the whole matrix sits on one intensity scale.

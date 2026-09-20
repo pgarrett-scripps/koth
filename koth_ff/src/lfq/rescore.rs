@@ -32,6 +32,9 @@ use std::collections::HashMap;
 
 use super::LfqEntry;
 
+#[path = "rescore_search.rs"]
+pub mod search;
+
 /// Number of discriminant features.
 const NF: usize = 5;
 /// Semi-supervised refinement iterations per fold.
@@ -47,9 +50,9 @@ const MIN_POS: usize = 1000;
 /// positive-definite matrix for the Cholesky factorisation.
 const RIDGE: f64 = 1e-2;
 
-fn sub(a: &[f64; NF], b: &[f64; NF]) -> [f64; NF] {
-    let mut o = [0.0; NF];
-    for k in 0..NF {
+fn sub<const N: usize>(a: &[f64; N], b: &[f64; N]) -> [f64; N] {
+    let mut o = [0.0; N];
+    for k in 0..N {
         o[k] = a[k] - b[k];
     }
     o
@@ -57,9 +60,9 @@ fn sub(a: &[f64; NF], b: &[f64; NF]) -> [f64; NF] {
 
 /// Lower-triangular Cholesky factor of a symmetric matrix; `None` if not
 /// positive-definite.
-fn cholesky(a: &[[f64; NF]; NF]) -> Option<[[f64; NF]; NF]> {
-    let mut l = [[0.0f64; NF]; NF];
-    for i in 0..NF {
+fn cholesky<const N: usize>(a: &[[f64; N]; N]) -> Option<[[f64; N]; N]> {
+    let mut l = [[0.0f64; N]; N];
+    for i in 0..N {
         for j in 0..=i {
             let mut s = a[i][j];
             for k in 0..j {
@@ -80,9 +83,9 @@ fn cholesky(a: &[[f64; NF]; NF]) -> Option<[[f64; NF]; NF]> {
 
 /// Squared Mahalanobis distance `(x-μ)ᵀ Σ⁻¹ (x-μ)` via forward substitution on
 /// the Cholesky factor: solve `L y = diff`, return `yᵀy`.
-fn mahalanobis(l: &[[f64; NF]; NF], diff: [f64; NF]) -> f64 {
-    let mut y = [0.0f64; NF];
-    for i in 0..NF {
+fn mahalanobis<const N: usize>(l: &[[f64; N]; N], diff: [f64; N]) -> f64 {
+    let mut y = [0.0f64; N];
+    for i in 0..N {
         let mut s = diff[i];
         for k in 0..i {
             s -= l[i][k] * y[k];
@@ -92,38 +95,41 @@ fn mahalanobis(l: &[[f64; NF]; NF], diff: [f64; NF]) -> f64 {
     y.iter().map(|v| v * v).sum()
 }
 
-fn logdet_from_l(l: &[[f64; NF]; NF]) -> f64 {
-    2.0 * (0..NF).map(|i| l[i][i].ln()).sum::<f64>()
+fn logdet_from_l<const N: usize>(l: &[[f64; N]; N]) -> f64 {
+    2.0 * (0..N).map(|i| l[i][i].ln()).sum::<f64>()
 }
 
 /// Mean, Cholesky factor of the (ridge-regularised) covariance, and log-det for
 /// one class. `None` if too few rows to estimate a covariance.
-fn fit_gaussian(feat: &[[f64; NF]], idx: &[usize]) -> Option<([f64; NF], [[f64; NF]; NF], f64)> {
+fn fit_gaussian<const N: usize>(
+    feat: &[[f64; N]],
+    idx: &[usize],
+) -> Option<([f64; N], [[f64; N]; N], f64)> {
     let n = idx.len();
-    if n < NF + 2 {
+    if n < N + 2 {
         return None;
     }
-    let mut mean = [0.0f64; NF];
+    let mut mean = [0.0f64; N];
     for &i in idx {
-        for k in 0..NF {
+        for k in 0..N {
             mean[k] += feat[i][k];
         }
     }
-    for k in 0..NF {
+    for k in 0..N {
         mean[k] /= n as f64;
     }
-    let mut cov = [[0.0f64; NF]; NF];
+    let mut cov = [[0.0f64; N]; N];
     for &i in idx {
         let d = sub(&feat[i], &mean);
-        for a in 0..NF {
-            for b in 0..NF {
+        for a in 0..N {
+            for b in 0..N {
                 cov[a][b] += d[a] * d[b];
             }
         }
     }
     let denom = (n - 1) as f64;
-    for a in 0..NF {
-        for b in 0..NF {
+    for a in 0..N {
+        for b in 0..N {
             cov[a][b] /= denom;
         }
         cov[a][a] += RIDGE;
@@ -134,26 +140,26 @@ fn fit_gaussian(feat: &[[f64; NF]], idx: &[usize]) -> Option<([f64; NF], [[f64; 
 }
 
 /// QDA target-vs-decoy log-likelihood-ratio model over standardised features.
-struct Qda {
-    mean_t: [f64; NF],
-    l_t: [[f64; NF]; NF],
+struct Qda<const N: usize = NF> {
+    mean_t: [f64; N],
+    l_t: [[f64; N]; N],
     logdet_t: f64,
-    mean_d: [f64; NF],
-    l_d: [[f64; NF]; NF],
+    mean_d: [f64; N],
+    l_d: [[f64; N]; N],
     logdet_d: f64,
     /// Orientation multiplier so higher score = more target-like.
     sign: f64,
 }
 
-impl Qda {
-    fn score(&self, x: &[f64; NF]) -> f64 {
+impl<const N: usize> Qda<N> {
+    fn score(&self, x: &[f64; N]) -> f64 {
         let mt = mahalanobis(&self.l_t, sub(x, &self.mean_t));
         let md = mahalanobis(&self.l_d, sub(x, &self.mean_d));
         self.sign * (-0.5 * mt - 0.5 * self.logdet_t + 0.5 * md + 0.5 * self.logdet_d)
     }
 }
 
-fn fit_qda(feat: &[[f64; NF]], pos: &[usize], neg: &[usize]) -> Option<Qda> {
+fn fit_qda<const N: usize>(feat: &[[f64; N]], pos: &[usize], neg: &[usize]) -> Option<Qda<N>> {
     let (mean_t, l_t, logdet_t) = fit_gaussian(feat, pos)?;
     let (mean_d, l_d, logdet_d) = fit_gaussian(feat, neg)?;
     let mut m = Qda {

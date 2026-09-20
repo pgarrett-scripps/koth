@@ -214,6 +214,70 @@ pub struct SearchTarget {
     pub donors: Vec<Option<Identification>>,
     pub seed_run_idx: usize,
     pub transfer_eligible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rt_rescue: Option<RtRescue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inferred_charge: Option<InferredCharge>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InferredCharge {
+    /// A real PSM at its original charge, never a fabricated identification.
+    pub seed: Identification,
+    pub native_anchors: Vec<Option<Identification>>,
+    pub mz_eligible: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RtRescue {
+    pub excluded_source_rows: Vec<usize>,
+    pub cross_run_rt_ambiguous: bool,
+}
+
+/// Bounded, non-chaining RT clusters. A conflicting run is retained only if
+/// one cluster has a strict majority of PSMs and at least two observations.
+/// Tied/unsupported clusters withhold that run; one target per peptide/charge
+/// avoids duplicate quantification of multiple chromatographic components.
+fn supported_rt_ids(
+    ids: Vec<Identification>,
+    runs: &[RunInput],
+    fraction: f64,
+) -> (Vec<Identification>, Vec<usize>) {
+    let mut retained = Vec::new();
+    let mut excluded = Vec::new();
+    for (r, run) in runs.iter().enumerate() {
+        let mut rows: Vec<_> = ids.iter().filter(|id| id.run_idx == r).collect();
+        rows.sort_by(|a, b| {
+            a.rt_minutes
+                .total_cmp(&b.rt_minutes)
+                .then(a.source_row.cmp(&b.source_row))
+        });
+        let (lo, hi) = run.rt_range();
+        let limit = (hi - lo) * fraction;
+        let mut windows = Vec::new();
+        for start in 0..rows.len() {
+            let end = rows.partition_point(|id| id.rt_minutes <= rows[start].rt_minutes + limit);
+            windows.push((end - start, start, end));
+        }
+        let maximum = windows.iter().map(|w| w.0).max().unwrap_or(0);
+        let best: Vec<_> = windows.iter().filter(|w| w.0 == maximum).collect();
+        let supported = best.len() == 1
+            && (maximum == rows.len() || (maximum >= 2 && maximum * 2 > rows.len()));
+        for (i, id) in rows.iter().enumerate() {
+            if supported
+                && i >= best[0].1
+                && i < best[0].2
+                && id.rt_minutes >= lo
+                && id.rt_minutes <= hi
+            {
+                retained.push((*id).clone());
+            } else {
+                excluded.push(id.source_row);
+            }
+        }
+    }
+    excluded.sort_unstable();
+    (retained, excluded)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -238,7 +302,29 @@ impl SearchGuidance {
     }
     pub fn attempted(&self, target: usize, run: usize) -> bool {
         self.is_direct(target, run)
-            || (self.mbr && self.aligned_runs[run] && self.targets[target].transfer_eligible)
+            || self.native_anchor(target, run).is_some()
+            || (self.mbr
+                && self.aligned_runs[run]
+                && self.targets[target].transfer_eligible
+                && self.targets[target]
+                    .inferred_charge
+                    .as_ref()
+                    .is_none_or(|i| i.mz_eligible[run]))
+    }
+    pub fn native_anchor(&self, target: usize, run: usize) -> Option<&Identification> {
+        self.targets[target].donors[run].as_ref().or_else(|| {
+            self.targets[target]
+                .inferred_charge
+                .as_ref()
+                .and_then(|i| i.native_anchors[run].as_ref())
+        })
+    }
+    pub fn is_inferred(&self, target: usize, run: usize) -> bool {
+        let t = &self.targets[target];
+        !self.is_direct(target, run)
+            && t.inferred_charge.as_ref().is_some_and(|i| {
+                i.native_anchors[run].is_some() || t.donors.iter().all(Option::is_none)
+            })
     }
 }
 
@@ -286,6 +372,29 @@ pub fn build_targets(
     let range = runs[alignment.reference_idx].rt_range();
     let rt_limit = (range.1 - range.0) * config.consensus.rt_window_pct;
     for ((peptide, charge), mut ids) in grouped {
+        // Never use RT rescue to hide incompatible mass or mobility evidence.
+        let mass_min = ids
+            .iter()
+            .map(|id| id.neutral_mass)
+            .fold(f64::INFINITY, f64::min);
+        let mass_max = ids
+            .iter()
+            .map(|id| id.neutral_mass)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mass_conflict = (mass_max - mass_min) / mass_min * 1e6 > config.consensus.mz_ppm;
+        let mut excluded_source_rows = Vec::new();
+        if config.search_rt_rescue && !mass_conflict && ids.iter().all(|id| id.im == 0.0) {
+            (ids, excluded_source_rows) =
+                supported_rt_ids(ids, runs, config.consensus.rt_window_pct);
+            if ids.is_empty() {
+                guidance.rejected_targets.push(RejectedTarget {
+                    modified_peptide: peptide,
+                    charge,
+                    reason: "no_supported_native_rt_cluster".into(),
+                });
+                continue;
+            }
+        }
         ids.sort_by(|a, b| {
             a.id_qvalue
                 .total_cmp(&b.id_qvalue)
@@ -364,7 +473,11 @@ pub fn build_targets(
                 reason = Some("ambiguous_ion_mobility");
             }
         }
-        if let Some(reason) = reason {
+        let rt_rescued = config.search_rt_rescue
+            && !mass_conflict
+            && ids.iter().all(|id| id.im == 0.0)
+            && reason == Some("ambiguous_retention_time");
+        if let Some(reason) = reason.filter(|_| !rt_rescued) {
             guidance.rejected_targets.push(RejectedTarget {
                 modified_peptide: peptide,
                 charge,
@@ -403,11 +516,153 @@ pub fn build_targets(
             charge,
             donors,
             seed_run_idx: seed.run_idx,
-            transfer_eligible: transferable(seed),
+            transfer_eligible: transferable(seed) && !rt_rescued && excluded_source_rows.is_empty(),
+            rt_rescue: config.search_rt_rescue.then_some(RtRescue {
+                excluded_source_rows,
+                cross_run_rt_ambiguous: rt_rescued,
+            }),
+            inferred_charge: None,
         });
+    }
+    if config.search_expand_charges {
+        expand_charges(&mut consensus, &mut guidance, runs, config, rt_limit);
     }
     // Empty candidate sets still produce an auditable rejection report.
     Ok((consensus, guidance))
+}
+
+/// Explore 2+ through 4+ only, bounded by each run's observed feature/hill m/z
+/// range. Conflicting peptide RT/mass or IM evidence disables expansion.
+fn expand_charges(
+    consensus: &mut Vec<ConsensusFeature>,
+    g: &mut SearchGuidance,
+    runs: &[RunInput],
+    config: &LfqConfig,
+    rt_limit: f64,
+) {
+    let original = g.targets.clone();
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, t) in original.iter().enumerate() {
+        groups
+            .entry(t.modified_peptide.clone())
+            .or_default()
+            .push(i);
+    }
+    let bounds: Vec<_> = runs
+        .iter()
+        .map(|r| {
+            let mz: Vec<_> = r
+                .features
+                .iter()
+                .map(|f| f.feature.monoisotopic_mz())
+                .chain(r.hills.iter().map(|h| h.mz))
+                .filter(|v| v.is_finite())
+                .collect();
+            (
+                mz.iter().copied().fold(f64::INFINITY, f64::min),
+                mz.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            )
+        })
+        .collect();
+    for (peptide, indices) in groups {
+        // Do not silently recreate a rejected charge/isomer under expansion.
+        if g.rejected_targets
+            .iter()
+            .any(|t| t.modified_peptide == peptide)
+        {
+            continue;
+        }
+        let seed_idx = indices[0];
+        let source = consensus[seed_idx].clone();
+        let rt_min = indices
+            .iter()
+            .map(|&i| consensus[i].ref_rt)
+            .fold(f64::INFINITY, f64::min);
+        let rt_max = indices
+            .iter()
+            .map(|&i| consensus[i].ref_rt)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if rt_max - rt_min > rt_limit
+            || indices.iter().any(|&i| {
+                !original[i].transfer_eligible
+                    || consensus[i].ref_im != 0.0
+                    || (consensus[i].neutral_mass - source.neutral_mass).abs() / source.neutral_mass
+                        * 1e6
+                        > config.consensus.mz_ppm
+            })
+        {
+            continue;
+        }
+        let Some(seed) = original[seed_idx].donors[source.seed_run_idx].clone() else {
+            continue;
+        };
+        for charge in 2..=4 {
+            let mz = source.neutral_mass / f64::from(charge) + PROTON_MASS;
+            let anchors: Vec<_> = runs
+                .iter()
+                .enumerate()
+                .map(|(r, run)| {
+                    if mz < bounds[r].0 || mz > bounds[r].1 {
+                        return None;
+                    }
+                    let ids: Vec<_> = indices
+                        .iter()
+                        .filter_map(|&i| original[i].donors[r].as_ref())
+                        .collect();
+                    let lo = ids
+                        .iter()
+                        .map(|id| id.rt_minutes)
+                        .fold(f64::INFINITY, f64::min);
+                    let hi = ids
+                        .iter()
+                        .map(|id| id.rt_minutes)
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    let range = run.rt_range();
+                    if hi - lo > (range.1 - range.0) * config.consensus.rt_window_pct
+                        || ids.iter().any(|id| id.im != 0.0)
+                    {
+                        return None;
+                    }
+                    ids.into_iter()
+                        .min_by(|a, b| {
+                            a.id_qvalue
+                                .total_cmp(&b.id_qvalue)
+                                .then(a.charge.cmp(&b.charge))
+                                .then(a.source_row.cmp(&b.source_row))
+                        })
+                        .cloned()
+                })
+                .collect();
+            if anchors.iter().all(Option::is_none) {
+                continue;
+            }
+            let provenance = InferredCharge {
+                seed: seed.clone(),
+                native_anchors: anchors,
+                mz_eligible: bounds
+                    .iter()
+                    .map(|&(lo, hi)| mz >= lo && mz <= hi)
+                    .collect(),
+            };
+            if let Some(&i) = indices.iter().find(|&&i| original[i].charge == charge) {
+                g.targets[i].inferred_charge = Some(provenance);
+            } else {
+                let mut cf = source.clone();
+                cf.charge = charge;
+                cf.ref_mz = mz;
+                consensus.push(cf);
+                g.targets.push(SearchTarget {
+                    modified_peptide: peptide.clone(),
+                    charge,
+                    donors: vec![None; runs.len()],
+                    seed_run_idx: source.seed_run_idx,
+                    transfer_eligible: true,
+                    rt_rescue: None,
+                    inferred_charge: Some(provenance),
+                });
+            }
+        }
+    }
 }
 
 fn finite(v: f64) -> String {
@@ -462,6 +717,7 @@ pub fn write_search_outputs(
     for (i, t) in g.targets.iter().enumerate() {
         let seed = t.donors[t.seed_run_idx]
             .as_ref()
+            .or_else(|| t.inferred_charge.as_ref().map(|i| &i.seed))
             .context("target missing seed ID")?;
         let mut row = vec![
             i.to_string(),
@@ -495,6 +751,12 @@ pub fn write_search_outputs(
                 matrix.run_names[r].clone(),
                 if direct.is_some() {
                     "direct_ms2"
+                } else if g.is_inferred(i, r) {
+                    if g.native_anchor(i, r).is_some() {
+                        "inferred_charge"
+                    } else {
+                        "mbr_inferred_charge"
+                    }
                 } else {
                     "mbr"
                 }

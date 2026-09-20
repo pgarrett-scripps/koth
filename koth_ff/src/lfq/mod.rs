@@ -137,6 +137,16 @@ pub struct LfqConfig {
     /// falls back to the raw term when no σ model is available. Default false.
     #[serde(default)]
     pub rt_spread_scoring: bool,
+    /// Experimental search-guided scorer; legacy preserves the release path.
+    #[serde(default)]
+    pub search_scoring: rescore::search::SearchScoring,
+    /// Rescue unambiguous same-run IDs when global RT observations conflict.
+    /// Ambiguous targets remain ineligible for cross-run transfer.
+    #[serde(default)]
+    pub search_rt_rescue: bool,
+    /// Experimental inferred 2+/3+/4+ targets, with explicit charge provenance.
+    #[serde(default)]
+    pub search_expand_charges: bool,
     /// Report the *averagine-projected* intensity per cell instead of the raw
     /// box-sum. For each grid column the observed isotopologue vector is passed
     /// through a matched filter for the theoretical averagine pattern (the same
@@ -242,6 +252,9 @@ impl Default for LfqConfig {
             quant_estimator: default_quant_estimator(),
             detected_use_grid: default_detected_use_grid(),
             rt_spread_scoring: false,
+            search_scoring: rescore::search::SearchScoring::Legacy,
+            search_rt_rescue: false,
+            search_expand_charges: false,
             averagine_projection: false,
             decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),
@@ -1000,7 +1013,7 @@ fn quantify_candidates(
                 if let Some(g) = guidance {
                     // A same-run MS2 observation supplies native RT/IM. Its paired
                     // decoy uses the same centre before the usual coordinate shifts.
-                    if let Some(id) = &g.targets[feat_idx].donors[run_idx] {
+                    if let Some(id) = g.native_anchor(feat_idx, run_idx) {
                         corr_rt = id.rt_minutes;
                         corr_im = id.im;
                     } else if cf.ref_im == 0.0 {
@@ -1041,7 +1054,7 @@ fn quantify_candidates(
                 } else {
                     (cf.theoretical_pattern.as_slice(), &bc_templates[feat_idx])
                 };
-                quantify_cell(
+                let mut candidate = quantify_cell(
                     &mut grid,
                     &mut scores,
                     &mut col_totals,
@@ -1067,7 +1080,17 @@ fn quantify_candidates(
                             !g.is_direct(feat_idx, run_idx)
                         }),
                     excluded,
-                )
+                );
+                // Apply the same minimum envelope support to inferred targets
+                // and their paired decoys before ownership and confidence scoring.
+                if guidance.is_some_and(|g| g.is_inferred(feat_idx, run_idx))
+                    && (candidate.entry.n_isotopes_found < 2 || candidate.entry.coelution < 0.5)
+                {
+                    candidate.entry.intensity = 0.0;
+                    candidate.support.clear();
+                    candidate.context.clear();
+                }
+                candidate
             };
             let empty = HashSet::new();
             let candidates: Vec<CellCandidate> = (0..n_features)
@@ -1128,16 +1151,40 @@ fn quantify_candidates(
     let t_tdc = Instant::now();
     let q_map: HashMap<(usize, usize), f64> = if config.run_tdc {
         if let Some(g) = guidance {
+            let peptides: Vec<_> = g
+                .targets
+                .iter()
+                .map(|t| t.modified_peptide.clone())
+                .collect();
+            let charges: Vec<_> = g.targets.iter().map(|t| t.charge).collect();
             // Do not let abundant direct IDs dilute the transferred-cell null.
             // Partition paired decoys using the same donor mask as targets.
             let mut q = HashMap::new();
-            for direct in [false, true] {
+            // Keep same-run inferred-charge evidence separate from both direct
+            // PSMs and cross-run transfers, for targets and paired decoys alike.
+            let class = |e: &LfqEntry| {
+                if g.is_direct(e.feature_idx, e.run_idx) {
+                    1
+                } else if g.is_inferred(e.feature_idx, e.run_idx)
+                    && g.native_anchor(e.feature_idx, e.run_idx).is_some()
+                {
+                    2
+                } else {
+                    0
+                }
+            };
+            for evidence in 0..=2 {
                 let entries: Vec<_> = all_entries
                     .iter()
-                    .filter(|e| g.is_direct(e.feature_idx, e.run_idx) == direct)
+                    .filter(|e| class(e) == evidence)
                     .cloned()
                     .collect();
-                q.extend(rescore::compute_qvalues_qda(&entries));
+                q.extend(rescore::search::compute(
+                    &entries,
+                    &peptides,
+                    &charges,
+                    config.search_scoring,
+                ));
             }
             q
         } else {

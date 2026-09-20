@@ -510,6 +510,51 @@ grid estimator. There are no additional user settings. See
 
 ### Search-guided CLI options (0.8.0)
 
+Experimental `[lfq]` settings in the LFQ-performance worktree:
+
+- `search_scoring = "legacy"` (default) preserves release scoring exactly.
+  `"peptide_grouped"` assigns all runs and charges of each modified peptide to
+  the same deterministic fold and fits imputation/scaling on training data only.
+  `"charge_stratified"` additionally fits 2+, 3+, and other charges separately
+  within direct and transferred evidence classes. If any present charge bin
+  lacks 100 positive targets, 100 positive decoys, or 20 peptide groups in any
+  training fold, the entire evidence class falls back to peptide-grouped pooled
+  scoring. Candidate q-values count score ties together and use a +1 decoy
+  correction. Compare grouped versus stratified to isolate charge splitting;
+  the grouped-versus-legacy contrast includes the validation/calibration changes.
+- `search_scoring = "charge_signed"` uses signed mass/RT residuals in the same
+  charge-stratified, peptide-grouped QDA. `"charge_signed_quality"` also adds
+  log1p isotope count, log1p nonnegative peak width, and preceding-isotope signal
+  fraction. Features use each target or decoy's own extraction coordinates;
+  preprocessing remains training-fold-only. Sparse strata use the same pooled
+  fallback with the selected feature definition. Both are experimental,
+  default-off, development candidates. Rounded replay motivates native testing;
+  it does not validate transfer FDR or establish FlashLFQ parity.
+- `search_rt_rescue = false` (default) preserves target rejection. When true,
+  non-IM targets can retain supported native RT clusters: an ambiguous run needs
+  a unique bounded cluster containing a strict majority of its PSMs and at least
+  two observations. Unsupported runs are withheld. Any excluded PSM or remaining
+  cross-run RT conflict blocks transfers for that target; unambiguous same-run
+  IDs can still be extracted. `search_manifest.json` records excluded source rows
+  and cross-run ambiguity. Mass-conflicting or IM-bearing targets retain the
+  legacy rejection policy. This conservative first rescue does not resolve
+  chromatographic isomers or enable transfers from ambiguous targets.
+
+- `search_expand_charges = false` (default). When enabled, unambiguous non-IM
+  peptides are queried at charges 2–4 within the run's observed feature/hill m/z
+  range. This conservative range may be narrower than the instrument's acquired
+  range. Native PSM RTs at other charges anchor additional same-run queries even
+  with `--no-mbr`; inferred charges are never direct MS2 identifications. Native
+  exports label `inferred_charge` or `mbr_inferred_charge` and retain real seed
+  PSMs at their original charges in the manifest. Require at least two isotopes
+  and co-elution >=0.5 for inferred targets and paired decoys before scoring.
+  Reuse signal ownership to avoid duplicate signal. Other observed charges remain
+  available. This bounded ablation is not an exact FlashLFQ charge-search replica.
+
+These are development ablations, not validated improvements or calibrated FDR
+claims. Identification-free scoring is unchanged. Apex-versus-sum comparisons
+for search-guided LFQ reopen that estimator question only in this new workflow.
+
 `koth_align --sage-psms results.sage.tsv` (or `.parquet`) and
 `--targets targets.tsv` select optional identification-guided quantification.
 `--max-id-qvalue` and `--max-extraction-qvalue` both default to `0.01`;
