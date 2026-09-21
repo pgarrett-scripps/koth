@@ -163,3 +163,50 @@ pub fn integrate(
     }
 }
 
+
+#[cfg(test)]
+mod scan_density_tests {
+    use crate::models::Hill;
+    use std::sync::Arc;
+
+    fn hill(rt_start: f64, rt_end: f64, scan_start: usize, scan_end: usize) -> Hill {
+        Hill {
+            hill_id: 0,
+            mz: 500.0,
+            mz_std: 0.0,
+            mz_se: 0.0,
+            rt: (rt_start + rt_end) / 2.0,
+            rt_start,
+            rt_end,
+            rt_width: rt_end - rt_start,
+            im: 0.0,
+            im_std: 0.0,
+            scan_start,
+            scan_apex: scan_start,
+            scan_end,
+            n_scans: scan_end.saturating_sub(scan_start) + 1,
+            skipped_scans: 0,
+            intensity_sum: 1.0,
+            intensity_max: 1.0,
+            hill_score: 1.0,
+            intensity_profile: Arc::from(&[1.0f32][..]),
+            isolation_window: None,
+            faims_cv: None,
+        }
+    }
+
+    #[test]
+    fn scan_spacing_is_the_median_over_hills_that_span_several_scans() {
+        // Ten scans across ten seconds is one second per scan.
+        let hills: Vec<Hill> = (0..9).map(|_| hill(0.0, 10.0 / 60.0, 0, 10)).collect();
+        let spacing = crate::lfq::median_scan_spacing(&hills).expect("usable hills");
+        assert!((spacing * 60.0 - 1.0).abs() < 1e-6, "got {} s", spacing * 60.0);
+    }
+
+    #[test]
+    fn no_usable_timing_leaves_the_configured_count_in_place() {
+        // A hill confined to one scan cannot report a spacing.
+        assert!(crate::lfq::median_scan_spacing(&[hill(0.0, 5.0, 3, 3)]).is_none());
+        assert!(crate::lfq::median_scan_spacing(&[]).is_none());
+    }
+}

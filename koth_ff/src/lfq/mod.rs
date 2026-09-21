@@ -69,6 +69,16 @@ pub struct LfqConfig {
     /// A faster-scanning instrument supports more bins; deriving this from the
     /// observed scan rate instead of a fixed count is the proper fix.
     pub grid_cols: usize,
+    /// Target MS1 scans averaged into each retention-time column. When above
+    /// zero the column count is derived per run from the measured scan spacing
+    /// as `window / (target * spacing)`, so the amount of smoothing per column
+    /// is the same on a fast instrument as on a slow one, and `grid_cols`
+    /// becomes an upper bound. A column fed by a single scan carries that
+    /// scan's noise straight into the isotope and hybrid statistics that choose
+    /// the peak bounds, which is what a fixed column count produced here: on
+    /// these gradients 100 columns worked out to 1.01 scans each.
+    #[serde(default = "default_grid_scans_per_column")]
+    pub grid_scans_per_column: f64,
     /// Minimum spectral **Bhattacharyya** score for a grid column to keep
     /// extending the integration peak (peak-expansion gate). Named for the
     /// metric it actually uses — it is NOT a cosine threshold. Optional
@@ -236,6 +246,31 @@ fn default_normalize() -> String {
     "none".to_string()
 }
 
+/// Median MS1 scan spacing in a run, measured from hills that span at least two
+/// scans. Returns `None` when no hill carries usable timing, in which case the
+/// configured column count stands.
+pub(crate) fn median_scan_spacing(hills: &[Hill]) -> Option<f64> {
+    let mut spacings: Vec<f64> = hills
+        .iter()
+        .filter_map(|h| {
+            let scans = h.scan_end.checked_sub(h.scan_start)?;
+            let span = h.rt_end - h.rt_start;
+            (scans >= 2 && span > 0.0).then(|| span / scans as f64)
+        })
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .collect();
+    if spacings.is_empty() {
+        return None;
+    }
+    let mid = spacings.len() / 2;
+    spacings.select_nth_unstable_by(mid, f64::total_cmp);
+    Some(spacings[mid])
+}
+
+fn default_grid_scans_per_column() -> f64 {
+    4.0
+}
+
 fn default_quant_estimator() -> String {
     "sum".to_string()
 }
@@ -268,7 +303,8 @@ impl Default for LfqConfig {
             rt_window_pct: 0.005,
             im_tolerance: 0.015,
             n_isotopes: 3,
-            grid_cols: 25,
+            grid_cols: 100,
+            grid_scans_per_column: default_grid_scans_per_column(),
             min_spectral_bhattacharyya: 0.1,
             score_mode: ScoreMode::Hybrid,
             run_tdc: true,
@@ -1013,6 +1049,31 @@ fn quantify_candidates(
             let t_load = Instant::now();
             let hills_vec = load_hills(run_idx);
             hills_per_run[run_idx] = hills_vec.len();
+            // Size the grid so each column averages a similar number of scans
+            // whatever the instrument's acquisition rate.
+            let run_config = if config.grid_scans_per_column > 0.0 {
+                let window = 2.0 * config.rt_window_pct * (run_rt_range.1 - run_rt_range.0);
+                match median_scan_spacing(&hills_vec) {
+                    Some(spacing) if window > 0.0 => {
+                        let wanted = window / (config.grid_scans_per_column * spacing);
+                        let cols = (wanted.round() as usize).clamp(6, config.grid_cols);
+                        if pass == 0 {
+                            log::info!(
+                                "[lfq] '{}': {:.2} s scan spacing over a {:.3} min window -> {} grid columns",
+                                run.name,
+                                spacing * 60.0,
+                                window,
+                                cols
+                            );
+                        }
+                        LfqConfig { grid_cols: cols, ..config.clone() }
+                    }
+                    _ => config.clone(),
+                }
+            } else {
+                config.clone()
+            };
+            let config = &run_config;
             let sorted = SortedHills::from_hills(&hills_vec);
             log::info!(
                 "[lfq] run {}/{} '{}': {} hills loaded [{:.2?}]",
