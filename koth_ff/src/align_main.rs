@@ -284,6 +284,7 @@ fn main() -> anyhow::Result<()> {
             &out_dir,
             args.max_extraction_qvalue,
             config.lfq.run_tdc,
+            config.lfq.search_gate_transfers_only,
         )?;
         matrix
     } else {

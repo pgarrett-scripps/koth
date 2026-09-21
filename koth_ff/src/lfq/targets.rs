@@ -718,6 +718,7 @@ pub fn write_search_outputs(
     out: &Path,
     max_cell_q: f64,
     run_tdc: bool,
+    gate_transfers_only: bool,
 ) -> Result<()> {
     let g = matrix
         .search_guidance
@@ -767,8 +768,13 @@ pub fn write_search_outputs(
             let attempted = g.attempted(i, r);
             let intensity = matrix.intensity(i, r);
             let q = matrix.q_value(i, r);
-            let accepted =
-                attempted && intensity > 0.0 && run_tdc && q.is_finite() && q <= max_cell_q;
+            // A same-run MS2 identification is evidence the extraction score
+            // cannot overturn; only inferred cells are gated on it.
+            let gated = !(gate_transfers_only && direct.is_some());
+            let accepted = attempted
+                && intensity > 0.0
+                && run_tdc
+                && (!gated || (q.is_finite() && q <= max_cell_q));
             let value = if accepted { intensity } else { 0.0 };
             row.push(value.to_string());
             let status = if !attempted {
@@ -832,6 +838,7 @@ pub fn write_search_outputs(
     rejected.flush()?;
     let manifest = serde_json::json!({"schema_version":1,"koth_version":crate::VERSION,"search":g,
         "run_names":matrix.run_names,"max_cell_qvalue":max_cell_q,"run_tdc":run_tdc,
+        "gate_transfers_only":gate_transfers_only,
         "confidence":"ID q-values are imported; extraction q-values are exploratory and separately ranked for direct and transferred cells. No calibrated peptide-transfer FDR is claimed.",
         "outputs":{"peptide_quant.tsv":sha256(&out.join("peptide_quant.tsv"))?,
             "peptide_intensity_matrix.tsv":sha256(&out.join("peptide_intensity_matrix.tsv"))?,

@@ -156,6 +156,16 @@ pub struct LfqConfig {
     /// Experimental inferred 2+/3+/4+ targets, with explicit charge provenance.
     #[serde(default)]
     pub search_expand_charges: bool,
+    /// Apply the extraction q-value gate only to transferred cells. A cell with
+    /// an accepted same-run MS2 identification has already passed peptide-level
+    /// FDR; gating it again on an exploratory extraction score re-litigates an
+    /// identification that was accepted, and discards a quantity for a peptide
+    /// known to be present in that run. Transfers, which have no such evidence,
+    /// stay gated. FlashLFQ applies FDR to its match-between-runs peaks only.
+    /// Identification-free mode is unaffected: every cell there is inferred, so
+    /// every cell stays gated.
+    #[serde(default)]
+    pub search_gate_transfers_only: bool,
     /// Report the *averagine-projected* intensity per cell instead of the raw
     /// box-sum. For each grid column the observed isotopologue vector is passed
     /// through a matched filter for the theoretical averagine pattern (the same
@@ -265,6 +275,7 @@ impl Default for LfqConfig {
             search_rt_rescue: false,
             search_rt_rescue_per_run_transfers: false,
             search_expand_charges: false,
+            search_gate_transfers_only: false,
             averagine_projection: false,
             decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),

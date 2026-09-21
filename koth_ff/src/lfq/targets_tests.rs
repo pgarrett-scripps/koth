@@ -142,7 +142,7 @@ fn inferred_charge_preserves_real_psm_charge_and_no_mbr_semantics() {
     assert!((cf[i].ref_mz - (1000.0 / 3.0 + PROTON_MASS)).abs() < 1e-10);
     let matrix = super::super::quantify_guided(&r, &a, &c, cf, g, |_| vec![]);
     let tmp = Scratch::new();
-    write_search_outputs(&matrix, &tmp.0, 0.01, true).unwrap();
+    write_search_outputs(&matrix, &tmp.0, 0.01, true, false).unwrap();
     let text = std::fs::read_to_string(tmp.0.join("peptide_quant.tsv")).unwrap();
     assert!(text.contains("inferred_charge"));
 }
@@ -488,7 +488,7 @@ fn separate_confidence_and_missing_signal_are_exported() {
         );
     matrix.q_values[0] = 0.2;
     let tmp = Scratch::new();
-    write_search_outputs(&matrix, &tmp.0, 0.01, true).unwrap();
+    write_search_outputs(&matrix, &tmp.0, 0.01, true, false).unwrap();
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_path(tmp.0.join("peptide_quant.tsv"))
@@ -556,7 +556,7 @@ fn disabling_rescoring_never_labels_unscored_signal_accepted() {
     let (cf, g) = build_targets(vec![id(0)], summary(), &r, &a, &c, 10, true).unwrap();
     let matrix = super::super::quantify_guided(&r, &a, &c, cf, g, |_| signal(5.));
     let tmp = Scratch::new();
-    write_search_outputs(&matrix, &tmp.0, 1.0, false).unwrap();
+    write_search_outputs(&matrix, &tmp.0, 1.0, false, false).unwrap();
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_path(tmp.0.join("peptide_quant.tsv"))
@@ -602,7 +602,7 @@ fn entirely_ambiguous_input_emits_one_rejection_without_fabricated_targets() {
     let (cf, g) = build_targets(vec![id(0), conflict], summary(), &r, &a, &c, 10, true).unwrap();
     let matrix = super::super::quantify_guided(&r, &a, &c, cf, g, |_| vec![]);
     let tmp = Scratch::new();
-    write_search_outputs(&matrix, &tmp.0, 0.01, true).unwrap();
+    write_search_outputs(&matrix, &tmp.0, 0.01, true, false).unwrap();
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .from_path(tmp.0.join("search_rejections.tsv"))
