@@ -98,10 +98,14 @@ pub fn integrate(
     // valley, climbs back out, and expansion follows it. `cut` watches the
     // running minimum and stops at the valley once the profile rises out of it
     // by `peak_cut_discrimination` of the current height.
+    // Bound the expansion in window terms, not bins, so the integration span
+    // does not change when the grid resolution does.
+    let max_steps = ((config.peak_max_halfwidth_frac * n_cols as f64 / 2.0).ceil() as usize).max(1);
+
     // Expand left
     let mut start = apex;
     let mut left_steps = 0usize;
-    while start > 0 && left_steps < 20 {
+    while start > 0 && left_steps < max_steps {
         let candidate = start - 1;
         if scores.bhattacharyya[candidate] < spec_min {
             break;
@@ -116,7 +120,7 @@ pub fn integrate(
     // Expand right
     let mut end = apex;
     let mut right_steps = 0usize;
-    while end + 1 < n_cols && right_steps < 20 {
+    while end + 1 < n_cols && right_steps < max_steps {
         let candidate = end + 1;
         if scores.bhattacharyya[candidate] < spec_min {
             break;

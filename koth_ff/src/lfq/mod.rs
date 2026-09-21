@@ -79,6 +79,15 @@ pub struct LfqConfig {
     /// these gradients 100 columns worked out to 1.01 scans each.
     #[serde(default = "default_grid_scans_per_column")]
     pub grid_scans_per_column: f64,
+    /// Furthest a peak may expand from its apex, as a fraction of the grid's
+    /// half-width. This used to be a fixed twenty bins, which silently coupled
+    /// the integration width to the grid resolution: the same setting meant
+    /// 0.28 minutes at 100 columns and 0.07 at 400, so raising the resolution
+    /// truncated peaks. Expressed against the window it means the same span
+    /// whatever the column count. One allows expansion across the half-window,
+    /// leaving the isotope and hybrid gates as the operative control.
+    #[serde(default = "default_peak_max_halfwidth_frac")]
+    pub peak_max_halfwidth_frac: f64,
     /// Minimum spectral **Bhattacharyya** score for a grid column to keep
     /// extending the integration peak (peak-expansion gate). Named for the
     /// metric it actually uses — it is NOT a cosine threshold. Optional
@@ -271,6 +280,10 @@ fn default_grid_scans_per_column() -> f64 {
     4.0
 }
 
+fn default_peak_max_halfwidth_frac() -> f64 {
+    1.0
+}
+
 fn default_quant_estimator() -> String {
     "sum".to_string()
 }
@@ -305,6 +318,7 @@ impl Default for LfqConfig {
             n_isotopes: 3,
             grid_cols: 100,
             grid_scans_per_column: default_grid_scans_per_column(),
+            peak_max_halfwidth_frac: default_peak_max_halfwidth_frac(),
             min_spectral_bhattacharyya: 0.1,
             score_mode: ScoreMode::Hybrid,
             run_tdc: true,
