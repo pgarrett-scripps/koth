@@ -8,6 +8,31 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### 0.9.0 development: LFQ extraction and search-guided admission
+- Size the extraction grid from the measured MS1 scan spacing rather than a
+  fixed column count, targeting `grid_scans_per_column` scans per retention-time
+  column with `grid_cols` as an upper bound. A column fed by a single scan
+  carried that scan's noise into the statistics that choose the peak bounds; on
+  two-hour Orbitrap gradients the previous default worked out to 1.01 scans per
+  column. Both LFQ modes improve.
+- Bound peak expansion by `peak_max_halfwidth_frac` of the extraction window
+  instead of a fixed twenty grid bins, so the integration span no longer changes
+  with grid resolution.
+- Apply the extraction q-value gate only to transferred cells when
+  `search_gate_transfers_only` is set. A cell with an accepted same-run MS2
+  identification has already passed peptide-level FDR; transfers, which have no
+  such evidence, stay gated. Identification-free mode is unaffected, since every
+  cell there is inferred.
+- Decide transfer eligibility per recipient run with
+  `search_rt_rescue_per_run_transfers`, instead of withdrawing a peptide from
+  transfer in every run because one run's identifications were ambiguous.
+- Precompute per-run retention-time ranges in target building. `rt_range`
+  rescans a run's whole feature list and was called on the order of a million
+  times; search-guided runs are dramatically faster with byte-identical output.
+- No calibrated FDR or accuracy claim is added. Coverage, error rates and their
+  limitations are measured in the accompanying manuscript's development record.
+
+
 ### 0.8.0 release development: search-guided LFQ
 - Add optional `koth_align --sage-psms` TSV/Parquet import and engine-neutral
   `--targets` identification TSV. Filter Sage rank-1 target PSMs by both
