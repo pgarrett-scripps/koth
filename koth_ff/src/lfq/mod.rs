@@ -59,7 +59,15 @@ pub struct LfqConfig {
     pub im_tolerance: f64,
     /// Number of isotopologue rows: 1 = M only, 2 = M+M1, 3 = M+M1+M2
     pub n_isotopes: usize,
-    /// Number of RT bins per grid (default 100)
+    /// Retention-time bins across the extraction window. This should track the
+    /// run's MS1 scan density: on a two-hour Orbitrap gradient the default
+    /// window holds roughly fifteen real scans, so a finer grid spreads them
+    /// over mostly empty bins and the per-column statistics that drive scoring
+    /// and peak bounds become noise. Measured on IonStar, dropping from 100 to
+    /// 25 cuts the paired CV difference against FlashLFQ from 2.98 to 0.76
+    /// points and improves identification-free median CV from 16.58% to 14.00%.
+    /// A faster-scanning instrument supports more bins; deriving this from the
+    /// observed scan rate instead of a fixed count is the proper fix.
     pub grid_cols: usize,
     /// Minimum spectral **Bhattacharyya** score for a grid column to keep
     /// extending the integration peak (peak-expansion gate). Named for the
@@ -260,7 +268,7 @@ impl Default for LfqConfig {
             rt_window_pct: 0.005,
             im_tolerance: 0.015,
             n_isotopes: 3,
-            grid_cols: 100,
+            grid_cols: 25,
             min_spectral_bhattacharyya: 0.1,
             score_mode: ScoreMode::Hybrid,
             run_tdc: true,
