@@ -1158,7 +1158,6 @@ fn quantify_candidates(
                 } else {
                     (cf.theoretical_pattern.as_slice(), &bc_templates[feat_idx])
                 };
-                let half_window = config.rt_window_pct * span;
                 let mut candidate = quantify_cell(
                     &mut grid,
                     &mut scores,
@@ -1177,7 +1176,7 @@ fn quantify_candidates(
                     mz,
                     rt,
                     corr_im,
-                    half_window,
+                    config.rt_window_pct * span,
                     rt_sigma,
                     is_decoy,
                     !is_decoy
