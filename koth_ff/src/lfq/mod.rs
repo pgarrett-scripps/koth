@@ -156,13 +156,14 @@ pub struct LfqConfig {
     /// Experimental inferred 2+/3+/4+ targets, with explicit charge provenance.
     #[serde(default)]
     pub search_expand_charges: bool,
-    /// In search-guided mode, decline to quantify a cell whose signal is
-    /// contested instead of reporting the residual left after a competitor's
-    /// claim. Identification-free grouping still needs the residual, because it
-    /// has no identity with which to declare ambiguity; with imported targets
-    /// the ambiguity can be reported as such. Trades filled cells for accuracy.
+    /// Treat a cell as contested only when a competitor already claimed part of
+    /// the cell's own peak, rather than anywhere in its extraction window. The
+    /// window is much wider than the peak, so the default re-extracts and
+    /// reports a residual for cells whose peak a competitor never touched.
+    /// Exclusivity is unaffected either way: a retained cell's samples are
+    /// still disjoint from every claimed sample.
     #[serde(default)]
-    pub search_suppress_residuals: bool,
+    pub contest_on_peak_overlap: bool,
     /// Report the *averagine-projected* intensity per cell instead of the raw
     /// box-sum. For each grid column the observed isotopologue vector is passed
     /// through a matched filter for the theoretical averagine pattern (the same
@@ -272,7 +273,7 @@ impl Default for LfqConfig {
             search_rt_rescue: false,
             search_rt_rescue_per_run_transfers: false,
             search_expand_charges: false,
-            search_suppress_residuals: false,
+            contest_on_peak_overlap: false,
             averagine_projection: false,
             decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),
@@ -1130,7 +1131,7 @@ fn quantify_candidates(
                     &priority,
                     &hills_vec,
                     extract,
-                    config.search_suppress_residuals && guidance.is_some(),
+                    config.contest_on_peak_overlap,
                 );
                 let conflicts = resolved.iter().filter(|e| e.excluded_samples > 0).count();
                 log::info!(
