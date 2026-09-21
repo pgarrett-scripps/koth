@@ -138,7 +138,6 @@ pub(super) fn resolve_run(
     priority: &[Vec<usize>; 2],
     hills: &[crate::models::Hill],
     extract: impl Fn(usize, bool, &HashSet<SampleId>) -> CellCandidate,
-    contest_on_peak_overlap: bool,
 ) -> Vec<LfqEntry> {
     candidates.sort_by_key(|c| {
         (
@@ -159,15 +158,7 @@ pub(super) fn resolve_run(
         }
         let overlap = c.support.iter().filter(|s| claimed.contains(*s)).count();
         let context_overlap = c.context.iter().filter(|s| claimed.contains(*s)).count();
-        // A competitor elsewhere in the window does not make this cell's own
-        // peak ambiguous, and re-extracting against it manufactures a residual
-        // where a clean measurement already existed.
-        let contested = if contest_on_peak_overlap {
-            overlap > 0
-        } else {
-            context_overlap > 0
-        };
-        if contested {
+        if context_overlap > 0 {
             let competitor = c
                 .context
                 .iter()
@@ -388,7 +379,6 @@ mod tests {
             &priority,
             hills,
             |i, d, x| extract(hills, &groups[i], i, d, x),
-            false,
         )
     }
 
@@ -445,7 +435,6 @@ mod tests {
             &[vec![0, 1], vec![0, 1]],
             &hills,
             |i, d, x| extract(&hills, &groups[i], i, d, x),
-            false,
         );
         assert!(out[0].intensity > 0.0 && out[1].intensity > 0.0);
         assert!((out[0].apex_rt - 0.3).abs() < 0.03);
@@ -454,33 +443,27 @@ mod tests {
     }
 
     #[test]
-    fn peak_overlap_rule_still_detects_a_genuine_collision() {
-        // Both groups select the same stronger peak first, so the second cell's
-        // own peak really is claimed. The narrower rule must still contest it,
-        // otherwise it would be licensing double counting rather than avoiding
-        // a needless re-extraction.
+    fn a_claimed_peak_is_contested_and_the_residual_resolves_elsewhere() {
+        // Both groups select the same stronger peak first. The loser must be
+        // contested rather than allowed to double count, and its re-extraction
+        // must land on the second peak.
         let hills = envelope(500.0, 2, &[(0.3, 1000.0), (0.7, 700.0)]);
         let groups = [group(500.0, 0.3, 2), group(500.0, 0.7, 2)];
         let empty = HashSet::new();
-        let build = || {
-            groups
-                .iter()
-                .enumerate()
-                .map(|(i, g)| extract(&hills, g, i, false, &empty))
-                .collect::<Vec<_>>()
-        };
-        for peak_rule in [false, true] {
-            let out = resolve_run(
-                build(),
-                &[vec![0, 1], vec![0, 1]],
-                &hills,
-                |i, d, x| extract(&hills, &groups[i], i, d, x),
-                peak_rule,
-            );
-            assert_eq!(out[1].ownership_status, "residual");
-            assert!((out[1].apex_rt - 0.7).abs() < 0.03);
-            assert!(out[0].intensity > 0.0 && out[1].intensity > 0.0);
-        }
+        let candidates = groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| extract(&hills, g, i, false, &empty))
+            .collect();
+        let out = resolve_run(
+            candidates,
+            &[vec![0, 1], vec![0, 1]],
+            &hills,
+            |i, d, x| extract(&hills, &groups[i], i, d, x),
+        );
+        assert_eq!(out[1].ownership_status, "residual");
+        assert!((out[1].apex_rt - 0.7).abs() < 0.03);
+        assert!(out[0].intensity > 0.0 && out[1].intensity > 0.0);
     }
 
     #[test]
@@ -515,7 +498,6 @@ mod tests {
             &priority,
             &hills,
             |i, d, x| extract(&hills, &groups[i], i, d, x),
-            false,
         );
         let targets: Vec<_> = out
             .iter()
