@@ -92,35 +92,56 @@ pub fn integrate(
     };
     let spec_min = config.min_spectral_bhattacharyya as f32;
 
-    // Expand left
-    let mut start = apex;
-    let mut left_steps = 0usize;
-    while start > 0 && left_steps < 20 {
-        let candidate = start - 1;
-        if scores.bhattacharyya[candidate] < spec_min {
-            break;
+    // Expand outward from the apex. The quality gates below stop expansion when
+    // the isotope pattern or hybrid score decays, but they do not notice a
+    // second peak whose envelope resembles this one: the profile falls into a
+    // valley, climbs back out, and expansion follows it. `cut` watches the
+    // running minimum and stops at the valley once the profile rises out of it
+    // by `peak_cut_discrimination` of the current height.
+    let cut = config.peak_cut_discrimination as f32;
+    // Too few populated columns and a single noisy bin looks like a valley, so
+    // short peaks are never cut. FlashLFQ applies the same minimum.
+    let populated = col_totals[..n_cols].iter().filter(|&&v| v > 0.0).count();
+    let may_cut = cut > 0.0 && populated >= 5;
+    let expand = |from: usize, step: isize| -> usize {
+        let mut edge = from;
+        let mut valley = col_totals[from];
+        let mut valley_bin = from;
+        for _ in 0..20usize {
+            let next = edge as isize + step;
+            if next < 0 || next as usize >= n_cols {
+                break;
+            }
+            let candidate = next as usize;
+            if scores.bhattacharyya[candidate] < spec_min || scores.hybrid[candidate] < half_max {
+                break;
+            }
+            let height = col_totals[candidate];
+            if height < valley {
+                valley = height;
+                valley_bin = candidate;
+            } else if may_cut && height > 0.0 && (height - valley) / height > cut {
+                // A rise above the running minimum can be a neighbouring peak or
+                // one noisy bin during the descent. Require the rise to clear the
+                // column just past the valley as well before cutting, so a single
+                // dip cannot truncate a real peak.
+                let beyond = valley_bin as isize + step;
+                let confirmed = if beyond >= 0 && (beyond as usize) < n_cols {
+                    let second = col_totals[beyond as usize];
+                    (height - second) / height > cut
+                } else {
+                    true
+                };
+                if confirmed {
+                    return valley_bin;
+                }
+            }
+            edge = candidate;
         }
-        if scores.hybrid[candidate] < half_max {
-            break;
-        }
-        start = candidate;
-        left_steps += 1;
-    }
-
-    // Expand right
-    let mut end = apex;
-    let mut right_steps = 0usize;
-    while end + 1 < n_cols && right_steps < 20 {
-        let candidate = end + 1;
-        if scores.bhattacharyya[candidate] < spec_min {
-            break;
-        }
-        if scores.hybrid[candidate] < half_max {
-            break;
-        }
-        end = candidate;
-        right_steps += 1;
-    }
+        edge
+    };
+    let start = expand(apex, -1);
+    let end = expand(apex, 1);
 
     // Reported cell intensity. Default: raw box-sum over [start, end] across all
     // isotopologue rows. When `config.averagine_projection` is set: the summed
@@ -154,5 +175,65 @@ pub fn integrate(
         rt_score_at_apex: scores.rt[apex],
         int_score_at_apex: scores.intensity[apex],
         coelution: scores.coelution,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lfq::{grid::XicGrid, score::ColumnScores, LfqConfig};
+
+    /// Two peaks of similar shape separated by a shallow valley. The quality
+    /// gates cannot separate them, because a neighbour with a similar envelope
+    /// keeps the isotope and hybrid scores high across the valley.
+    fn two_peaks() -> (XicGrid, ColumnScores, Vec<f32>) {
+        let n = 40;
+        let mut grid = XicGrid::empty(1, n, 0.0, 1.0);
+        grid.n_slots_filled = 1;
+        let mut scores = ColumnScores::new(n);
+        let mut totals = vec![0.0f32; n];
+        for i in 0..n {
+            let x = i as f32;
+            let a = 100.0 * (-((x - 10.0) / 3.0).powi(2) / 2.0).exp();
+            let b = 70.0 * (-((x - 26.0) / 3.0).powi(2) / 2.0).exp();
+            let height = a + b;
+            grid.intensities[0][i] = height;
+            totals[i] = height;
+            // Both peaks look equally good to the quality gates.
+            scores.bhattacharyya[i] = 0.9;
+            scores.hybrid[i] = 0.9;
+            scores.rt[i] = 0.9;
+            scores.intensity[i] = 0.9;
+        }
+        (grid, scores, totals)
+    }
+
+    #[test]
+    fn expansion_without_a_cut_runs_into_the_neighbouring_peak() {
+        let (grid, scores, totals) = two_peaks();
+        let config = LfqConfig::default();
+        assert_eq!(config.peak_cut_discrimination, 0.0);
+        let peak = integrate(&grid, &scores, &totals, &config);
+        assert_eq!(peak.apex_bin, 10);
+        // Reaches past the valley at bin 18 and into the second peak.
+        assert!(peak.end_bin > 20, "end_bin was {}", peak.end_bin);
+    }
+
+    #[test]
+    fn a_valley_cut_stops_at_the_boundary_between_the_two_peaks() {
+        let (grid, scores, totals) = two_peaks();
+        let config = LfqConfig {
+            peak_cut_discrimination: 0.6,
+            ..LfqConfig::default()
+        };
+        let peak = integrate(&grid, &scores, &totals, &config);
+        assert_eq!(peak.apex_bin, 10);
+        assert!(
+            (14..=22).contains(&peak.end_bin),
+            "expected the cut near the valley, got {}",
+            peak.end_bin
+        );
+        let uncut = integrate(&grid, &scores, &totals, &LfqConfig::default());
+        assert!(peak.intensity < uncut.intensity);
     }
 }
