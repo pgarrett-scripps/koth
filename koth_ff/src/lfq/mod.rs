@@ -88,15 +88,6 @@ pub struct LfqConfig {
     /// leaving the isotope and hybrid gates as the operative control.
     #[serde(default = "default_peak_max_halfwidth_frac")]
     pub peak_max_halfwidth_frac: f64,
-    /// Re-extract a cell centred on its observed apex when the apex sits
-    /// further than this fraction of the half-window from the predicted centre.
-    /// The extraction window is centred on a prediction, so a peak that lands
-    /// off-centre is clipped on the short side and the amount clipped depends
-    /// on the prediction error, which turns alignment error into quantitative
-    /// noise. Zero disables the second pass. Decoys re-centre on their own
-    /// apex, so the target and decoy worlds stay symmetric.
-    #[serde(default)]
-    pub recenter_on_apex_frac: f64,
     /// Minimum spectral **Bhattacharyya** score for a grid column to keep
     /// extending the integration peak (peak-expansion gate). Named for the
     /// metric it actually uses — it is NOT a cosine threshold. Optional
@@ -328,7 +319,6 @@ impl Default for LfqConfig {
             grid_cols: 100,
             grid_scans_per_column: default_grid_scans_per_column(),
             peak_max_halfwidth_frac: default_peak_max_halfwidth_frac(),
-            recenter_on_apex_frac: 0.0,
             min_spectral_bhattacharyya: 0.1,
             score_mode: ScoreMode::Hybrid,
             run_tdc: true,
@@ -1196,52 +1186,6 @@ fn quantify_candidates(
                         }),
                     excluded,
                 );
-                // The window was centred on a prediction. If the peak landed
-                // well off centre it was clipped on the short side by an amount
-                // that depends on the prediction error, so re-extract once
-                // around the observed apex. One pass only: a second apex is not
-                // allowed to drag the window further.
-                if config.recenter_on_apex_frac > 0.0
-                    && candidate.entry.intensity > 0.0
-                    && candidate.entry.apex_rt.is_finite()
-                    && (candidate.entry.apex_rt - rt).abs()
-                        > config.recenter_on_apex_frac * half_window
-                {
-                    let recentred = quantify_cell(
-                        &mut grid,
-                        &mut scores,
-                        &mut col_totals,
-                        &mut obs,
-                        &hills_vec,
-                        &sorted,
-                        &run.scan_times,
-                        pattern,
-                        template,
-                        config,
-                        &timers,
-                        feat_idx,
-                        run_idx,
-                        cf.charge,
-                        mz,
-                        candidate.entry.apex_rt,
-                        corr_im,
-                        half_window,
-                        rt_sigma,
-                        is_decoy,
-                        !is_decoy
-                            && guidance.map_or(cf.per_run_feature[run_idx].is_none(), |g| {
-                                !g.is_direct(feat_idx, run_idx)
-                            }),
-                        excluded,
-                    );
-                    // Keep the original expected coordinate on the entry so the
-                    // rescorer still sees the residual against the prediction.
-                    if recentred.entry.intensity > 0.0 {
-                        let expected_rt = candidate.entry.expected_rt;
-                        candidate = recentred;
-                        candidate.entry.expected_rt = expected_rt;
-                    }
-                }
                 // Apply the same minimum envelope support to inferred targets
                 // and their paired decoys before ownership and confidence scoring.
                 if guidance.is_some_and(|g| g.is_inferred(feat_idx, run_idx))
