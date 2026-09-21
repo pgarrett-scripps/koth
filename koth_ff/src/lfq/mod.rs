@@ -156,14 +156,6 @@ pub struct LfqConfig {
     /// Experimental inferred 2+/3+/4+ targets, with explicit charge provenance.
     #[serde(default)]
     pub search_expand_charges: bool,
-    /// Stop peak expansion at a valley when the profile climbs back out of it,
-    /// which is how a co-eluting neighbour with a similar envelope is currently
-    /// integrated into this peak: the quality gates stay satisfied across the
-    /// valley, so expansion runs straight into the next peak. A column is
-    /// treated as belonging to a second peak when it exceeds the running
-    /// minimum by this fraction of its own height. Zero disables the check.
-    #[serde(default)]
-    pub peak_cut_discrimination: f64,
     /// Report the *averagine-projected* intensity per cell instead of the raw
     /// box-sum. For each grid column the observed isotopologue vector is passed
     /// through a matched filter for the theoretical averagine pattern (the same
@@ -273,7 +265,6 @@ impl Default for LfqConfig {
             search_rt_rescue: false,
             search_rt_rescue_per_run_transfers: false,
             search_expand_charges: false,
-            peak_cut_discrimination: 0.0,
             averagine_projection: false,
             decoy_own_template: default_decoy_own_template(),
             lone_coelution: default_lone_coelution(),
