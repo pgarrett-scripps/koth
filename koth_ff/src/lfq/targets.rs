@@ -533,9 +533,8 @@ pub fn build_targets(
         // would be centred on, so it still withdraws the target everywhere. A
         // pruned row in one run does not, once eligibility is decided per run.
         let per_run = config.search_rt_rescue && config.search_rt_rescue_per_run_transfers;
-        let transfer_eligible = transferable(seed)
-            && !rt_rescued
-            && (per_run || excluded_source_rows.is_empty());
+        let transfer_eligible =
+            transferable(seed) && !rt_rescued && (per_run || excluded_source_rows.is_empty());
         let transfer_blocked_runs: Vec<usize> = if per_run {
             withheld_runs
                 .iter()
@@ -561,7 +560,14 @@ pub fn build_targets(
         });
     }
     if config.search_expand_charges {
-        expand_charges(&mut consensus, &mut guidance, runs, &rt_ranges, config, rt_limit);
+        expand_charges(
+            &mut consensus,
+            &mut guidance,
+            runs,
+            &rt_ranges,
+            config,
+            rt_limit,
+        );
     }
     // Empty candidate sets still produce an auditable rejection report.
     Ok((consensus, guidance))

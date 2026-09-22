@@ -167,7 +167,6 @@ pub fn integrate(
     }
 }
 
-
 #[cfg(test)]
 mod scan_density_tests {
     use crate::models::Hill;
@@ -204,7 +203,11 @@ mod scan_density_tests {
         // Ten scans across ten seconds is one second per scan.
         let hills: Vec<Hill> = (0..9).map(|_| hill(0.0, 10.0 / 60.0, 0, 10)).collect();
         let spacing = crate::lfq::median_scan_spacing(&hills).expect("usable hills");
-        assert!((spacing * 60.0 - 1.0).abs() < 1e-6, "got {} s", spacing * 60.0);
+        assert!(
+            (spacing * 60.0 - 1.0).abs() < 1e-6,
+            "got {} s",
+            spacing * 60.0
+        );
     }
 
     #[test]

@@ -1080,7 +1080,10 @@ fn quantify_candidates(
                                 cols
                             );
                         }
-                        LfqConfig { grid_cols: cols, ..config.clone() }
+                        LfqConfig {
+                            grid_cols: cols,
+                            ..config.clone()
+                        }
                     }
                     _ => config.clone(),
                 }

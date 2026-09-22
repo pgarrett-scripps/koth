@@ -374,12 +374,9 @@ mod tests {
         if reverse {
             candidates.reverse();
         }
-        resolve_run(
-            candidates,
-            &priority,
-            hills,
-            |i, d, x| extract(hills, &groups[i], i, d, x),
-        )
+        resolve_run(candidates, &priority, hills, |i, d, x| {
+            extract(hills, &groups[i], i, d, x)
+        })
     }
 
     #[test]
@@ -430,12 +427,9 @@ mod tests {
             .enumerate()
             .map(|(i, g)| extract(&hills, g, i, false, &empty))
             .collect();
-        let out = resolve_run(
-            candidates,
-            &[vec![0, 1], vec![0, 1]],
-            &hills,
-            |i, d, x| extract(&hills, &groups[i], i, d, x),
-        );
+        let out = resolve_run(candidates, &[vec![0, 1], vec![0, 1]], &hills, |i, d, x| {
+            extract(&hills, &groups[i], i, d, x)
+        });
         assert!(out[0].intensity > 0.0 && out[1].intensity > 0.0);
         assert!((out[0].apex_rt - 0.3).abs() < 0.03);
         assert!((out[1].apex_rt - 0.7).abs() < 0.03);
@@ -455,12 +449,9 @@ mod tests {
             .enumerate()
             .map(|(i, g)| extract(&hills, g, i, false, &empty))
             .collect();
-        let out = resolve_run(
-            candidates,
-            &[vec![0, 1], vec![0, 1]],
-            &hills,
-            |i, d, x| extract(&hills, &groups[i], i, d, x),
-        );
+        let out = resolve_run(candidates, &[vec![0, 1], vec![0, 1]], &hills, |i, d, x| {
+            extract(&hills, &groups[i], i, d, x)
+        });
         assert_eq!(out[1].ownership_status, "residual");
         assert!((out[1].apex_rt - 0.7).abs() < 0.03);
         assert!(out[0].intensity > 0.0 && out[1].intensity > 0.0);
@@ -493,12 +484,9 @@ mod tests {
         }
         let evidence: Vec<_> = candidates.iter().map(|c| c.entry.clone()).collect();
         let priority = global_priority(&evidence, &groups);
-        let out = resolve_run(
-            candidates,
-            &priority,
-            &hills,
-            |i, d, x| extract(&hills, &groups[i], i, d, x),
-        );
+        let out = resolve_run(candidates, &priority, &hills, |i, d, x| {
+            extract(&hills, &groups[i], i, d, x)
+        });
         let targets: Vec<_> = out
             .iter()
             .filter(|e| !e.is_decoy)
