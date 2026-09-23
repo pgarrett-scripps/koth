@@ -8,7 +8,7 @@ use clap::Parser;
 use koth_ff::{
     alignment::{align_runs, RunInput},
     config::{AlignConfig, OutputFormat},
-    input::{discover_runs, read_features, read_hills},
+    input::{check_batch_mobility_scales, discover_runs, read_features, read_hills},
     lfq::{
         quantify, quantify_guided,
         targets::{build_targets, read_identifications, write_search_outputs, TargetFormat},
@@ -184,6 +184,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     log_mem("after loading all features");
+
+    // Refuse to align runs whose 1/K0 values are on different scales.
+    check_batch_mobility_scales(
+        run_paths
+            .iter()
+            .zip(&runs)
+            .map(|(p, r)| (p, r.features.as_slice())),
+    )?;
 
     // ── Alignment ─────────────────────────────────────────────────────────────
     log::info!("Running alignment...");

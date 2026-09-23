@@ -28,11 +28,16 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - `report.json` gains `mobility.scale` (`bruker-acquisition-calibrated-1/K0`,
   `timsrust-linear-1/K0`, or `as-read-from-input`) and the calibration
   coefficients applied.
-- Do not mix timsTOF feature tables from 0.9.0 or earlier with 0.10.0 tables in
-  one `koth_align` run: their 1/K0 scales differ. Re-run detection, or run both
-  with `bruker_mobility_scale = "linear"`.
+- `koth_align` and the LFQ examples refuse a batch that mixes 1/K0 scales. Each
+  run's scale is read from its `report.json`; a timsTOF run with none recorded
+  (0.9.0 or earlier) counts as linear. The error names each run and its scale.
+  Re-run detection, or run every input with `bruker_mobility_scale = "linear"`.
+  mzML and Thermo runs have no converted mobility and are not checked.
 - New example `tims_mobility_dump` prints the scan-to-1/K0 table of a run for
   comparison with the SDK.
+- Known issue: the optional streaming `bruker_ms1_polygon` gate (off by default)
+  still places scans on dnoise's linear 1/K0 scale. A fix has been requested in
+  dnoise; koth will pick it up with the next dnoise release.
 
 ### 0.9.0 development: LFQ extraction and search-guided admission
 - Size the extraction grid from the measured MS1 scan spacing rather than a

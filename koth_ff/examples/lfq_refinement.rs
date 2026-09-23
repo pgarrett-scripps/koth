@@ -5,7 +5,7 @@ use clap::Parser;
 use koth_ff::{
     alignment::{align_runs, RunInput},
     config::AlignConfig,
-    input::{discover_runs, read_features, read_hills},
+    input::{check_batch_mobility_scales, discover_runs, read_features, read_hills},
     lfq::{
         consensus::{audit_consensus, VARIANT_NAMES},
         quantify_consensus,
@@ -61,6 +61,12 @@ fn main() -> anyhow::Result<()> {
             rt_bounds: None,
         });
     }
+    check_batch_mobility_scales(
+        paths
+            .iter()
+            .zip(&runs)
+            .map(|(p, r)| (*p, r.features.as_slice())),
+    )?;
     if let Some(name) = &config.alignment.reference_run {
         anyhow::ensure!(
             runs.iter().any(|r| &r.name == name),

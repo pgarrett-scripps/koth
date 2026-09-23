@@ -66,8 +66,8 @@ impl MobilityScale {
     /// to mix scales.
     pub fn label(self) -> &'static str {
         match self {
-            MobilityScale::Calibrated => "bruker-acquisition-calibrated-1/K0",
-            MobilityScale::Linear => "timsrust-linear-1/K0",
+            MobilityScale::Calibrated => crate::input::SCALE_CALIBRATED,
+            MobilityScale::Linear => crate::input::SCALE_LINEAR,
         }
     }
 }

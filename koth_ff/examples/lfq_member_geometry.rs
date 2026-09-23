@@ -2,7 +2,7 @@
 use koth_ff::{
     alignment::{align_runs, RunInput},
     config::AlignConfig,
-    input::{discover_runs, read_features},
+    input::{check_batch_mobility_scales, discover_runs, read_features},
 };
 use std::{collections::HashSet, path::PathBuf};
 fn main() -> anyhow::Result<()> {
@@ -25,6 +25,12 @@ fn main() -> anyhow::Result<()> {
             })
         })
         .collect::<anyhow::Result<_>>()?;
+    check_batch_mobility_scales(
+        paths
+            .iter()
+            .zip(&runs)
+            .map(|(p, r)| (p, r.features.as_slice())),
+    )?;
     let alignment = align_runs(&runs, &cfg.alignment);
     let ids: HashSet<usize> = args[4]
         .split(',')

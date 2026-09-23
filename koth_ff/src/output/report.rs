@@ -94,7 +94,7 @@ impl MobilityReport {
     /// Non-Bruker input: ion mobility is whatever the input file carries.
     pub fn as_read() -> Self {
         Self {
-            scale: "as-read-from-input".into(),
+            scale: crate::input::SCALE_AS_READ.into(),
             calibration: Vec::new(),
         }
     }
