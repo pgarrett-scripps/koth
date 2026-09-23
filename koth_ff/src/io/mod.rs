@@ -1,5 +1,6 @@
 pub mod mzml;
 pub mod prefetch;
+pub mod tims_calibration;
 
 #[cfg(feature = "tdf")]
 pub mod bruker;

@@ -10,7 +10,7 @@ use koth_ff::{
     output::{
         build_features_report, build_hills_report, write_features_parquet, write_features_tsv,
         write_hills_parquet, write_hills_tsv, write_ms2_hills_parquet, write_ms2_hills_tsv,
-        write_report, RunReport,
+        write_report, MobilityReport, RunReport,
     },
     run_features, run_hills_streaming, run_ms2_hills_streaming, run_scoring,
 };
@@ -242,6 +242,7 @@ fn main() -> anyhow::Result<()> {
     let report = RunReport {
         hills: hills_report,
         features: features_report,
+        mobility: mobility_report(&args.input, &config)?,
     };
     let report_path = out_dir.join("report.json");
     write_report(&report, &report_path).context("Failed to write report")?;
@@ -257,4 +258,22 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("Done. Results in {}", out_dir.display());
     Ok(())
+}
+
+/// Record which 1/K0 scale the run's `im` values are on.
+fn mobility_report(input: &std::path::Path, config: &KothConfig) -> anyhow::Result<MobilityReport> {
+    match koth_ff::io::detect_format(input) {
+        #[cfg(feature = "tdf")]
+        koth_ff::io::InputFormat::BrukerD => {
+            let conv =
+                koth_ff::io::tims_calibration::load(input, config.file.bruker_mobility_scale)
+                    .map_err(anyhow::Error::msg)
+                    .context("Failed to read the run's mobility calibration")?;
+            Ok(MobilityReport::bruker(&conv))
+        }
+        _ => {
+            let _ = config;
+            Ok(MobilityReport::as_read())
+        }
+    }
 }

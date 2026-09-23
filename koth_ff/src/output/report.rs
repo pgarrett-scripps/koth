@@ -66,6 +66,54 @@ pub struct FeaturesReport {
 pub struct RunReport {
     pub hills: HillsReport,
     pub features: FeaturesReport,
+    /// Which 1/K0 scale the `im` columns are on. Absent from reports written
+    /// before 0.10.0, whose Bruker `im` values are on the linear scale.
+    pub mobility: MobilityReport,
+}
+
+/// Provenance of the reported ion-mobility values.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct MobilityReport {
+    /// `"bruker-acquisition-calibrated-1/K0"`, `"timsrust-linear-1/K0"`, or
+    /// `"as-read-from-input"` for mzML/Thermo, where koth does not convert.
+    pub scale: String,
+    /// The `TimsCalibration` rows applied (calibrated Bruker input only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub calibration: Vec<CalibrationRow>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct CalibrationRow {
+    pub id: i64,
+    pub model_type: i64,
+    /// `C0..C9` as stored in `analysis.tdf`.
+    pub coefficients: [f64; 10],
+}
+
+impl MobilityReport {
+    /// Non-Bruker input: ion mobility is whatever the input file carries.
+    pub fn as_read() -> Self {
+        Self {
+            scale: "as-read-from-input".into(),
+            calibration: Vec::new(),
+        }
+    }
+
+    /// Bruker input read on `conv`'s scale.
+    pub fn bruker(conv: &crate::io::tims_calibration::ScanToMobility) -> Self {
+        Self {
+            scale: conv.scale().label().into(),
+            calibration: conv
+                .calibration_rows()
+                .into_iter()
+                .map(|(id, m)| CalibrationRow {
+                    id,
+                    model_type: crate::io::tims_calibration::SUPPORTED_MODEL_TYPE,
+                    coefficients: m.coefficients(),
+                })
+                .collect(),
+        }
+    }
 }
 
 // ── builders ──────────────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@ mzdata     = { workspace = true }
 flate2     = "1"
 timsrust   = { workspace = true, optional = true }
 dnoise     = { version = "0.1.0", default-features = false, optional = true }
+rusqlite   = { version = "0.32", features = ["bundled"], optional = true }
 # Native Thermo .raw reading (opt-in). Wraps Thermo's RawFileReader assemblies via
 # a self-hosted .NET runtime, so a `.raw` file can be fed to koth_ff directly with
 # no prior mzML conversion. Requires a .NET 8 runtime at build and run time; kept
@@ -56,9 +57,13 @@ rand       = { workspace = true }
 rustc-hash = "1"
 sha2 = "0.10"
 
+[[example]]
+name = "tims_mobility_dump"
+required-features = ["tdf"]
+
 [features]
 default = ["tdf"]
-tdf = ["dep:timsrust", "dep:dnoise"]
+tdf = ["dep:timsrust", "dep:dnoise", "dep:rusqlite"]
 # Native Thermo Fisher .raw input (no mzML conversion). Off by default: enabling it
 # requires a .NET 8 runtime at build and run time. `cargo build -p koth_ff --features thermo`.
 thermo = ["dep:thermorawfilereader"]

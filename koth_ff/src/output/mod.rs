@@ -4,7 +4,10 @@ pub mod report;
 pub use align_report::{
     build_align_report, write_align_report, AlignReport, Timing as AlignTiming,
 };
-pub use report::{build_features_report, build_hills_report, write_report, RunReport};
+pub use report::{
+    build_features_report, build_hills_report, write_report, CalibrationRow, MobilityReport,
+    RunReport,
+};
 
 use std::path::Path;
 

@@ -31,9 +31,26 @@ pub mod inner {
     use crate::config::FileConfig;
     use crate::error::KothError;
     use crate::hills::noise;
+    use crate::io::tims_calibration::{self, MobilityScale, ScanToMobility};
     use crate::models::{IsolationWindow, Peak, Spectrum};
 
     const MAX_PEAKS: usize = 10_000;
+
+    /// The run's acquisition calibration when `bruker_mobility_scale` is
+    /// `calibrated` (the default); `None` keeps the legacy linear converter of
+    /// the reader in use. A run whose calibration cannot be read is an error,
+    /// never a silent fallback to the linear scale.
+    fn calibrated_mobility(
+        path: &Path,
+        file: &FileConfig,
+    ) -> Result<Option<ScanToMobility>, KothError> {
+        match file.bruker_mobility_scale {
+            MobilityScale::Linear => Ok(None),
+            MobilityScale::Calibrated => tims_calibration::load(path, MobilityScale::Calibrated)
+                .map(Some)
+                .map_err(KothError::TdfError),
+        }
+    }
 
     /// Collect the streaming reader for callers that explicitly need all spectra.
     pub fn read_bruker(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
@@ -249,6 +266,7 @@ pub mod inner {
         let ctx = RunContext::open(path, &filter_params, &stages)
             .map_err(|e| KothError::TdfError(e.to_string()))?;
         let cal = ctx.calibration();
+        let mobility = calibrated_mobility(path, file)?;
         let noise_sigma = file.bruker_noise_sigma;
 
         let indices =
@@ -265,7 +283,10 @@ pub mod inner {
                     .map(|&(scan, tof, intensity)| Peak {
                         mz: cal.tof_to_mz(tof) as f32,
                         intensity: intensity as f32,
-                        ion_mobility: cal.scan_to_im(scan) as f32,
+                        ion_mobility: match &mobility {
+                            Some(m) => m.convert(decoded.frame_id, scan),
+                            None => cal.scan_to_im(scan),
+                        } as f32,
                     })
                     .collect();
                 peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
@@ -306,6 +327,7 @@ pub mod inner {
 
         let mz_converter = metadata.mz_converter;
         let ims_converter = metadata.im_converter;
+        let mobility = calibrated_mobility(path, file)?;
 
         let filter_params = filter_params(file);
         let watershed_params = watershed_params(file);
@@ -335,7 +357,10 @@ pub mod inner {
                     .map(|(scan, tof, intensity)| Peak {
                         mz: mz_converter.convert(tof as f64) as f32,
                         intensity: intensity as f32,
-                        ion_mobility: ims_converter.convert(scan as f64) as f32,
+                        ion_mobility: match &mobility {
+                            Some(m) => m.convert(frame.index, scan),
+                            None => ims_converter.convert(scan as f64),
+                        } as f32,
                     })
                     .collect();
                 out_peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
@@ -446,6 +471,7 @@ pub mod inner {
         watershed_params: &WatershedParams,
         mz_converter: &timsrust::converters::Tof2MzConverter,
         ims_converter: &timsrust::converters::Scan2ImConverter,
+        mobility: Option<&ScanToMobility>,
     ) -> Vec<Peak> {
         let mut scan = Vec::new();
         let mut tof = Vec::new();
@@ -478,7 +504,10 @@ pub mod inner {
             .map(|(scan, tof, intensity)| Peak {
                 mz: mz_converter.convert(tof as f64) as f32,
                 intensity: intensity as f32,
-                ion_mobility: ims_converter.convert(scan as f64) as f32,
+                ion_mobility: match mobility {
+                    Some(m) => m.convert(flat.frame_id, scan),
+                    None => ims_converter.convert(scan as f64),
+                } as f32,
             })
             .collect();
         peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
@@ -521,6 +550,7 @@ pub mod inner {
             .map_err(|e| KothError::TdfError(e.to_string()))?;
         let mz_converter = metadata.mz_converter;
         let ims_converter = metadata.im_converter;
+        let mobility = calibrated_mobility(path, file)?;
 
         let filter_params = filter_params(file);
         let watershed_params = watershed_params(file);
@@ -557,6 +587,7 @@ pub mod inner {
                             &watershed_params,
                             &mz_converter,
                             &ims_converter,
+                            mobility.as_ref(),
                         );
                         let mut spectrum = Spectrum {
                             // Source frame id, for traceability. The MS2 hill
