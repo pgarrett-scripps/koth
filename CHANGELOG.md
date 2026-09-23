@@ -38,6 +38,16 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - Known issue: the optional streaming `bruker_ms1_polygon` gate (off by default)
   still places scans on dnoise's linear 1/K0 scale. A fix has been requested in
   dnoise; koth will pick it up with the next dnoise release.
+- Known issue: mzML converted from timsTOF data is labelled
+  `as-read-from-input`, so the mixed-scale guard skips it. Such mzML is normally
+  on Bruker's calibrated scale, matching the 0.10.0 default; only mixing it with
+  `.d` runs processed with `bruker_mobility_scale = "linear"` goes uncaught.
+- Known issue: search-guided `--targets` ion mobility is not checked against the
+  runs' scale. Sage, and anything built on timsrust's `Scan2ImConverter`,
+  currently reports linear 1/K0, which can differ from calibrated 0.10.0 runs by
+  up to ~0.03 1/K0. Until Sage reports calibrated values, use
+  `bruker_mobility_scale = "linear"` for search-guided runs driven by Sage
+  targets, or widen the IM tolerance. A fix has been requested in Sage Plus.
 
 ### 0.9.0 development: LFQ extraction and search-guided admission
 - Size the extraction grid from the measured MS1 scan spacing rather than a

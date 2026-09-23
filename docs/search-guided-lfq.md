@@ -91,6 +91,13 @@ scale instead. Some converted timsTOF
 search inputs have different mobility coordinates; correct them before import
 or use `--ignore-target-im`. Koth does not infer a coordinate conversion.
 
+Target mobility is not checked against the runs' scale. Sage, and anything
+else built on timsrust's `Scan2ImConverter`, currently reports linear 1/K0,
+which can differ from calibrated 0.10.0 runs by up to ~0.03 1/K0. Until Sage
+reports calibrated values, run search-guided batches driven by Sage targets
+with `bruker_mobility_scale = "linear"`, or widen the IM tolerance. A fix has
+been requested in Sage Plus.
+
 ## Target selection and transfer eligibility
 
 Each exact modified-peptide/charge pair produces at most one target. Repeated
