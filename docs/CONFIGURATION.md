@@ -198,6 +198,8 @@ the acquisition differs.
 | `bruker_ms1_polygon` | bool | `false` | Streaming-only: apply a run's ddaPASEF IMS selection polygon to MS1 points. No-op for diaPASEF or runs without a polygon. Keep off until cohort-validated. |
 | `bruker_ms1_polygon_mz_pad` | f64 | `0.0` | Expand each m/z edge of the selection polygon by this many Da, preserving isotope envelopes near an edge. |
 | `bruker_ms1_polygon_im_pad` | f64 | `0.0` | Expand each ion-mobility edge of the selection polygon by this many 1/K0 units. |
+| `bruker_ms1_polygon_overlap` | bool | `false` | Polygon gate mode. `false` gates point by point: each MS1 point outside the (padded) polygon is dropped. `true` keeps a whole MS1 feature when any of its points lies inside (dnoise's `Ms1PolygonParams.overlap`). **Warning:** koth builds features from these points, not fragment ions; feature-level keeping can let in clouds the polygon was meant to exclude, such as the singly-charged (charge 1) hump, when the polygon's shape is not known. Leave `false` unless the run's polygon has been checked. |
+| `bruker_ms1_polygon_overlap_reach` | f64 | `0.1` | Overlap mode only: how far, in 1/K0, a kept feature may extend beyond the mobility range of its inside points (dnoise's `overlap_reach`; `0.0` = unlimited). Ignored when `bruker_ms1_polygon_overlap = false`. |
 
 ### 3.2 `[hills]` — chromatographic-trace detection
 
@@ -476,7 +478,9 @@ checkout. Two paths:
   in-process (vertical → optional halo → optional MS1 selection polygon →
   watershed in one pass, no denoised `.d` on disk), adding the `bruker_halo*`
   and `bruker_ms1_polygon*` knobs. The polygon gate uses `bruker_mobility_scale`,
-  the same 1/K0 scale as koth's output. Keep off until cohort-re-validated.
+  the same 1/K0 scale as koth's output. It gates point by point unless
+  `bruker_ms1_polygon_overlap` opts in to feature-level keeping (see the warning
+  in the table above). Keep off until cohort-re-validated.
 
 ---
 

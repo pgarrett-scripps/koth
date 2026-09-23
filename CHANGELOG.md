@@ -46,6 +46,16 @@ and this project uses [Semantic Versioning](https://semver.org/).
   (0.9.0 or earlier) counts as linear. The error names each run and its scale.
   Re-run detection, or run every input with `bruker_mobility_scale = "linear"`.
   mzML and Thermo runs have no converted mobility and are not checked.
+- New opt-in `[file] bruker_ms1_polygon_overlap` (bool, default `false`) and
+  `bruker_ms1_polygon_overlap_reach` (1/K0, default 0.1, read only when overlap
+  is on), mapped onto dnoise 0.4.0's `Ms1PolygonParams.overlap` and
+  `overlap_reach`. Streaming path only, and only with `bruker_ms1_polygon`
+  (still default `false`). The default stays point-by-point gating, so outputs
+  are unchanged. Warning: koth builds features from these points itself, not
+  fragment ions. Keeping whole overlapping features can pull in clouds the
+  polygon was meant to exclude, such as the singly-charged (charge 1) hump,
+  when the polygon's shape is not known. Opt in only after checking the run's
+  polygon.
 - New example `tims_mobility_dump` prints the scan-to-1/K0 table of a run for
   comparison with the SDK.
 - Known issue: mzML converted from timsTOF data is labelled

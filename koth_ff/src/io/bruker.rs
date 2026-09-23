@@ -145,6 +145,47 @@ pub mod inner {
             }
         }
 
+        fn polygon_tuple(p: &Ms1PolygonParams) -> (f64, f64, bool, f64) {
+            (p.mz_pad, p.im_pad, p.overlap, p.overlap_reach)
+        }
+
+        #[test]
+        fn polygon_defaults_match_point_by_point_gating() {
+            // The parameters koth passed to dnoise before the overlap keys
+            // existed. Defaults, and a config that omits the keys, must give
+            // exactly these, so existing outputs are unchanged.
+            let before = (0.0, 0.0, false, 0.0);
+            assert_eq!(
+                polygon_tuple(&ms1_polygon_params(&FileConfig::default())),
+                before
+            );
+            let parsed: FileConfig = toml::from_str("bruker_ms1_polygon = true").unwrap();
+            assert!(!parsed.bruker_ms1_polygon_overlap);
+            assert_eq!(parsed.bruker_ms1_polygon_overlap_reach, 0.1);
+            assert_eq!(polygon_tuple(&ms1_polygon_params(&parsed)), before);
+            // The reach is ignored unless overlap mode is on.
+            let reach_only: FileConfig =
+                toml::from_str("bruker_ms1_polygon_overlap_reach = 0.3").unwrap();
+            assert_eq!(polygon_tuple(&ms1_polygon_params(&reach_only)), before);
+        }
+
+        #[test]
+        fn polygon_overlap_opt_in_maps_onto_dnoise() {
+            let on: FileConfig = toml::from_str(
+                "bruker_ms1_polygon_overlap = true\nbruker_ms1_polygon_mz_pad = 5.0",
+            )
+            .unwrap();
+            assert_eq!(
+                polygon_tuple(&ms1_polygon_params(&on)),
+                (5.0, 0.0, true, 0.1)
+            );
+            let reach: FileConfig = toml::from_str(
+                "bruker_ms1_polygon_overlap = true\nbruker_ms1_polygon_overlap_reach = 0.0",
+            )
+            .unwrap();
+            assert_eq!(polygon_tuple(&ms1_polygon_params(&reach)).3, 0.0);
+        }
+
         #[test]
         fn ordered_batches_stop_decoding_when_consumer_stops() {
             let processed = AtomicUsize::new(0);
@@ -229,6 +270,25 @@ pub mod inner {
         }
     }
 
+    /// dnoise MS1 selection-polygon parameters from the run's `[file]` config.
+    /// Point-by-point gating by default (dnoise 0.4.0's own default keeps whole
+    /// features that overlap the polygon); `bruker_ms1_polygon_overlap` opts in
+    /// to feature-level gating. The reach is passed only in overlap mode, so the
+    /// default parameters are exactly those used before the key existed.
+    fn ms1_polygon_params(file: &FileConfig) -> Ms1PolygonParams {
+        let overlap = file.bruker_ms1_polygon_overlap;
+        Ms1PolygonParams {
+            mz_pad: file.bruker_ms1_polygon_mz_pad,
+            im_pad: file.bruker_ms1_polygon_im_pad,
+            overlap,
+            overlap_reach: if overlap {
+                file.bruker_ms1_polygon_overlap_reach
+            } else {
+                0.0
+            },
+        }
+    }
+
     /// In-process streaming path (opt-in via `bruker_streaming`): drive dnoise's
     /// [`RunContext`], which runs the vertical-IM filter + horizontal halo +
     /// watershed in a single pass over each raw MS1 frame — the exact stage code
@@ -246,14 +306,7 @@ pub mod inner {
             mz_idx_half_width: file.bruker_halo_mz_idx_half_width,
             scan_half_width: file.bruker_halo_scan_half_width,
         };
-        let polygon_params = Ms1PolygonParams {
-            mz_pad: file.bruker_ms1_polygon_mz_pad,
-            im_pad: file.bruker_ms1_polygon_im_pad,
-            // Point-by-point gating, as before dnoise 0.4.0 (whose default keeps
-            // whole features that overlap the polygon).
-            overlap: false,
-            overlap_reach: 0.0,
-        };
+        let polygon_params = ms1_polygon_params(file);
         // Vertical filter + optional halo + optional MS1 selection-polygon gate +
         // watershed, all in one in-process pass. `Stages` carries more stages than
         // koth wires up (MS/MS denoising, smoothing, the box centroider, and the

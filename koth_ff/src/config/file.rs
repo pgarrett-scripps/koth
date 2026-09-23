@@ -168,6 +168,21 @@ pub struct FileConfig {
     /// Default 0.0 (the literal polygon).
     #[serde(default)]
     pub bruker_ms1_polygon_im_pad: f64,
+    /// Polygon gate: keep a whole MS1 feature when any of its points lies
+    /// inside the (padded) polygon, instead of gating point by point. Maps onto
+    /// dnoise's `Ms1PolygonParams::overlap`. Default `false`: koth gates point
+    /// by point, because it builds features from these points itself, and
+    /// keeping whole overlapping features can pull in clouds the polygon was
+    /// meant to exclude (such as the singly-charged hump) when the polygon's
+    /// shape is not known. Opt in only after checking the run's polygon.
+    #[serde(default)]
+    pub bruker_ms1_polygon_overlap: bool,
+    /// Polygon gate, overlap mode only: how far, in 1/K0, a kept feature may
+    /// extend beyond the mobility range of its inside points (dnoise's
+    /// `Ms1PolygonParams::overlap_reach`; `0.0` = unlimited). Ignored unless
+    /// `bruker_ms1_polygon_overlap` is set. Default 0.1.
+    #[serde(default = "default_bruker_ms1_polygon_overlap_reach")]
+    pub bruker_ms1_polygon_overlap_reach: f64,
     /// Per-scan iterative sigma-clipping noise filter. When set, peaks whose
     /// intensity falls below `median + sigma * (1.4826 * MAD)` of the estimated
     /// noise floor are discarded before hill detection.
@@ -255,6 +270,8 @@ impl Default for FileConfig {
             bruker_ms1_polygon: false,
             bruker_ms1_polygon_mz_pad: 0.0,
             bruker_ms1_polygon_im_pad: 0.0,
+            bruker_ms1_polygon_overlap: false,
+            bruker_ms1_polygon_overlap_reach: default_bruker_ms1_polygon_overlap_reach(),
             noise_filter_sigma: None,
             decoy_mode: false,
             ms2_hills_enabled: false,
@@ -347,4 +364,8 @@ fn default_bruker_halo_mz_idx_half_width() -> u32 {
 
 fn default_bruker_halo_scan_half_width() -> usize {
     2
+}
+
+fn default_bruker_ms1_polygon_overlap_reach() -> f64 {
+    0.1
 }

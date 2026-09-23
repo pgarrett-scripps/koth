@@ -89,6 +89,12 @@ bruker_halo_scan_half_width = 2
 bruker_ms1_polygon = false
 bruker_ms1_polygon_mz_pad = 0.0
 bruker_ms1_polygon_im_pad = 0.0
+# Point-by-point gating by default. Overlap mode keeps whole MS1 features that
+# touch the polygon; it can let in the charge-1 cloud when the polygon shape is
+# unknown, so leave it off unless the polygon has been checked. The reach (1/K0)
+# is read only in overlap mode.
+bruker_ms1_polygon_overlap = false
+bruker_ms1_polygon_overlap_reach = 0.1
 
 # Per-scan iterative noise filter. Estimates the noise floor by iteratively
 # sigma-clipping signal peaks, then discards any peak below
