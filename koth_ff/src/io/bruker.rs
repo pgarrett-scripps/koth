@@ -249,6 +249,10 @@ pub mod inner {
         let polygon_params = Ms1PolygonParams {
             mz_pad: file.bruker_ms1_polygon_mz_pad,
             im_pad: file.bruker_ms1_polygon_im_pad,
+            // Point-by-point gating, as before dnoise 0.4.0 (whose default keeps
+            // whole features that overlap the polygon).
+            overlap: false,
+            overlap_reach: 0.0,
         };
         // Vertical filter + optional halo + optional MS1 selection-polygon gate +
         // watershed, all in one in-process pass. `Stages` carries more stages than
@@ -260,6 +264,8 @@ pub mod inner {
             halo: file.bruker_halo.then_some(&halo_params),
             ms1_polygon: file.bruker_ms1_polygon.then_some(&polygon_params),
             watershed: Some(&watershed_params),
+            // The polygon gate converts scans on the same 1/K0 scale as koth.
+            mobility_scale: file.bruker_mobility_scale.into(),
             ..Stages::default()
         };
 

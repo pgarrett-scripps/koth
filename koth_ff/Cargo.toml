@@ -34,7 +34,9 @@ crate-type = ["rlib"]
 mzdata     = { workspace = true }
 flate2     = "1"
 timsrust   = { workspace = true, optional = true }
-dnoise     = { version = "0.1.0", default-features = false, optional = true }
+# dnoise 0.4.0 is not on crates.io yet: built from the local d_noise checkout
+# (release/0.4.0, 9b39866). Drop `path` once 0.4.0 is published.
+dnoise     = { version = "0.4.0", path = "../../d_noise", default-features = false, optional = true }
 rusqlite   = { version = "0.32", features = ["bundled"], optional = true }
 # Native Thermo .raw reading (opt-in). Wraps Thermo's RawFileReader assemblies via
 # a self-hosted .NET runtime, so a `.raw` file can be fed to koth_ff directly with

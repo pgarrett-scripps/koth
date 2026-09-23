@@ -17,11 +17,24 @@ and this project uses [Semantic Versioning](https://semver.org/).
   0.032 1/K0 (2.2%) on the timsTOF Ultra 2 benchmark runs, more than the 1.5%
   relative IM tolerance. Every `im` value on timsTOF data moves; mzML and Thermo
   input are untouched.
-- The model is a native port (`koth_ff::io::tims_calibration`, no SDK linked).
-  It matches `libtimsdata.so` to 4.4e-16 1/K0 on all 18 LFQ benchmark runs and to
-  8.9e-16 over 304 local runs and 25 calibration rows. Unit tests check it
+- The model is a native port, no SDK linked. It matches `libtimsdata.so` to
+  4.4e-16 1/K0 on all 18 LFQ benchmark runs and to 8.9e-16 over 304 local runs
+  and 25 calibration rows. It now lives in `dnoise::mobility` (dnoise 0.4.0), so
+  koth and dnoise share one implementation; `koth_ff::io::tims_calibration` keeps
+  only per-frame routing, lookup tables and the `report.json` coefficients. Before
+  the switch the two implementations were identical on the SDK fixture (maximum
+  difference 0 over 40,965 scans, 6 calibration rows). Unit tests check it
   against SDK values from five runs (`koth_ff/tests/data/tims_calibration_sdk.json`).
-  The module is self-contained so it can be upstreamed to timsrust.
+- Requires dnoise 0.4.0, which adds the calibration model. The streaming path
+  passes `bruker_mobility_scale` to dnoise, so the optional `bruker_ms1_polygon`
+  gate now places scans on the same 1/K0 scale as koth's output. The gate stays
+  point by point, as before (dnoise 0.4.0's own default keeps whole overlapping
+  features). The default local path (vertical filter + watershed) runs the same
+  dnoise code as 0.1.0: its output is unchanged apart from the 1/K0 scale.
+- **Release blocker:** dnoise 0.4.0 is not on crates.io yet. `koth_ff` builds it
+  from a sibling `../d_noise` checkout (`path` dependency, release/0.4.0
+  9b39866). Publish dnoise 0.4.0, then drop the `path` key before releasing koth
+  0.10.0.
 - New `[file] bruker_mobility_scale`: `"calibrated"` (default) or `"linear"`
   (the exact 0.9.0 converter). An unsupported calibration is an error, never a
   silent fallback.
@@ -35,9 +48,6 @@ and this project uses [Semantic Versioning](https://semver.org/).
   mzML and Thermo runs have no converted mobility and are not checked.
 - New example `tims_mobility_dump` prints the scan-to-1/K0 table of a run for
   comparison with the SDK.
-- Known issue: the optional streaming `bruker_ms1_polygon` gate (off by default)
-  still places scans on dnoise's linear 1/K0 scale. A fix has been requested in
-  dnoise; koth will pick it up with the next dnoise release.
 - Known issue: mzML converted from timsTOF data is labelled
   `as-read-from-input`, so the mixed-scale guard skips it. Such mzML is normally
   on Bruker's calibrated scale, matching the 0.10.0 default; only mixing it with

@@ -116,9 +116,8 @@ pub struct FileConfig {
     /// DataAnalysis and SDK-based tools. `"linear"` restores the straight line
     /// between the acquisition-range bounds that koth used up to 0.9.0 (it can
     /// be off by ~0.03 1/K0, about 2%). The conversion happens per centroid,
-    /// before hills are built. No effect on mzML or Thermo input. The dnoise
-    /// MS1 polygon gate (`bruker_ms1_polygon`) still tests points on dnoise's
-    /// own linear scale.
+    /// before hills are built. No effect on mzML or Thermo input. The streaming
+    /// path's dnoise MS1 polygon gate (`bruker_ms1_polygon`) uses the same scale.
     #[serde(default)]
     pub bruker_mobility_scale: crate::io::tims_calibration::MobilityScale,
     /// Use the in-process `dnoise` streaming API instead of the local two-stage

@@ -910,12 +910,13 @@ dependencies = [
 
 [[package]]
 name = "dnoise"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff774606904d2ff8481e0247bc0ce271fca2caaa83851a588af59dcbf37a016a"
+version = "0.4.0"
 dependencies = [
  "rayon",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "timsrust",
  "tracing",

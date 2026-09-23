@@ -100,16 +100,17 @@ impl MobilityReport {
     }
 
     /// Bruker input read on `conv`'s scale.
+    #[cfg(feature = "tdf")]
     pub fn bruker(conv: &crate::io::tims_calibration::ScanToMobility) -> Self {
         Self {
             scale: conv.scale().label().into(),
             calibration: conv
                 .calibration_rows()
-                .into_iter()
-                .map(|(id, m)| CalibrationRow {
+                .iter()
+                .map(|&(id, coefficients)| CalibrationRow {
                     id,
                     model_type: crate::io::tims_calibration::SUPPORTED_MODEL_TYPE,
-                    coefficients: m.coefficients(),
+                    coefficients,
                 })
                 .collect(),
         }

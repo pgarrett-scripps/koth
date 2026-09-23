@@ -185,7 +185,7 @@ the acquisition differs.
 #### Bruker ion-mobility scale
 | Key | Type | Default | What it does / what to set |
 |---|---|---|---|
-| `bruker_mobility_scale` | enum | `"calibrated"` | Scale of every reported 1/K0 (`im` columns) for `.d` input. `"calibrated"` converts each centroid's scan number with the run's acquisition calibration (`TimsCalibration` in `analysis.tdf`, ModelType 2), matching Bruker's timsdata SDK, DataAnalysis and SDK-based exports to within 1e-15 1/K0. `"linear"` restores the straight line between `OneOverK0AcqRange{Upper,Lower}` used up to 0.9.0, which differs by up to ~0.03 1/K0 (about 2%). A run whose calibration cannot be read, or uses another ModelType, is an error; set `"linear"` to process it. The chosen scale and the calibration rows are recorded in `report.json` under `mobility`, and `koth_align` refuses a batch that mixes scales (a timsTOF run with no recorded scale counts as linear). The streaming path's `bruker_ms1_polygon` gate still tests points on dnoise's linear scale. |
+| `bruker_mobility_scale` | enum | `"calibrated"` | Scale of every reported 1/K0 (`im` columns) for `.d` input. `"calibrated"` converts each centroid's scan number with the run's acquisition calibration (`TimsCalibration` in `analysis.tdf`, ModelType 2), matching Bruker's timsdata SDK, DataAnalysis and SDK-based exports to within 1e-15 1/K0. `"linear"` restores the straight line between `OneOverK0AcqRange{Upper,Lower}` used up to 0.9.0, which differs by up to ~0.03 1/K0 (about 2%). A run whose calibration cannot be read, or uses another ModelType, is an error; set `"linear"` to process it. The chosen scale and the calibration rows are recorded in `report.json` under `mobility`, and `koth_align` refuses a batch that mixes scales (a timsTOF run with no recorded scale counts as linear). The streaming path's `bruker_ms1_polygon` gate follows this setting. |
 
 #### Bruker streaming path (experimental — see also [dnoise](#7-the-dnoise-integration-bruker-only))
 | Key | Type | Default | What it does / what to set |
@@ -462,8 +462,10 @@ settings — is **identical across platforms**.
 
 ## 7. The dnoise integration (Bruker only)
 
-koth_ff depends on the published `dnoise` 0.1 crate (behind the `tdf` feature)
-for Bruker denoising. Two paths:
+koth_ff depends on the `dnoise` 0.4 crate (behind the `tdf` feature) for Bruker
+denoising and for the `TimsCalibration` mobility model (`dnoise::mobility`).
+Until dnoise 0.4.0 is on crates.io it is built from a sibling `../d_noise`
+checkout. Two paths:
 
 - **Default (paper-validated):** the `.d` is denoised **externally** by the
   `dnoise` CLI first, then koth_ff reads the denoised `.d` and applies its
@@ -473,7 +475,8 @@ for Bruker denoising. Two paths:
 - **Streaming (opt-in):** `bruker_streaming = true` drives dnoise's `RunContext`
   in-process (vertical → optional halo → optional MS1 selection polygon →
   watershed in one pass, no denoised `.d` on disk), adding the `bruker_halo*`
-  and `bruker_ms1_polygon*` knobs. Keep off until cohort-re-validated.
+  and `bruker_ms1_polygon*` knobs. The polygon gate uses `bruker_mobility_scale`,
+  the same 1/K0 scale as koth's output. Keep off until cohort-re-validated.
 
 ---
 
