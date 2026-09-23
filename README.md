@@ -78,7 +78,7 @@ The output directory is `<output>/<input_stem>/` and always contains:
 ```
 hills.tsv
 features.tsv
-report.json     # summary statistics (hill and feature counts, score distribution)
+report.json     # summary statistics (hill and feature counts, score distribution) and the 1/K0 scale used
 config.toml     # the config that was used, for reproducibility
 ```
 
@@ -368,7 +368,7 @@ One row per chromatographic hill, sorted by `intensity_sum` descending.
 | `rt` | Retention time at the apex scan (minutes) |
 | `rt_start` / `rt_end` | Retention time at first and last scan |
 | `rt_width` | `rt_end - rt_start` |
-| `im` | Intensity-weighted mean ion mobility (0 if not available) |
+| `im` | Intensity-weighted mean ion mobility, 1/K0 (0 if not available). For Bruker `.d` input this is Bruker's acquisition-calibrated 1/K0 (`[file] bruker_mobility_scale`, default `"calibrated"` since 0.10.0) |
 | `im_std` | Intensity-weighted standard deviation of ion mobility |
 | `scan_start` / `scan_apex` / `scan_end` | Absolute scan indices |
 | `n_scans` | Total scans in profile (including gap positions) |

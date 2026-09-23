@@ -83,7 +83,11 @@ of `spectrum_q` and `peptide_q`, used as a conservative admission summary; it
 is not a newly estimated identification q-value. `expmass`, `aligned_rt`, and
 predicted coordinates are not used.
 
-Optional `ion_mobility` must already be native 1/K0. Some converted timsTOF
+Optional `ion_mobility` must already be native 1/K0. Since 0.10.0, koth's
+native timsTOF 1/K0 is Bruker's acquisition-calibrated scale (the scale the
+timsdata SDK and SDK-based mzML exports report); features written with
+`bruker_mobility_scale = "linear"` or by koth 0.9.0 and earlier use a linear
+scale instead. Some converted timsTOF
 search inputs have different mobility coordinates; correct them before import
 or use `--ignore-target-im`. Koth does not infer a coordinate conversion.
 

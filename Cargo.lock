@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "koth_ff"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1455,6 +1455,7 @@ dependencies = [
  "parquet",
  "rand",
  "rayon",
+ "rusqlite",
  "rustc-hash",
  "serde",
  "serde_json",

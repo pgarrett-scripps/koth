@@ -8,6 +8,32 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### 0.10.0 development: calibrated timsTOF ion mobility (behaviour change)
+- **Behaviour change.** Bruker `.d` input now reports Bruker's
+  acquisition-calibrated 1/K0. Each centroid's scan number is converted with the
+  run's `TimsCalibration` row (ModelType 2) before hills are built, on the local,
+  streaming and diaPASEF MS2 paths. Up to 0.9.0 koth used timsrust's straight line
+  between the acquisition-range bounds, which differs from Bruker's scale by up to
+  0.032 1/K0 (2.2%) on the timsTOF Ultra 2 benchmark runs, more than the 1.5%
+  relative IM tolerance. Every `im` value on timsTOF data moves; mzML and Thermo
+  input are untouched.
+- The model is a native port (`koth_ff::io::tims_calibration`, no SDK linked).
+  It matches `libtimsdata.so` to 4.4e-16 1/K0 on all 18 LFQ benchmark runs and to
+  8.9e-16 over 304 local runs and 25 calibration rows. Unit tests check it
+  against SDK values from five runs (`koth_ff/tests/data/tims_calibration_sdk.json`).
+  The module is self-contained so it can be upstreamed to timsrust.
+- New `[file] bruker_mobility_scale`: `"calibrated"` (default) or `"linear"`
+  (the exact 0.9.0 converter). An unsupported calibration is an error, never a
+  silent fallback.
+- `report.json` gains `mobility.scale` (`bruker-acquisition-calibrated-1/K0`,
+  `timsrust-linear-1/K0`, or `as-read-from-input`) and the calibration
+  coefficients applied.
+- Do not mix timsTOF feature tables from 0.9.0 or earlier with 0.10.0 tables in
+  one `koth_align` run: their 1/K0 scales differ. Re-run detection, or run both
+  with `bruker_mobility_scale = "linear"`.
+- New example `tims_mobility_dump` prints the scan-to-1/K0 table of a run for
+  comparison with the SDK.
+
 ### 0.9.0 development: LFQ extraction and search-guided admission
 - Size the extraction grid from the measured MS1 scan spacing rather than a
   fixed column count, targeting `grid_scans_per_column` scans per retention-time

@@ -182,6 +182,11 @@ the acquisition differs.
 | `bruker_watershed_max_tof_offset` | u32 | `10` | Cap on member distance from the group seed (TOF units); stops follower creep past the peak edge. |
 | `bruker_noise_sigma` | Option\<f64\> | `None` | Per-frame MAD noise filter on centroided peaks before emitting a `Spectrum`. Omit (shipped). Typical if used: `3.0`. |
 
+#### Bruker ion-mobility scale
+| Key | Type | Default | What it does / what to set |
+|---|---|---|---|
+| `bruker_mobility_scale` | enum | `"calibrated"` | Scale of every reported 1/K0 (`im` columns) for `.d` input. `"calibrated"` converts each centroid's scan number with the run's acquisition calibration (`TimsCalibration` in `analysis.tdf`, ModelType 2), matching Bruker's timsdata SDK, DataAnalysis and SDK-based exports to within 1e-15 1/K0. `"linear"` restores the straight line between `OneOverK0AcqRange{Upper,Lower}` used up to 0.9.0, which differs by up to ~0.03 1/K0 (about 2%). A run whose calibration cannot be read, or uses another ModelType, is an error; set `"linear"` to process it. The chosen scale and the calibration rows are recorded in `report.json` under `mobility`. The streaming path's `bruker_ms1_polygon` gate still tests points on dnoise's linear scale. |
+
 #### Bruker streaming path (experimental — see also [dnoise](#7-the-dnoise-integration-bruker-only))
 | Key | Type | Default | What it does / what to set |
 |---|---|---|---|
