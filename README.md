@@ -456,8 +456,8 @@ This repository ships two templates, [`example_config.toml`](example_config.toml
 The tuned per-platform configurations behind the published benchmark
 (`koth_ff.toml` / `koth_ff_bruker.toml` and `koth_align.toml` /
 `koth_align_bruker.toml`, Orbitrap and timsTOF) live with the benchmark that
-produced them, in [`benchmark/config/`](https://github.com/tacular-omics/koth-paper/tree/master/benchmark/config)
-of the [koth-paper](https://github.com/tacular-omics/koth-paper) repository. They differ from the defaults in
+produced them, in [`benchmark/config/`](https://github.com/pgarrett-scripps/koth-paper/tree/master/benchmark/config)
+of the [koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository. They differ from the defaults in
 24 settings between the two platforms, so start from the one matching your
 instrument rather than from the templates if you are reproducing the paper.
 

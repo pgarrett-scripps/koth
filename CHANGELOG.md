@@ -436,7 +436,7 @@ rather than to any published version.
   and package the crate, then bundle both `koth_ff` and `koth_align` with SHA-256
   checksums for all supported targets.
 - **The benchmark and the manuscript moved to their own repository**,
-  [tacular-omics/koth-paper](https://github.com/tacular-omics/koth-paper), with
+  [pgarrett-scripps/koth-paper](https://github.com/pgarrett-scripps/koth-paper), with
   their history. This repository is now the tool alone. Two consequences for
   anyone reading older entries below: paths of the form `benchmark/config/*.toml`
   and `benchmark/scripts/*` refer to that repository, and the build-time config

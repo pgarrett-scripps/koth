@@ -119,7 +119,7 @@ mod config_parse_tests {
     }
 
     // These used to also parse eight tuned configs from `benchmark/config/`. The
-    // benchmark now lives in its own repository (tacular-omics/koth-paper), and
+    // benchmark now lives in its own repository (pgarrett-scripps/koth-paper), and
     // `include_str!` resolves at COMPILE time, so leaving them would not merely
     // skip a test -- it would stop this crate building at all.
     //

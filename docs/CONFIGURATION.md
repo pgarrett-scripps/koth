@@ -74,7 +74,7 @@ ppm timsTOF).
 - The canonical worked examples are the tuned configs `koth_ff.toml` /
   `koth_ff_bruker.toml` (feature finding, Orbitrap / timsTOF) and
   `koth_align.toml` / `koth_align_bruker.toml` (alignment+LFQ). They live in
-  `benchmark/config/` of the separate [koth-paper](https://github.com/tacular-omics/koth-paper) repository,
+  `benchmark/config/` of the separate [koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository,
   alongside the benchmark that produced them. Prefer them over the templates
   when reproducing published results.
 
@@ -154,7 +154,7 @@ PSMs. Paired per-peptide ΔCV on Bruker is −0.0018 pp (Wilcoxon p = 0.007,
 rank-biserial r = −0.009): significant and negligible at once, because n ≈ 82 k
 paired cells. Keep it on for the precision and the lower spurious-feature count;
 do not cite it as a recall win. Reproducers, all in the
-[koth-paper](https://github.com/tacular-omics/koth-paper) repository: `benchmark/scripts/16_peptide_lfq.py`
+[koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository: `benchmark/scripts/16_peptide_lfq.py`
 (Orbitrap quant), `benchmark/scripts/bruker_validation.py` (Bruker), paired
 tests in `paper/si/si-body.typ` @tab:si-recal-ablation.
 
@@ -508,7 +508,7 @@ taken from crates.io. Two paths:
 
 *Generated from the config structs and shipped TOMLs. If you add or rename a
 config field, update this file, `example_config*.toml` here, and the tuned
-`benchmark/config/*.toml` in [koth-paper](https://github.com/tacular-omics/koth-paper). The
+`benchmark/config/*.toml` in [koth-paper](https://github.com/pgarrett-scripps/koth-paper). The
 `deny_unknown_fields` parse test fails the build if the templates in THIS repo
 disagree with the structs; it can no longer see the tuned configs, and it cannot
 check this doc — keep both current by hand.*

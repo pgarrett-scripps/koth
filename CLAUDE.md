@@ -30,7 +30,7 @@ answering config questions; do not guess field names or defaults from memory.
   drift. If you add/rename a config field, update the struct, both templates,
   **and** `docs/CONFIGURATION.md` (the doc is not build-checked).
 - The benchmark and the manuscript now live in a separate repository,
-  `tacular-omics/koth-paper`. Its `benchmark/config/*.toml` are the tuned
+  `pgarrett-scripps/koth-paper`. Its `benchmark/config/*.toml` are the tuned
   per-platform configs; they are NOT build-checked from here, so a renamed field
   breaks them at benchmark run time rather than at compile time. Update them
   there when you rename a config field.
