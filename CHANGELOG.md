@@ -8,6 +8,16 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### `.mzML.gz` is streamed, not decompressed into memory
+- Gzip-compressed mzML is now decompressed as it is parsed
+  (`flate2::bufread::MultiGzDecoder` into mzdata's `MzMLReaderType`), instead
+  of being read whole into memory first. Output is unchanged; peak memory no
+  longer includes the decompressed file. Multi-member (bgzip-style) `.gz` files
+  are now read to the end rather than stopping after the first member. A gzip
+  error part-way through (a truncated download) is still an error: it is
+  returned once the stream is drained, because mzdata's reader otherwise ends
+  quietly and the run would read as shorter.
+
 ### `[lfq].quant_estimator` defaults to `"apex"` (behaviour change)
 - **Behaviour change.** The default per-cell estimator is now `"apex"`;
   `"sum"` remains available. With koth 0.9.0/0.10.0 (MBR, native gate, same

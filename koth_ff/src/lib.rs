@@ -181,9 +181,11 @@ pub fn run_ms2_hills_streaming(
         );
         return Ok(Vec::new());
     }
-    let iter = io::mzml::stream_mzml_ms2(path)?;
+    let (iter, status) = io::mzml::stream_mzml_ms2_checked(path)?;
     log::info!("Streaming MS2 hill detection from {}", path.display());
-    Ok(hills::detect_ms2_hills_from_iter(iter, config, file))
+    let hills = hills::detect_ms2_hills_from_iter(iter, config, file);
+    status.check()?;
+    Ok(hills)
 }
 
 fn hills_streaming_inner(

@@ -22,7 +22,7 @@ pub type SpectrumStream = Box<dyn Iterator<Item = Result<Spectrum, KothError>> +
 /// parallel producer; callers may prefetch mzML and Thermo iterators as needed.
 pub fn stream_spectra(path: &Path, file: &FileConfig) -> Result<SpectrumStream, KothError> {
     match detect_format(path) {
-        InputFormat::Mzml | InputFormat::MzmlGz => Ok(Box::new(mzml::stream_mzml(path)?.map(Ok))),
+        InputFormat::Mzml | InputFormat::MzmlGz => mzml::stream_mzml_results(path),
         #[cfg(feature = "tdf")]
         InputFormat::BrukerD => Ok(Box::new(bruker::stream_bruker(path, file))),
         #[cfg(feature = "thermo")]

@@ -1,7 +1,9 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::{fs, io};
 
-use flate2::read::GzDecoder;
+use flate2::bufread::MultiGzDecoder;
+use mzdata::io::mzml::MzMLReaderType;
 use mzdata::prelude::*;
 use mzdata::spectrum::{MultiLayerSpectrum, SignalContinuity};
 use mzdata::MZReader;
@@ -12,7 +14,9 @@ use crate::models::{IsolationWindow, Peak, Spectrum};
 /// Read an mzML file (plain or gzip-compressed) and return all MS1 spectra
 /// sorted by retention time.
 pub fn read_mzml(path: &Path) -> Result<Vec<Spectrum>, KothError> {
-    let mut spectra: Vec<Spectrum> = collect_ms1(open_reader(path)?);
+    let (reader, status) = open_reader(path)?;
+    let mut spectra: Vec<Spectrum> = collect_ms1(reader);
+    status.check()?;
 
     if spectra.is_empty() {
         return Err(KothError::NoSpectra);
@@ -35,9 +39,22 @@ pub fn read_mzml(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 ///
 /// Spectra are yielded in file order (assumed to be RT order for standard
 /// LC-MS acquisitions). Each spectrum is dropped after the caller processes it.
+///
+/// A gzip error part-way through cannot be returned from this iterator; it is
+/// logged and the stream ends early. [`crate::io::stream_spectra`] returns it
+/// as an `Err` item instead.
 pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> + Send>, KothError> {
     crate::mem::log_mem("before open_reader (stream_mzml)");
-    Ok(Box::new(ms1_stream(open_reader(path)?)))
+    let (reader, status) = open_reader(path)?;
+    Ok(Box::new(status.log_at_end(ms1_stream(reader))))
+}
+
+/// [`stream_mzml`] with a read error as a final `Err` item.
+pub(crate) fn stream_mzml_results(path: &Path) -> Result<super::SpectrumStream, KothError> {
+    crate::mem::log_mem("before open_reader (stream_mzml)");
+    let (reader, status) = open_reader(path)?;
+    let tail = std::iter::once_with(move || status.check()).filter_map(Result::err);
+    Ok(Box::new(ms1_stream(reader).map(Ok).chain(tail.map(Err))))
 }
 
 /// Stream MS2 spectra (with isolation window metadata) from an mzML file.
@@ -45,11 +62,22 @@ pub fn stream_mzml(path: &Path) -> Result<Box<dyn Iterator<Item = Spectrum> + Se
 /// Only spectra with `ms_level == 2` and a parsable precursor isolation window
 /// are yielded. The `scan_index` on each yielded spectrum is its absolute
 /// position in the file, so callers can later re-index per-isolation-window.
+/// A gzip error part-way through is logged and ends the stream early, as for
+/// [`stream_mzml`].
 pub fn stream_mzml_ms2(
     path: &Path,
 ) -> Result<Box<dyn Iterator<Item = Spectrum> + Send>, KothError> {
+    let (iter, status) = stream_mzml_ms2_checked(path)?;
+    Ok(Box::new(status.log_at_end(iter)))
+}
+
+/// [`stream_mzml_ms2`] plus the [`ReadStatus`] to check once it is drained.
+pub(crate) fn stream_mzml_ms2_checked(
+    path: &Path,
+) -> Result<(Box<dyn Iterator<Item = Spectrum> + Send>, ReadStatus), KothError> {
     crate::mem::log_mem("before open_reader (stream_mzml_ms2)");
-    Ok(Box::new(ms2_stream(open_reader(path)?)))
+    let (reader, status) = open_reader(path)?;
+    Ok((Box::new(ms2_stream(reader)), status))
 }
 
 // ---------------------------------------------------------------------------
@@ -60,26 +88,90 @@ pub fn stream_mzml_ms2(
 /// uncompressed readers.
 type BoxedRawIter = Box<dyn Iterator<Item = MultiLayerSpectrum> + Send>;
 
-fn open_reader(path: &Path) -> Result<BoxedRawIter, KothError> {
+/// The first I/O error the gzip stream hit, if any.
+///
+/// mzdata's streaming reader ends iteration on an I/O error without reporting
+/// it, so a truncated or corrupt `.mzML.gz` would otherwise read as a shorter
+/// run. The decoder is wrapped so the error is kept here, and every consumer
+/// checks it once the spectra are drained. Always empty for plain mzML.
+#[derive(Clone, Default)]
+pub(crate) struct ReadStatus {
+    path: std::path::PathBuf,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+impl ReadStatus {
+    pub(crate) fn check(&self) -> Result<(), KothError> {
+        match self.error.lock().ok().and_then(|e| e.clone()) {
+            Some(e) => Err(KothError::MzmlError(format!(
+                "gzip decompress of '{}' failed part-way through: {e}",
+                self.path.display()
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    fn log_at_end<I: Iterator<Item = Spectrum> + Send>(
+        self,
+        iter: I,
+    ) -> impl Iterator<Item = Spectrum> + Send {
+        iter.chain(std::iter::from_fn(move || {
+            if let Err(e) = self.check() {
+                log::error!("{e}");
+            }
+            None
+        }))
+    }
+}
+
+/// A reader that records its first error in a [`ReadStatus`].
+struct TrackedRead<R> {
+    inner: R,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+impl<R: io::Read> io::Read for TrackedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf).inspect_err(|e| {
+            if let Ok(mut slot) = self.error.lock() {
+                slot.get_or_insert_with(|| e.to_string());
+            }
+        })
+    }
+}
+
+fn open_reader(path: &Path) -> Result<(BoxedRawIter, ReadStatus), KothError> {
+    let status = ReadStatus {
+        path: path.to_path_buf(),
+        ..ReadStatus::default()
+    };
     // Route the compressed-vs-plain decision through the single canonical format
     // predicate. `open_reader` is only reached for paths already classified as
     // mzML, so anything not `MzmlGz` here is plain (uncompressed) mzML.
     if super::detect_format(path) == super::InputFormat::MzmlGz {
-        // Decompress the full file into memory so mzdata gets a seekable Cursor.
-        // open_gzipped_read uses a limited PreBufferedStream that corrupts large
-        // base64 arrays (e.g. zlib-compressed Orbitrap data) during streaming.
+        // Stream the decompressed bytes straight into the parser: the spectra
+        // are only ever iterated forward, and `MzMLReaderType`'s `Iterator`
+        // needs `io::Read` alone. Every caller (MS1 read, MS1 stream, the DIA
+        // MS2 pass) opens the path afresh, so nothing seeks or reopens this
+        // handle. This replaces a `read_to_end` of the whole decompressed file
+        // into a `Cursor`, which held the whole decompressed file in memory
+        // (2.5 GB for one PXD066701 Astral DIA run).
+        //
+        // Do not route this through mzdata's `open_gzipped_read`: its limited
+        // `PreBufferedStream` corrupts large base64 arrays (e.g. zlib-compressed
+        // Orbitrap data). `MultiGzDecoder` is what mzdata's own conversion
+        // pipeline wraps (via `RestartableGzDecoder`), and it also reads
+        // multi-member (bgzip-style) files to the end.
         let file = fs::File::open(path).map_err(|e| KothError::MzmlError(e.to_string()))?;
-        let mut decoder = GzDecoder::new(io::BufReader::new(file));
-        let mut buf = Vec::new();
-        io::Read::read_to_end(&mut decoder, &mut buf)
-            .map_err(|e| KothError::MzmlError(format!("gzip decompress: {e}")))?;
-        let cursor = io::Cursor::new(buf);
-        let reader =
-            MZReader::open_read_seek(cursor).map_err(|e| KothError::MzmlError(e.to_string()))?;
-        Ok(Box::new(reader))
+        let decoder = TrackedRead {
+            inner: MultiGzDecoder::new(io::BufReader::new(file)),
+            error: Arc::clone(&status.error),
+        };
+        let reader: MzMLReaderType<_> = MzMLReaderType::new(decoder);
+        Ok((Box::new(reader), status))
     } else {
         let reader = MZReader::open_path(path).map_err(|e| KothError::MzmlError(e.to_string()))?;
-        Ok(Box::new(reader))
+        Ok((Box::new(reader), status))
     }
 }
 
@@ -345,5 +437,31 @@ mod tests {
             ..ScanEvent::default()
         });
         assert_eq!(extract_faims_cv(&spectrum), None);
+    }
+
+    /// A `.mzML.gz` cut off mid-stream must fail, not read as a shorter run:
+    /// mzdata's streaming reader ends iteration on an I/O error silently.
+    #[test]
+    fn truncated_gzip_is_an_error() {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write;
+
+        let body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<mzML>\n".to_string()
+            + &"<!-- padding so the member spans several deflate blocks -->\n".repeat(20_000);
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(body.as_bytes()).unwrap();
+        let gz = enc.finish().unwrap();
+
+        let dir = std::env::temp_dir().join(format!("koth_mzml_gz_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("truncated.mzML.gz");
+        fs::write(&path, &gz[..gz.len() / 2]).unwrap();
+
+        let err = read_mzml(&path).expect_err("truncated gzip must not read cleanly");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            matches!(&err, KothError::MzmlError(m) if m.contains("gzip")),
+            "unexpected error: {err}"
+        );
     }
 }
