@@ -15,6 +15,7 @@
 //! archive, a `cargo package`) reports `unknown` rather than failing, because a
 //! missing git directory is not a build error.
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -27,16 +28,23 @@ fn main() {
     //                     here was a bug: cargo recompiled the crate on a source
     //                     edit without re-running this file, so a clean SHA
     //                     stayed baked into a binary built from an edited tree.
-    //   .git/HEAD         a checkout or branch switch changes the commit.
-    //   .git/index        `git commit` clears dirty without touching any source
+    //   HEAD              a checkout or branch switch changes the commit.
+    //   the branch ref    `git commit` on the current branch moves the ref
+    //                     HEAD points to, not HEAD itself.
+    //   packed-refs       where that ref lives after `git pack-refs`/`gc`.
+    //   index             `git commit` clears dirty without touching any source
     //                     file, so index is what catches dirty -> clean.
+    //
+    // These are resolved through the real git directory. In a linked worktree
+    // `.git` is a FILE (`gitdir: ...`), and the old hard-coded `../.git/HEAD`
+    // and `../.git/index` did not exist there, so the stamp never re-ran after
+    // a commit: a worktree build reported the SHA of whatever commit first
+    // compiled it, with a stale `-dirty`.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=Cargo.toml");
-    for p in ["../.git/HEAD", "../.git/index"] {
-        if std::path::Path::new(p).exists() {
-            println!("cargo:rerun-if-changed={p}");
-        }
+    for p in git_watch_paths() {
+        println!("cargo:rerun-if-changed={}", p.display());
     }
     // Escape hatch for reproducible/offline builds that want to state the commit
     // explicitly (packaging, CI from a tarball, `SOURCE_DATE_EPOCH`-style flows).
@@ -75,4 +83,65 @@ fn run(args: &[&str]) -> Option<String> {
     }
     let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
     (!s.is_empty()).then_some(s)
+}
+
+/// Files whose change must re-run this script: the worktree's HEAD and index,
+/// the ref HEAD points to, and packed-refs. Empty when no git directory is found
+/// (a source tarball), which leaves the `src`/`Cargo.toml` triggers in charge.
+fn git_watch_paths() -> Vec<PathBuf> {
+    let Some(git_dir) = find_git_dir() else {
+        return Vec::new();
+    };
+    // A linked worktree keeps HEAD and index in its own gitdir but shares refs
+    // with the main repository, named by the `commondir` file.
+    let common_dir = std::fs::read_to_string(git_dir.join("commondir"))
+        .ok()
+        .map(|c| git_dir.join(c.trim()))
+        .unwrap_or_else(|| git_dir.clone());
+
+    let mut paths = vec![git_dir.join("HEAD"), git_dir.join("index")];
+    if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
+        if let Some(r) = head.trim().strip_prefix("ref:") {
+            let r = r.trim();
+            // Per-worktree refs (bisect, worktree/) live in the gitdir; branch
+            // refs live in the common dir. Watch whichever exists, and always
+            // packed-refs, where a loose ref goes after packing.
+            let local = git_dir.join(r);
+            paths.push(if local.exists() {
+                local
+            } else {
+                common_dir.join(r)
+            });
+        }
+    }
+    paths.push(common_dir.join("packed-refs"));
+    // A path that does not exist yet (no packed-refs) still has to be listed:
+    // cargo re-runs when it appears. Canonicalise what exists so the output
+    // does not carry `../..` segments.
+    paths
+        .into_iter()
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .collect()
+}
+
+/// The git directory for this checkout: `.git` itself when it is a directory,
+/// or the target of its `gitdir:` line when it is a file (linked worktree,
+/// submodule). Searches upward from the crate so the workspace layout is not
+/// hard-coded.
+fn find_git_dir() -> Option<PathBuf> {
+    let start = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
+    let mut dir: Option<&Path> = Some(&start);
+    while let Some(d) = dir {
+        let dot_git = d.join(".git");
+        if dot_git.is_dir() {
+            return Some(dot_git);
+        }
+        if dot_git.is_file() {
+            let text = std::fs::read_to_string(&dot_git).ok()?;
+            let target = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
+            return Some(d.join(target));
+        }
+        dir = d.parent();
+    }
+    None
 }
