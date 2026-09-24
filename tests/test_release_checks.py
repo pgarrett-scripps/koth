@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import tomllib
@@ -57,9 +58,13 @@ class ReleasePolicyTests(unittest.TestCase):
                 checks.check_metadata(self.root)
         path.write_text(json.dumps(original))
         cff = self.root / 'CITATION.cff'
-        cff.write_text(cff.read_text() + '\nversion: 0.0.1\n')
-        with self.assertRaises(ValueError):
-            checks.check_metadata(self.root)
+        text = cff.read_text()
+        for mutated in [re.sub(r'(?m)^version: .*$', 'version: "0.0.1"', text),
+                        re.sub(r'(?m)^date-released: .*\n', '', text),
+                        text + '\nfunding: not allowed\n']:
+            cff.write_text(mutated)
+            with self.subTest(mutated=mutated[-40:]), self.assertRaises(ValueError):
+                checks.check_metadata(self.root)
 
     def test_rejects_creator_drift(self):
         path = self.root / '.zenodo.json'

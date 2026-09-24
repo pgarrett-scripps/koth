@@ -25,21 +25,28 @@ def check_metadata(root):
             "Root and crate licenses differ")
     zen = json.loads((root / ".zenodo.json").read_text())
     cff = yaml.safe_load((root / "CITATION.cff").read_text())
-    forbidden = {"version", "date-released", "publication_date", "grants", "funding",
-                 "funders", "funding-references", "funding_references"}
+    # Zenodo takes the version and date from the release. CITATION.cff carries
+    # them, written by `just cite-sync` and checked against Cargo.toml below.
+    funding = {"grants", "funding", "funders", "funding-references", "funding_references"}
+    forbidden = funding | {"version", "date-released", "publication_date"}
 
-    def check_keys(value):
+    def check_keys(value, banned):
         if isinstance(value, dict):
-            require(not forbidden.intersection(value),
-                    "Citation metadata must not hardcode release versions/dates or funding")
+            require(not banned.intersection(value),
+                    "Citation metadata must not hardcode " + ", ".join(sorted(banned.intersection(value))))
             for item in value.values():
-                check_keys(item)
+                check_keys(item, banned)
         elif isinstance(value, list):
             for item in value:
-                check_keys(item)
+                check_keys(item, banned)
 
-    check_keys(zen)
-    check_keys(cff)
+    check_keys(zen, forbidden)
+    check_keys(cff, funding)
+    version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    require(str(cff.get("version")) == version,
+            "CITATION.cff version differs from Cargo.toml; run `just cite-sync`")
+    require(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(cff.get("date-released", ""))),
+            "CITATION.cff date-released is missing; run `just cite-sync`")
     require(cff["cff-version"] == "1.2.0", "Unsupported CFF format")
     require(zen["upload_type"] == cff["type"] == "software", "Metadata must describe software")
     require(zen["title"] == cff["title"], "Citation titles differ")

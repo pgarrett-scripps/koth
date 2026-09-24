@@ -13,6 +13,18 @@ release:
 check:
     cargo check --workspace
 
+# Copy Cargo.toml's version and a release date (default today) into CITATION.cff
+cite-sync DATE=`date +%F`:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+    sed -i -E "s/^version: .*/version: \"$v\"/; s/^date-released: .*/date-released: \"{{DATE}}\"/" CITATION.cff
+    grep -E '^(version|date-released):' CITATION.cff
+
+# Fail if CITATION.cff's version or date-released disagrees with Cargo.toml
+cite-check:
+    uv run --no-project --with-requirements scripts/release-requirements.txt python scripts/check_release.py
+
 # Run all tests
 test:
     cargo test --workspace

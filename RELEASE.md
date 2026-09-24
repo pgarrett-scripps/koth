@@ -32,8 +32,10 @@ could create duplicate records.
 ## Prepare a release
 
 1. Choose the version in the workspace `Cargo.toml`, refresh `Cargo.lock`,
-   move applicable changelog entries into a dated release section, and update
-   changed configuration examples and documentation. Do not edit a published tag.
+   run `just cite-sync [YYYY-MM-DD]` (date defaults to today) to write that
+   version and the release date into `CITATION.cff`, move applicable changelog
+   entries into a dated release section, and update changed configuration
+   examples and documentation. Do not edit a published tag.
 2. Confirm the default/no-default CI matrix, lint, rustdoc, and the
    `--no-default-features --features tdf` check pass. Complete relevant
    real-data smoke tests, including the ignored Bruker tests and the native
@@ -70,17 +72,18 @@ creation.
 
 ## Citation metadata policy
 
-Keep `.zenodo.json` and `CITATION.cff` version-independent: no `version`,
-release/publication date, version-specific DOI, funding, funders, or grants.
-The GitHub release supplies the Zenodo version/date. `cff-version` identifies
-the file format and must remain present; it is not the software version.
-The generic CFF intentionally cites the project without a particular version.
-For a version-specific citation, use that release's Zenodo record.
+Keep `.zenodo.json` version-independent: no `version`, publication date,
+funding, funders, or grants. The GitHub release supplies the Zenodo
+version/date. `CITATION.cff` carries `version` and `date-released`, written only
+by `just cite-sync` and never by hand; `just cite-check` and CI fail if the
+version differs from `Cargo.toml` or the date is missing. `CITATION.cff` never
+carries funding. `cff-version` identifies the file format and is not the
+software version. `CITATION.cff` and the README carry only the concept DOI;
+version-specific DOIs belong in papers that cite a particular release.
 
 Keep title, description, author order, affiliations, ORCIDs, keywords, and
 license synchronized. Zenodo gives `.zenodo.json` precedence over CFF when
-both exist. CI validates CFF and checks this shared metadata policy. Add a
-concept DOI later only after Zenodo has actually minted it; do not invent one.
+both exist. CI validates CFF and checks this shared metadata policy.
 
 ## Failure and retry
 
