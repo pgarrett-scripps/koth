@@ -23,7 +23,7 @@
 //! mirroring the mzML MS2 path ([`crate::io::mzml::stream_mzml_ms2`]). It is
 //! **DIA-only** — a DDA `.raw` (or one it cannot confidently classify as DIA)
 //! yields an empty set plus a warning and never disturbs MS1. See
-//! [`is_dia_schedule`] for the heuristic and its failure modes.
+//! `is_dia_schedule` for the heuristic and its failure modes.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -494,7 +494,7 @@ fn derive_isolation_window(
 /// with no segmentation.
 ///
 /// **DIA-only.** A first, signal-free pass collects the MS2 isolation windows and
-/// classifies the acquisition via [`is_dia_schedule`]. If it is not confidently
+/// classifies the acquisition via `is_dia_schedule`. If it is not confidently
 /// DIA (DDA, PRM notwithstanding, or too few scans), this logs a warning and
 /// returns an empty Vec — it never reconstructs DDA precursors and never touches
 /// MS1. Only on a DIA verdict does a second pass decode the MS2 peak arrays.
