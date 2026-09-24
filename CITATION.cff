@@ -8,7 +8,13 @@ type: software
 authors:
   - given-names: Patrick T.
     family-names: Garrett
-    affiliation: Scripps Research
+    orcid: "https://orcid.org/0000-0002-8434-9693"
+    affiliation: The Scripps Research Institute
+  - given-names: John R.
+    family-names: Yates
+    name-suffix: III
+    orcid: "https://orcid.org/0000-0001-5267-1672"
+    affiliation: The Scripps Research Institute
 repository-code: "https://github.com/pgarrett-scripps/koth"
 url: "https://github.com/pgarrett-scripps/koth"
 license: MIT

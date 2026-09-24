@@ -5,7 +5,13 @@
   "creators": [
     {
       "name": "Garrett, Patrick T.",
-      "affiliation": "Scripps Research"
+      "affiliation": "The Scripps Research Institute",
+      "orcid": "0000-0002-8434-9693"
+    },
+    {
+      "name": "Yates, John R., III",
+      "affiliation": "The Scripps Research Institute",
+      "orcid": "0000-0001-5267-1672"
     }
   ],
   "license": "MIT",
