@@ -8,6 +8,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-23
+
 ### Crate renamed to `koth-ms`
 - The crate is published as koth-ms; binaries remain koth_ff and koth_align.
   The library is imported as `koth_ms` (`use koth_ms::...`), and the source
@@ -16,7 +18,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Release preparation
 - Add version-independent, funding-free Zenodo and CFF metadata with CI validation.
-- Publish binaries and the `koth_ff` crate from published GitHub Releases after
+- Publish binaries and the `koth-ms` crate from published GitHub Releases after
   full CI and package checks; pushing a tag or running the workflow manually
   publishes nothing.
 - Document the native Zenodo integration and required publishing setup.
