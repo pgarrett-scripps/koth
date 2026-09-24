@@ -92,7 +92,7 @@ pub fn detect_format(path: &Path) -> InputFormat {
 /// Supported formats:
 /// - `.mzML` / `.mzml` / `.mzML.gz` → mzML via mzdata
 /// - directory ending in `.d` → Bruker timsTOF TDF (requires "tdf" feature)
-/// - `.raw` → native Thermo Fisher reader (requires "thermo" feature + .NET runtime)
+/// - `.raw` → native Thermo Fisher reader (pure-Rust `opentfraw`, default "thermo" feature)
 pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
     match detect_format(path) {
         InputFormat::Mzml | InputFormat::MzmlGz => mzml::read_mzml(path),
@@ -113,7 +113,7 @@ fn read_thermo_inner(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 #[cfg(not(feature = "thermo"))]
 fn read_thermo_inner(_path: &Path) -> Result<Vec<Spectrum>, KothError> {
     Err(KothError::UnsupportedFormat(
-        "Thermo .raw support requires the 'thermo' feature flag. Rebuild with --features thermo."
+        "Thermo .raw support requires the 'thermo' feature flag. Rebuild with the default features (or --features thermo)."
             .into(),
     ))
 }

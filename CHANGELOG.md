@@ -8,6 +8,20 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Pure-Rust Thermo `.raw` reader, on by default
+- The `thermo` feature now uses the pure-Rust `opentfraw` crate instead of
+  `thermorawfilereader` (Thermo's .NET assemblies under a self-hosted .NET 8
+  runtime). No .NET runtime is needed at build or run time, so `thermo` is now
+  a default feature and `.raw` input works out of the box. MS1 centroids are
+  the instrument's stored centroid list, as before; scans with only a profile
+  signal are centroided with mzdata's peak picker (S/N >= 1), as for profile
+  mzML. DIA isolation windows come from the scan event's precursor m/z and the
+  trailer's isolation width. opentfraw 1.4 decodes the variable-length scan
+  events of Orbitrap Fusion files out of step with the scans; koth detects
+  this at open (dependent scans whose event reads as MS1) and then takes MS
+  levels from the trailer's `Master Scan Number` and ignores event-derived
+  values. `DOTNET_ROOT` probing is removed.
+
 ### 0.10.0 development: calibrated timsTOF ion mobility (behaviour change)
 - **Behaviour change.** Bruker `.d` input now reports Bruker's
   acquisition-calibrated 1/K0. Each centroid's scan number is converted with the

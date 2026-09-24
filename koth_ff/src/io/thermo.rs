@@ -1,18 +1,22 @@
-//! Native Thermo Fisher `.raw` reader (opt-in `thermo` cargo feature).
+//! Native Thermo Fisher `.raw` reader (`thermo` cargo feature, on by default).
 //!
-//! Wraps the [`thermorawfilereader`] crate — a self-hosted .NET runtime over
-//! Thermo's `RawFileReader` assemblies — so a `.raw` file can be fed to koth_ff
-//! directly without a prior mzML conversion. The .NET 8 runtime must be installed
-//! on the host for reading to succeed at run time.
+//! Built on [`opentfraw`], a pure-Rust parser of the Thermo `.raw` binary
+//! format (file versions 8–66). There is no .NET runtime, no vendor assembly
+//! and no system library: a `.raw` file is read like any other local file.
 //!
-//! The MS1 output matches [`crate::io::mzml::read_mzml`] exactly: **MS1 spectra
-//! only**, **centroided** (the reader is asked for centroids, since koth's hill
-//! detector consumes centroids and does no peak picking of its own), peaks
-//! filtered to positive intensity and sorted by m/z ascending, spectra sorted by
-//! retention time and re-indexed `0..n`. Ion mobility is always 0.0 (Orbitrap has
-//! no IM dimension). Reading is **local-file only** — the Thermo API takes a
-//! filesystem path and manipulates file locks, so it cannot consume streams or
-//! remote stores.
+//! The MS1 output matches [`crate::io::mzml::read_mzml`] on an mzML produced by
+//! msconvert with vendor peak picking: **MS1 spectra only**, **centroided**
+//! (koth's hill detector consumes centroids and does no peak picking of its
+//! own), peaks filtered to positive intensity and sorted by m/z ascending,
+//! spectra sorted by retention time and re-indexed `0..n`. Ion mobility is
+//! always 0.0 (Orbitrap has no IM dimension).
+//!
+//! **Centroids.** FT (Orbitrap) and Astral scans store the instrument's own
+//! centroid list next to the profile signal; that list is what msconvert's
+//! vendor peak picking and Thermo's `RawFileReader` return, and it is what this
+//! reader uses. A scan that carries only a profile signal (older ion-trap or
+//! LTQ profile acquisitions) is centroided here with mzdata's quadratic peak
+//! picker at S/N >= 1, exactly as the mzML path centroids profile-mode mzML.
 //!
 //! [`read_thermo_ms2`] is the opt-in **DIA MS2** counterpart: it emits one MS2
 //! [`Spectrum`] per MS2 scan, stamped with the scan's precursor isolation window,
@@ -23,9 +27,12 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 
-use thermorawfilereader::{RawFileReader, RawSpectrum};
+use opentfraw::generic_data::GenericValue;
+use opentfraw::{MsPower, RawFileReader};
 
 use crate::error::KothError;
 use crate::models::{IsolationWindow, Peak, Spectrum};
@@ -34,36 +41,272 @@ use crate::models::{IsolationWindow, Peak, Spectrum};
 #[path = "thermo_tests.rs"]
 mod tests;
 
-/// Best-effort discovery of the .NET runtime for the `nethost`/`hostfxr` layer.
-///
-/// The Thermo reader hosts a .NET 8 runtime, which `nethost` locates via
-/// `DOTNET_ROOT` or a small set of standard install paths. A user-local install
-/// (the `dotnet-install.sh` default `~/.dotnet`) is *not* on that list, so if
-/// `DOTNET_ROOT` is unset we probe the common locations and point it at the first
-/// that actually carries a `Microsoft.NETCore.App` runtime. An explicit
-/// `DOTNET_ROOT` is always respected; if nothing is found we leave it unset and
-/// let [`RawFileReader::open`] surface the "missing .NET runtime" error.
-fn ensure_dotnet_root() {
-    if std::env::var_os("DOTNET_ROOT").is_some() {
-        return;
-    }
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(Path::new(&home).join(".dotnet"));
-    }
-    for p in ["/usr/share/dotnet", "/usr/lib/dotnet", "/opt/dotnet"] {
-        candidates.push(Path::new(p).to_path_buf());
-    }
-    for root in candidates {
-        if root.join("shared/Microsoft.NETCore.App").is_dir() {
-            log::info!(
-                "Thermo reader: auto-detected .NET runtime, setting DOTNET_ROOT={}",
-                root.display()
+/// An opened `.raw`: the parsed index/metadata plus a buffered handle for
+/// decoding scan packets on demand.
+pub(crate) struct RawSource {
+    raw: RawFileReader,
+    file: BufReader<File>,
+    /// Whether the decoded scan events line up with the scans (see
+    /// [`RawSource::check_event_alignment`]).
+    events_aligned: bool,
+}
+
+impl RawSource {
+    pub(crate) fn open(path: &Path) -> Result<Self, KothError> {
+        let open_err = |e: &dyn std::fmt::Display| {
+            KothError::ThermoError(format!(
+                "could not open Thermo .raw file '{}': {e}",
+                path.display()
+            ))
+        };
+        let raw = RawFileReader::open_path(path).map_err(|e| open_err(&e))?;
+        let file = File::open(path).map_err(|e| open_err(&e))?;
+        let mut source = Self {
+            raw,
+            file: BufReader::new(file),
+            events_aligned: true,
+        };
+        source.events_aligned = source.check_event_alignment();
+        if !source.events_aligned {
+            log::warn!(
+                "Thermo '{}': scan events are inconsistent with the per-scan trailer; \
+                 MS levels come from the trailer's Master Scan Number and scan-event \
+                 values (precursor m/z, profile calibration) are not used",
+                path.display()
             );
-            std::env::set_var("DOTNET_ROOT", &root);
-            return;
+        }
+        Ok(source)
+    }
+
+    /// Check the decoded scan events against the per-scan trailer. A scan the
+    /// trailer marks as dependent (`Master Scan Number` > 0) must carry an MSn
+    /// event. opentfraw 1.4 can decode the variable-length scan events of an
+    /// Orbitrap Fusion file out of step with the scans (PXD003881: 33 127 of
+    /// 66 254 dependent scans read as MS1 or undefined), while the trailer
+    /// table, read record by record, stays correct. More than 0.1 % such
+    /// scans marks the events as misaligned. The converse is not checked:
+    /// Astral DIA scans record `Master Scan Number` 0 on MSn scans.
+    fn check_event_alignment(&self) -> bool {
+        if self.raw.flat_peaks {
+            return true;
+        }
+        let (mut dependent, mut contradicted) = (0usize, 0usize);
+        for idx in 0..self.n_scans() {
+            if self.master_scan(idx).is_some_and(|m| m > 0) {
+                dependent += 1;
+                if self.event_level(idx) == 1 {
+                    contradicted += 1;
+                }
+            }
+        }
+        contradicted * 1000 <= dependent
+    }
+
+    pub(crate) fn n_scans(&self) -> u32 {
+        self.raw.num_scans
+    }
+
+    /// 1-based Thermo scan number of the zero-based scan index `idx`.
+    fn scan_number(&self, idx: u32) -> u32 {
+        self.raw.run_header.sample_info.first_scan_number + idx
+    }
+
+    /// MS level recorded in scan `idx`'s scan event (1 when absent or
+    /// undefined).
+    fn event_level(&self, idx: u32) -> u32 {
+        match self
+            .raw
+            .scan_events
+            .get(idx as usize)
+            .and_then(|e| e.preamble.ms_power())
+        {
+            None | Some(MsPower::Undefined) | Some(MsPower::Ms1) => 1,
+            Some(MsPower::Ms2) => 2,
+            Some(_) => 3,
         }
     }
+
+    /// MS level of scan `idx` (no signal decode). TSQ/SRM files (flat peak
+    /// format) are all MS2 transitions. When the scan events are misaligned the
+    /// trailer's `Master Scan Number` decides (0 = survey scan, else MS2).
+    pub(crate) fn ms_level(&self, idx: u32) -> u32 {
+        if self.raw.flat_peaks {
+            return 2;
+        }
+        if self.events_aligned {
+            return self.event_level(idx);
+        }
+        match self.master_scan(idx) {
+            Some(m) if m > 0 => 2,
+            _ => 1,
+        }
+    }
+
+    /// Trailer `Master Scan Number` of scan `idx`, if recorded.
+    fn master_scan(&self, idx: u32) -> Option<i32> {
+        self.raw
+            .scan_params(self.scan_number(idx))
+            .and_then(|p| p.master_scan_number())
+    }
+
+    /// Scan start time in minutes, from the scan index (no signal decode).
+    pub(crate) fn retention_time(&self, idx: u32) -> f64 {
+        self.raw
+            .scan_index
+            .get(idx as usize)
+            .map_or(f64::NAN, |e| e.start_time)
+    }
+
+    /// FAIMS compensation voltage from the per-scan trailer, if recorded.
+    pub(crate) fn faims_cv(&self, idx: u32) -> Option<f32> {
+        let record = self.raw.scan_parameters(self.scan_number(idx))?;
+        record
+            .values
+            .iter()
+            .find(|(label, _)| label.trim_end_matches(':').trim() == "FAIMS CV")
+            .and_then(|(_, value)| faims_value(value))
+    }
+
+    /// Decode scan `idx` to centroided koth peaks.
+    pub(crate) fn peaks(&mut self, idx: u32) -> Result<Vec<Peak>, KothError> {
+        let scan_number = self.scan_number(idx);
+        let read_err = |e: opentfraw::Error| {
+            KothError::ThermoError(format!("could not read scan {scan_number}: {e}"))
+        };
+        let raw_peaks = self
+            .raw
+            .read_peaks_only(&mut self.file, scan_number)
+            .map_err(read_err)?;
+        if !raw_peaks.is_empty() || self.raw.flat_peaks {
+            return Ok(to_koth_peaks(raw_peaks.iter().map(|p| (p.mz, p.abundance))));
+        }
+        // No stored centroid list: fall back to picking the profile signal.
+        // Its m/z calibration comes from the scan event, so with misaligned
+        // events the scan is skipped rather than mis-calibrated.
+        if !self.events_aligned {
+            log::warn!(
+                "Thermo scan {scan_number}: no centroid list and no trusted profile \
+                 calibration; skipping"
+            );
+            return Ok(Vec::new());
+        }
+        let packet = self
+            .raw
+            .read_scan(&mut self.file, scan_number)
+            .map_err(read_err)?;
+        let Some(profile) = packet.profile else {
+            return Ok(Vec::new());
+        };
+        let coefficients = self
+            .raw
+            .scan_events
+            .get(idx as usize)
+            .map(|e| e.coefficients.as_slice())
+            .unwrap_or(&[]);
+        let (mz, intensity): (Vec<f64>, Vec<f32>) = profile
+            .to_mz_intensity(coefficients)
+            .into_iter()
+            .filter(|&(m, _)| m > 0.0)
+            .map(|(m, i)| (m, i as f32))
+            .unzip();
+        Ok(pick_profile_peaks(&mz, &intensity))
+    }
+
+    /// Isolation window of MS2 scan `idx`, or `None` if the scan carries no
+    /// usable precursor. The center is the scan event's reaction precursor m/z
+    /// (the value in the scan filter, e.g. `ms2 512.50@hcd25`), which for DIA is
+    /// the window center; the width is the trailer's MS2 isolation width.
+    pub(crate) fn isolation_window(&self, idx: u32) -> Option<IsolationWindow> {
+        let reaction = self
+            .raw
+            .scan_events
+            .get(idx as usize)
+            .filter(|_| self.events_aligned)
+            .and_then(|e| e.reactions.first());
+        let params = self.raw.scan_params(self.scan_number(idx));
+        let fallback = params
+            .as_ref()
+            .and_then(|p| p.monoisotopic_mz())
+            .unwrap_or(f64::NAN);
+        let center = reaction
+            .map(|r| r.precursor_mz)
+            .filter(|mz| mz.is_finite() && *mz > 0.0)
+            .unwrap_or(fallback);
+        let width = params
+            .as_ref()
+            .and_then(|p| p.isolation_width_mz())
+            .unwrap_or(f64::NAN);
+        let (lower, upper) = if width.is_finite() && width > 0.0 {
+            (center - width / 2.0, center + width / 2.0)
+        } else {
+            (f64::NAN, f64::NAN)
+        };
+        derive_isolation_window(center, lower, upper, fallback)
+    }
+}
+
+/// Parse a Thermo `FAIMS CV` trailer value, stored numerically on most
+/// firmware and as text (optionally with a unit) on some.
+fn faims_value(value: &GenericValue) -> Option<f32> {
+    let cv = match value {
+        GenericValue::Float32(v) => *v,
+        GenericValue::Float64(v) => *v as f32,
+        GenericValue::Int8(v) => f32::from(*v),
+        GenericValue::Int16(v) => f32::from(*v),
+        GenericValue::Int32(v) => *v as f32,
+        GenericValue::String(s) => return parse_faims_cv(s),
+        _ => return None,
+    };
+    cv.is_finite().then_some(if cv == 0.0 { 0.0 } else { cv })
+}
+
+/// Parse a textual `FAIMS CV` trailer value. Accepting a trailing unit is
+/// harmless and robust.
+fn parse_faims_cv(value: &str) -> Option<f32> {
+    let token = value.split_whitespace().next()?;
+    let cv = token.parse::<f32>().ok()?;
+    cv.is_finite().then_some(if cv == 0.0 { 0.0 } else { cv })
+}
+
+/// Convert (m/z, intensity) pairs to koth [`Peak`]s: filter to positive
+/// intensity, m/z into `f32`, ion mobility 0.0 (Orbitrap has no IM), sorted by
+/// m/z ascending. The single scan→peaks conversion shared by the MS1 and MS2
+/// paths, matching `mzml::extract_peaks`'s centroided branch.
+fn to_koth_peaks(pairs: impl Iterator<Item = (f64, f32)>) -> Vec<Peak> {
+    let mut peaks: Vec<Peak> = pairs
+        .filter(|&(_, it)| it > 0.0)
+        .map(|(m, it)| Peak {
+            mz: m as f32,
+            intensity: it,
+            ion_mobility: 0.0,
+        })
+        .collect();
+    peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
+    peaks
+}
+
+/// Centroid a profile signal with mzdata's quadratic peak picker at S/N >= 1,
+/// the same picker and threshold the mzML path applies to profile-mode mzML.
+fn pick_profile_peaks(mz: &[f64], intensity: &[f32]) -> Vec<Peak> {
+    use mzdata::mzsignal::{PeakFitType, PeakPicker};
+    if mz.len() < 3 {
+        return Vec::new();
+    }
+    let picker = PeakPicker {
+        fit_type: PeakFitType::Quadratic,
+        signal_to_noise_threshold: 1.0,
+        ..Default::default()
+    };
+    if mz.windows(2).any(|w| w[1] < w[0]) {
+        log::warn!("Thermo profile scan m/z is not sorted; skipping peak picking");
+        return Vec::new();
+    }
+    let mut fitted = Vec::new();
+    if let Err(e) = picker.discover_peaks(mz, intensity, &mut fitted) {
+        log::warn!("Thermo profile peak picking failed: {e}");
+        return Vec::new();
+    }
+    to_koth_peaks(fitted.iter().map(|p| (p.mz, p.intensity)))
 }
 
 /// Read all MS1 (centroided) spectra from a Thermo `.raw` file, returning the same
@@ -72,39 +315,25 @@ pub fn read_thermo(path: &Path) -> Result<Vec<Spectrum>, KothError> {
     stream_thermo(path)?.collect()
 }
 
-/// Index scan metadata without loading signal arrays, then decode MS1 spectra
+/// Index scan metadata without decoding signal, then decode MS1 spectra
 /// lazily in stable retention-time order. Errors stop the stream; empty spectra
 /// are skipped and emitted spectra receive contiguous scan indices.
 pub fn stream_thermo(path: &Path) -> Result<super::SpectrumStream, KothError> {
-    ensure_dotnet_root();
-    let mut reader = RawFileReader::open(path).map_err(|e| {
-        KothError::ThermoError(format!(
-            "could not open Thermo .raw file '{}': {e} \
-             (a .NET 8 runtime must be installed for native .raw reading)",
-            path.display()
-        ))
-    })?;
-    // koth's hill detector works on centroids and does no peak picking; ask the
-    // Thermo reader to centroid so profile-mode MS1 scans arrive as peak lists.
-    reader.set_centroid_spectra(true);
-
-    reader.set_signal_loading(false);
+    let mut source = RawSource::open(path)?;
     let mut indices = Vec::new();
-    for i in 0..reader.len() {
-        let spec = reader
-            .get(i)
-            .ok_or_else(|| KothError::ThermoError(format!("could not read scan {i} metadata")))?;
-        if spec.ms_level() == 1 {
-            if !spec.time().is_finite() {
+    for i in 0..source.n_scans() {
+        if source.ms_level(i) == 1 {
+            let rt = source.retention_time(i);
+            if !rt.is_finite() {
                 return Err(KothError::ThermoError(format!(
                     "non-finite RT for scan {i}"
                 )));
             }
-            indices.push((i, spec.time()));
+            indices.push((i, rt));
         }
     }
-    indices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-    reader.set_signal_loading(true);
+    // Stable sort: acquisition order is kept for equal RTs.
+    indices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
     let mut indices = indices.into_iter();
     let mut count = 0;
     let mut finished = false;
@@ -113,28 +342,23 @@ pub fn stream_thermo(path: &Path) -> Result<super::SpectrumStream, KothError> {
             return None;
         }
         for (i, retention_time) in indices.by_ref() {
-            let Some(spec) = reader.get(i) else {
-                finished = true;
-                return Some(Err(KothError::ThermoError(format!(
-                    "could not read MS1 scan {i}"
-                ))));
+            let peaks = match source.peaks(i) {
+                Ok(p) => p,
+                Err(e) => {
+                    finished = true;
+                    return Some(Err(e));
+                }
             };
-            let peaks = centroid_peaks(&spec);
             if peaks.is_empty() {
                 continue;
             }
-            let faims_cv = reader.get_raw_trailers_for(i).and_then(|trailers| {
-                trailers
-                    .get_label("FAIMS CV")
-                    .and_then(|v| parse_faims_cv(v.value))
-            });
             let spectrum = Spectrum {
                 scan_index: count,
                 retention_time,
                 peaks,
                 ms_level: 1,
                 isolation_window: None,
-                faims_cv,
+                faims_cv: source.faims_cv(i),
             };
             count += 1;
             return Some(Ok(spectrum));
@@ -146,41 +370,6 @@ pub fn stream_thermo(path: &Path) -> Result<super::SpectrumStream, KothError> {
             None
         }
     })))
-}
-
-/// Parse the Thermo `FAIMS CV` trailer value. Trailer values normally contain
-/// just the number, but accepting a trailing unit is harmless and robust.
-fn parse_faims_cv(value: &str) -> Option<f32> {
-    let token = value.split_whitespace().next()?;
-    let cv = token.parse::<f32>().ok()?;
-    cv.is_finite().then_some(if cv == 0.0 { 0.0 } else { cv })
-}
-
-/// Convert a spectrum's centroid arrays to koth [`Peak`]s: filter to positive
-/// intensity, m/z into `f32`, ion mobility 0.0 (Orbitrap has no IM), sorted by
-/// m/z ascending. This is the **single** scan→peaks conversion shared by the MS1
-/// ([`read_thermo`]) and MS2 ([`read_thermo_ms2`]) paths, matching
-/// `mzml::extract_peaks`'s centroided branch. The reader must have
-/// `set_centroid_spectra(true)` so profile scans arrive as peak lists.
-fn centroid_peaks(spec: &RawSpectrum) -> Vec<Peak> {
-    let mut peaks: Vec<Peak> = match spec.data() {
-        Some(d) => {
-            let mz = d.mz();
-            let intensity = d.intensity();
-            mz.iter()
-                .zip(intensity.iter())
-                .filter(|(_, &it)| it > 0.0)
-                .map(|(&m, &it)| Peak {
-                    mz: m as f32,
-                    intensity: it,
-                    ion_mobility: 0.0,
-                })
-                .collect()
-        }
-        None => Vec::new(),
-    };
-    peaks.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal));
-    peaks
 }
 
 // ---------------------------------------------------------------------------
@@ -268,11 +457,11 @@ fn is_dia_schedule(windows: &[IsolationWindow]) -> bool {
 }
 
 /// Map a Thermo scan's precursor/isolation metadata to koth's [`IsolationWindow`]
-/// (absolute m/z bounds). Prefers the recorded isolation-window `target` as the
-/// center, falling back to the precursor m/z; if the recorded `lower`/`upper` do
+/// (absolute m/z bounds). Prefers the scan event's isolation `target` as the
+/// center, falling back to the trailer precursor m/z; if `lower`/`upper` do
 /// not bracket a positive-width window (unset / degenerate on some files) the
 /// window collapses to the center point. Returns `None` when no usable center
-/// exists. Pure and unit-testable — the FFI bridge lives in [`precursor_window`].
+/// exists. Pure and unit-testable.
 fn derive_isolation_window(
     target: f64,
     lower: f64,
@@ -298,18 +487,11 @@ fn derive_isolation_window(
     })
 }
 
-/// Bridge a [`RawSpectrum`]'s precursor to an [`IsolationWindow`], or `None` if
-/// the scan carries no precursor (e.g. an MS1 scan, or a malformed MS2 scan).
-fn precursor_window(spec: &RawSpectrum) -> Option<IsolationWindow> {
-    let p = spec.precursor()?;
-    let iso = p.isolation_window();
-    derive_isolation_window(iso.target(), iso.lower(), iso.upper(), p.mz())
-}
-
 /// Read all **DIA** MS2 scans from a Thermo `.raw`, one [`Spectrum`] per MS2 scan
 /// stamped with its precursor isolation window — the `.raw` analog of
-/// [`crate::io::mzml::stream_mzml_ms2`]. Orbitrap scans are 1-D centroids (no ion
-/// mobility), so each MS2 scan maps to exactly one Spectrum with no segmentation.
+/// [`crate::io::mzml::stream_mzml_ms2`]. Orbitrap and Astral scans are 1-D
+/// centroids (no ion mobility), so each MS2 scan maps to exactly one Spectrum
+/// with no segmentation.
 ///
 /// **DIA-only.** A first, signal-free pass collects the MS2 isolation windows and
 /// classifies the acquisition via [`is_dia_schedule`]. If it is not confidently
@@ -317,31 +499,21 @@ fn precursor_window(spec: &RawSpectrum) -> Option<IsolationWindow> {
 /// returns an empty Vec — it never reconstructs DDA precursors and never touches
 /// MS1. Only on a DIA verdict does a second pass decode the MS2 peak arrays.
 pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
-    ensure_dotnet_root();
-    let mut reader = RawFileReader::open(path).map_err(|e| {
-        KothError::ThermoError(format!(
-            "could not open Thermo .raw file '{}': {e} \
-             (a .NET 8 runtime must be installed for native .raw reading)",
-            path.display()
-        ))
-    })?;
+    let mut source = RawSource::open(path)?;
 
-    // Pass 1 (cheap): classify DIA vs DDA from MS2 isolation windows alone, with
-    // signal loading OFF so no peak arrays are decoded for a file we may reject.
-    reader.set_signal_loading(false);
-    let n = reader.len();
-    let mut scan_windows: Vec<IsolationWindow> = Vec::new();
-    for i in 0..n {
-        let Some(spec) = reader.get(i) else { continue };
-        if spec.ms_level() != 2 {
+    // Pass 1 (cheap): classify DIA vs DDA from MS2 isolation windows alone;
+    // no peak arrays are decoded for a file we may reject.
+    let mut ms2_scans: Vec<(u32, IsolationWindow)> = Vec::new();
+    for i in 0..source.n_scans() {
+        if source.ms_level(i) != 2 {
             continue;
         }
-        if let Some(w) = precursor_window(&spec) {
-            scan_windows.push(w);
+        if let Some(w) = source.isolation_window(i) {
+            ms2_scans.push((i, w));
         }
     }
 
-    if scan_windows.is_empty() {
+    if ms2_scans.is_empty() {
         log::warn!(
             "Thermo .raw '{}' has no MS2 scans with an isolation window; emitting no MS2 \
              (MS1 output is unaffected)",
@@ -350,6 +522,7 @@ pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
         return Ok(Vec::new());
     }
 
+    let scan_windows: Vec<IsolationWindow> = ms2_scans.iter().map(|&(_, w)| w).collect();
     let stats = schedule_stats(&scan_windows);
     if !is_dia_schedule(&scan_windows) {
         log::warn!(
@@ -366,18 +539,9 @@ pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
 
     // Pass 2: DIA confirmed — decode centroided MS2 peaks and build one Spectrum
     // per scan, reusing the exact scan→peaks conversion the MS1 path uses.
-    reader.set_signal_loading(true);
-    reader.set_centroid_spectra(true);
-    let mut spectra: Vec<Spectrum> = Vec::with_capacity(scan_windows.len());
-    for i in 0..n {
-        let Some(spec) = reader.get(i) else { continue };
-        if spec.ms_level() != 2 {
-            continue;
-        }
-        let Some(window) = precursor_window(&spec) else {
-            continue;
-        };
-        let peaks = centroid_peaks(&spec);
+    let mut spectra: Vec<Spectrum> = Vec::with_capacity(ms2_scans.len());
+    for (i, window) in ms2_scans {
+        let peaks = source.peaks(i)?;
         if peaks.is_empty() {
             continue;
         }
@@ -385,8 +549,8 @@ pub fn read_thermo_ms2(path: &Path) -> Result<Vec<Spectrum>, KothError> {
             // Source scan index, for traceability. The MS2 hill detector
             // re-indexes scans per isolation window, so this is not used for
             // gap tracking (mirrors the Bruker diaPASEF reader).
-            scan_index: i,
-            retention_time: spec.time(), // Thermo reports scan time in minutes
+            scan_index: i as usize,
+            retention_time: source.retention_time(i), // minutes
             peaks,
             ms_level: 2,
             isolation_window: Some(window),

@@ -1,14 +1,13 @@
 //! End-to-end test of the native Thermo DIA `.raw` MS2 reader.
 //!
-//! Needs the `thermo` feature (native `.raw` reader) **and** a .NET 8 runtime on
-//! the host, plus a real DIA `.raw` fixture — none of which are guaranteed in
-//! CI — so it is `#[ignore]`-gated (mirroring `bruker_diapasef_ms2`). Point it at
+//! Needs the default `thermo` feature (pure-Rust `opentfraw` `.raw` reader) and
+//! a real DIA `.raw` fixture, which CI does not have, so it is `#[ignore]`-gated (mirroring `bruker_diapasef_ms2`). Point it at
 //! a DIA `.raw` with `KOTH_DIA_RAW`; it skips (does not fail) when the file is
 //! absent. Run explicitly with:
 //!
 //! ```text
 //! KOTH_DIA_RAW=/path/to/dia.raw \
-//!   cargo test -p koth_ff --features thermo --test thermo_dia_ms2 -- --ignored --nocapture
+//!   cargo test -p koth_ff --test thermo_dia_ms2 -- --ignored --nocapture
 //! ```
 
 #![cfg(feature = "thermo")]
@@ -28,7 +27,7 @@ fn dia_raw_fixture() -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "needs --features thermo, a .NET 8 runtime, and a DIA .raw via KOTH_DIA_RAW"]
+#[ignore = "needs a DIA .raw via KOTH_DIA_RAW"]
 fn thermo_dia_raw_ms2() {
     let Some(path) = dia_raw_fixture() else {
         eprintln!("SKIP thermo_dia_raw_ms2: set KOTH_DIA_RAW to a DIA .raw file");

@@ -39,18 +39,22 @@ default (requires `timsrust`). To build without it:
 cargo build --release --no-default-features
 ```
 
-### Native Thermo `.raw` input (optional)
+### Native Thermo `.raw` input
 
-Reading Thermo Fisher `.raw` files directly — no prior mzML conversion — is available behind the
-`thermo` feature. It wraps Thermo's `RawFileReader` assemblies via a self-hosted **.NET 8 runtime**,
-which must be installed at build and run time, so it is **off by default**:
+Thermo Fisher `.raw` files are read directly — no prior mzML conversion — by the `thermo`
+feature, which is **on by default**. It uses [`opentfraw`](https://crates.io/crates/opentfraw), a
+pure-Rust parser of the `.raw` format: no .NET runtime, vendor assemblies or system libraries are
+needed at build or run time. MS1 peaks are the instrument's stored centroids (the same list
+msconvert's vendor peak picking returns); profile-only scans are centroided with mzdata's peak
+picker, as for profile mzML. To build without it:
 
 ```bash
-cargo build --release -p koth_ff --features thermo
+cargo build --release -p koth_ff --no-default-features --features tdf
 ```
 
-koth_ff auto-detects a .NET runtime in the usual locations (`~/.dotnet`, `/usr/share/dotnet`, …);
-set `DOTNET_ROOT` explicitly if yours lives elsewhere. `.raw` reading is local-file only.
+Known limitation: on some Exploris 480 and Fusion Lumos DIA files the isolation-window center is
+not recoverable from the `.raw` (opentfraw issue #44); DIA MS2 detection on such a file finds no
+windows and emits no MS2 hills. MS1 is unaffected. Convert to mzML for MS2 on those files.
 
 ## Quick start
 
@@ -63,7 +67,7 @@ koth_ff data.mzML --output ./out
 # Bruker .d directory
 koth_ff data.d --output ./out
 
-# Thermo .raw (requires a build with --features thermo)
+# Thermo .raw
 koth_ff data.raw --output ./out
 
 # With a custom config

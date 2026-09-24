@@ -37,8 +37,8 @@ publishes nothing (0.3.0 sat unpushed for three days).
 - Resolve or explicitly accept the changelog warning that absolute QDA q-value
   calibration has not yet been independently validated.
 - Run the four ignored Bruker real-data integration tests with their fixtures.
-- Build and smoke-test `--features thermo` on a machine with .NET 8 and a native
-  Thermo `.raw` fixture.
+- Smoke-test the default `thermo` feature on a native Thermo `.raw` fixture
+  (`KOTH_MS1_RAW`, `KOTH_DIA_RAW` ignored tests).
 - Confirm the tuned configs in the separate `koth-paper` repository still parse
   and reproduce the intended benchmark outputs.
 - Confirm the repository is public if the release is intended to be public, and

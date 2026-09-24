@@ -1,6 +1,6 @@
-//! Unit tests for the pure Thermo DIA MS2 logic: isolation-window derivation and
-//! DIA-vs-DDA schedule classification. These exercise no `.raw` file and no .NET
-//! runtime, so they run under a plain `cargo test -p koth_ff --features thermo`.
+//! Unit tests for the pure Thermo logic: trailer parsing, profile centroiding,
+//! isolation-window derivation and DIA-vs-DDA schedule classification. These
+//! exercise no `.raw` file, so they run under a plain `cargo test -p koth_ff`.
 //! End-to-end reading of a real `.raw` is covered separately, `#[ignore]`-gated
 //! behind `KOTH_DIA_RAW` in `tests/thermo_dia_ms2.rs`.
 
@@ -12,6 +12,42 @@ fn parses_faims_cv_trailer_values() {
     assert_eq!(parse_faims_cv("-65.0 V"), Some(-65.0));
     assert_eq!(parse_faims_cv("NaN"), None);
     assert_eq!(parse_faims_cv("not-a-voltage"), None);
+    assert_eq!(faims_value(&GenericValue::Float64(-45.0)), Some(-45.0));
+    assert_eq!(faims_value(&GenericValue::Float32(-0.0)), Some(0.0));
+    assert_eq!(
+        faims_value(&GenericValue::String("-70 V".into())),
+        Some(-70.0)
+    );
+    assert_eq!(faims_value(&GenericValue::Bool(true)), None);
+}
+
+#[test]
+fn profile_fallback_picks_gaussian_apexes() {
+    // Two Gaussian profile peaks on a 0.001-Th grid, apexes at 500.1 and 500.4.
+    let mz: Vec<f64> = (0..600).map(|i| 500.0 + i as f64 * 0.001).collect();
+    let intensity: Vec<f32> = mz
+        .iter()
+        .map(|&m| {
+            let g = |c: f64, a: f64| a * (-((m - c) / 0.004).powi(2) / 2.0).exp();
+            (g(500.1, 1.0e6) + g(500.4, 4.0e5)) as f32
+        })
+        .collect();
+    let peaks = pick_profile_peaks(&mz, &intensity);
+    assert_eq!(peaks.len(), 2, "{peaks:?}");
+    assert!((peaks[0].mz - 500.1).abs() < 5e-4);
+    assert!((peaks[1].mz - 500.4).abs() < 5e-4);
+    assert!(peaks[0].intensity > peaks[1].intensity);
+    assert!(peaks.iter().all(|p| p.ion_mobility == 0.0));
+    assert!(pick_profile_peaks(&[1.0, 2.0], &[1.0, 2.0]).is_empty());
+    assert!(pick_profile_peaks(&[3.0, 2.0, 1.0], &[1.0, 5.0, 1.0]).is_empty());
+}
+
+#[test]
+fn koth_peaks_drop_nonpositive_and_sort() {
+    let peaks =
+        to_koth_peaks([(600.0, 5.0), (400.0, 0.0), (500.0, 2.0), (450.0, -1.0)].into_iter());
+    let mzs: Vec<f32> = peaks.iter().map(|p| p.mz).collect();
+    assert_eq!(mzs, vec![500.0, 600.0]);
 }
 
 /// Build a set of per-MS2-scan windows for a fixed DIA schedule of `n_windows`
@@ -158,54 +194,31 @@ fn empty_windows_is_not_dia() {
     assert_eq!(schedule_stats(&[]).recurrence, 0.0);
 }
 
-// Frozen pre-streaming reader (0908b50) serves as an independent batch oracle.
+/// Independent batch oracle: decode every MS1 scan eagerly, then sort by RT and
+/// re-index, the way `read_mzml` does. The streaming path must match it.
 fn read_thermo_batch_reference(path: &Path) -> Result<Vec<Spectrum>, KothError> {
-    ensure_dotnet_root();
-    let mut reader = RawFileReader::open(path).map_err(|e| {
-        KothError::ThermoError(format!(
-            "could not open Thermo .raw file '{}': {e} \
-             (a .NET 8 runtime must be installed for native .raw reading)",
-            path.display()
-        ))
-    })?;
-    // koth's hill detector works on centroids and does no peak picking; ask the
-    // Thermo reader to centroid so profile-mode MS1 scans arrive as peak lists.
-    reader.set_centroid_spectra(true);
-
-    let n = reader.len();
-    let mut spectra: Vec<Spectrum> = Vec::with_capacity(n);
-
-    for i in 0..n {
-        let Some(spec) = reader.get(i) else { continue };
-        if spec.ms_level() != 1 {
-            continue; // MS1 only, matching read_mzml
+    let mut source = RawSource::open(path)?;
+    let mut spectra = Vec::new();
+    for i in 0..source.n_scans() {
+        if source.ms_level(i) != 1 {
+            continue;
         }
-
-        let peaks = centroid_peaks(&spec);
+        let peaks = source.peaks(i)?;
         if peaks.is_empty() {
             continue;
         }
-        let faims_cv = reader.get_raw_trailers_for(i).and_then(|trailers| {
-            trailers
-                .get_label("FAIMS CV")
-                .and_then(|v| parse_faims_cv(v.value))
-        });
-
         spectra.push(Spectrum {
-            scan_index: 0,               // assigned after the RT sort below
-            retention_time: spec.time(), // Thermo reports scan time in minutes
+            scan_index: 0,
+            retention_time: source.retention_time(i),
             peaks,
             ms_level: 1,
             isolation_window: None,
-            faims_cv,
+            faims_cv: source.faims_cv(i),
         });
     }
-
     if spectra.is_empty() {
         return Err(KothError::NoSpectra);
     }
-
-    // Sort by retention time and re-index, identical to `read_mzml`.
     spectra.sort_by(|a, b| {
         a.retention_time
             .partial_cmp(&b.retention_time)
@@ -214,13 +227,11 @@ fn read_thermo_batch_reference(path: &Path) -> Result<Vec<Spectrum>, KothError> 
     for (i, s) in spectra.iter_mut().enumerate() {
         s.scan_index = i;
     }
-
-    log::info!("Read {} MS1 spectra from Thermo .raw", spectra.len());
     Ok(spectra)
 }
 
 #[test]
-#[ignore = "requires .NET and a real .raw path in KOTH_MS1_RAW"]
+#[ignore = "requires a real Thermo .raw path in KOTH_MS1_RAW"]
 fn streaming_ms1_matches_batch_reference() {
     use crate::{config::KothConfig, run_hills, run_hills_streaming};
     let path = std::path::PathBuf::from(

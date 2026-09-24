@@ -38,11 +38,10 @@ timsrust   = { workspace = true, optional = true }
 # (release/0.4.0, 9b39866). Drop `path` once 0.4.0 is published.
 dnoise     = { version = "0.4.0", path = "../../d_noise", default-features = false, optional = true }
 rusqlite   = { version = "0.32", features = ["bundled"], optional = true }
-# Native Thermo .raw reading (opt-in). Wraps Thermo's RawFileReader assemblies via
-# a self-hosted .NET runtime, so a `.raw` file can be fed to koth_ff directly with
-# no prior mzML conversion. Requires a .NET 8 runtime at build and run time; kept
-# out of the default feature set for that reason. Build with `--features thermo`.
-thermorawfilereader = { version = "0.7", optional = true }
+# Native Thermo .raw reading: a pure-Rust parser of the .raw binary format (no
+# .NET runtime, no vendor assemblies, no system libraries), so a `.raw` file can
+# be fed to koth_ff directly with no prior mzML conversion.
+opentfraw  = { version = "1.4", optional = true }
 rayon      = { workspace = true }
 csv        = { workspace = true }
 serde      = { workspace = true }
@@ -64,12 +63,12 @@ name = "tims_mobility_dump"
 required-features = ["tdf"]
 
 [features]
-default = ["tdf"]
+default = ["tdf", "thermo"]
 tdf = ["dep:timsrust", "dep:dnoise", "dep:rusqlite"]
-# Native Thermo Fisher .raw input (no mzML conversion). Off by default: enabling it
-# requires a .NET 8 runtime at build and run time. `cargo build -p koth_ff --features thermo`.
-thermo = ["dep:thermorawfilereader"]
+# Native Thermo Fisher .raw input (no mzML conversion). Pure Rust, on by default;
+# `--no-default-features --features tdf` builds without it.
+thermo = ["dep:opentfraw"]
 
 [package.metadata.docs.rs]
-features = ["tdf"]
+features = ["tdf", "thermo"]
 rustdoc-args = ["--cfg", "docsrs"]

@@ -159,10 +159,14 @@ MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`), **Bruker diaPASEF `.d`**
   centroiding as the MS1 Bruker reader, and emitted as one MS2 spectrum stamped
   with that window. No conversion to mzML is needed. This runs only when the
   caller opts into MS2; the MS1 Bruker output is byte-for-byte unchanged.
-* **Thermo DIA `.raw`** — each MS2 scan's precursor isolation window is read from
-  the Thermo `RawFileReader` (`precursor.isolation_window()` → absolute
-  `lower`/`target`/`upper` m/z, falling back to the precursor m/z as center) and
-  one centroided MS2 spectrum is emitted per scan, reusing the **same** scan→peaks
+* **Thermo DIA `.raw`** — each MS2 scan's precursor isolation window is read with
+  `opentfraw`: the center is the scan event's reaction precursor m/z (the value in
+  the scan filter), falling back to the trailer's monoisotopic m/z, and the bounds
+  are center ± half the trailer's MS2 isolation width (collapsing to the center
+  when no width is recorded). On some Exploris 480 / Fusion Lumos DIA files the
+  center is not recorded in a form opentfraw can decode (its issue #44); those
+  scans carry no window and the file emits no MS2. One
+  centroided MS2 spectrum is emitted per scan, reusing the **same** scan→peaks
   conversion as the MS1 `.raw` reader. Orbitrap scans are 1-D centroids (no ion
   mobility), so there is no per-scan segmentation — one MS2 scan → one spectrum.
   DIA is detected first (below); only a DIA verdict emits MS2. Runs only under
@@ -218,14 +222,13 @@ stream internally (MS2 scans route to the MS2 detector and never pollute MS1).
   `QuadrupoleSettings` → window-segment mapping itself
   (`io::bruker::inner::window_segments`) is unit-tested under `--features tdf`
   (half-open scan ranges, degenerate-row rejection) with no `.d` file needed.
-* `koth_ff/tests/thermo_dia_ms2.rs` (`#[ignore]`, needs `--features thermo`, a
-  .NET 8 runtime, and a DIA `.raw` via `KOTH_DIA_RAW`; skips if absent):
+* `koth_ff/tests/thermo_dia_ms2.rs` (`#[ignore]`, needs the default `thermo`
+  feature and a DIA `.raw` via `KOTH_DIA_RAW`; skips if absent):
   `thermo_dia_raw_ms2` asserts a DIA `.raw` recovers multiple isolation windows,
   every MS2 hill carries its window, and the MS1 side is unchanged. The pure DIA
   logic — isolation-window derivation and the DIA-vs-DDA recurrence heuristic
   (`io::thermo::{derive_isolation_window, is_dia_schedule}`) — is unit-tested in
-  `io/thermo_tests.rs` under `--features thermo` with **no `.raw` file** (so it
-  runs in CI without a .NET runtime): fixed-schedule vs data-dependent streams,
+  `io/thermo_tests.rs` with **no `.raw` file** (so it runs in CI): fixed-schedule vs data-dependent streams,
   the recurrence threshold boundary, all-ion single-window, and too-few-scans.
 
 ## How the two consumers plug in
