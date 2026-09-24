@@ -1,7 +1,7 @@
 //! Diagnostic replay of exported, rounded LFQ features. Native extraction is
 //! required for final validation; exported ppm/RT/features have finite precision.
 use anyhow::{Context, Result};
-use koth_ff::lfq::{
+use koth_ms::lfq::{
     rescore::search::{compute, SearchScoring},
     LfqEntry,
 };

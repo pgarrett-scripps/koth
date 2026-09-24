@@ -1,6 +1,6 @@
 //! Export all candidate groups (including rejected groups) without loading hills.
 //! cargo run --release --example lfq_group_audit -- BATCH CONFIG OUT
-use koth_ff::{
+use koth_ms::{
     alignment::{align_runs, RunInput},
     config::AlignConfig,
     input::{discover_runs, read_features},

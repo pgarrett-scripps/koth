@@ -1,5 +1,5 @@
 //! Inspect aligned original observations in selected cached candidate groups.
-use koth_ff::{
+use koth_ms::{
     alignment::{align_runs, RunInput},
     config::AlignConfig,
     input::{check_batch_mobility_scales, discover_runs, read_features},

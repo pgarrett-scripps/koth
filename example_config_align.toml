@@ -175,7 +175,8 @@ export_long = false
 format = "tsv"
 
 # Maximum q-value to report in the intensity matrix (1.0 = report all entries).
-# Set to 0.01 to keep only entries passing 1% FDR.
+# Set to 0.01 to keep only entries with q <= 0.01. These q-values are exploratory
+# and are not a calibrated peptide-identification FDR.
 max_qvalue = 1.0
 
 # Write `decoy_intensity_matrix.tsv` — wide-format decoy LFQ values mirroring

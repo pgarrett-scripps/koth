@@ -8,6 +8,22 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Crate renamed to `koth-ms`
+- The crate is published as koth-ms; binaries remain koth_ff and koth_align.
+  The library is imported as `koth_ms` (`use koth_ms::...`), and the source
+  directory stays `koth_ff/`. Install with `cargo install koth-ms`. The GitHub
+  repository is now `pgarrett-scripps/koth`.
+
+### Release preparation
+- Add version-independent, funding-free Zenodo and CFF metadata with CI validation.
+- Publish binaries and the `koth_ff` crate from published GitHub Releases after
+  full CI and package checks; pushing a tag or running the workflow manually
+  publishes nothing.
+- Document the native Zenodo integration and required publishing setup.
+- Simplify the README, add benchmark figures with provenance, and move detailed
+  usage, output, algorithm, LFQ, and development documentation into `docs/`.
+- Correct LFQ confidence wording and current output-column names.
+
 ### `.mzML.gz` is streamed, not decompressed into memory
 - Gzip-compressed mzML is now decompressed as it is parsed
   (`flate2::bufread::MultiGzDecoder` into mzdata's `MzMLReaderType`), instead
@@ -53,7 +69,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - The model is a native port, no SDK linked. It matches `libtimsdata.so` to
   4.4e-16 1/K0 on all 18 LFQ benchmark runs and to 8.9e-16 over 304 local runs
   and 25 calibration rows. It now lives in `dnoise::mobility` (dnoise 0.4.0), so
-  koth and dnoise share one implementation; `koth_ff::io::tims_calibration` keeps
+  koth and dnoise share one implementation; `koth_ms::io::tims_calibration` keeps
   only per-frame routing, lookup tables and the `report.json` coefficients. Before
   the switch the two implementations were identical on the SDK fixture (maximum
   difference 0 over 40,965 scans, 6 calibration rows). Unit tests check it

@@ -1,0 +1,27 @@
+{
+  "title": "koth: fast, memory-efficient MS1 feature detection",
+  "upload_type": "software",
+  "description": "koth is a Rust tool for peptide feature detection in LC-MS data. It reads mzML, Bruker timsTOF, and Thermo RAW files and reports chromatographic traces and isotope envelopes. The included koth_align tool supports multi-run alignment and exploratory label-free quantification.",
+  "creators": [
+    {
+      "name": "Garrett, Patrick T.",
+      "affiliation": "Scripps Research"
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "mass spectrometry",
+    "proteomics",
+    "MS1 feature detection",
+    "timsTOF",
+    "mzML",
+    "Rust"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/pgarrett-scripps/koth",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

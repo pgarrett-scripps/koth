@@ -1,4 +1,4 @@
-# koth_rust
+# koth
 
 ## What this is
 
@@ -7,13 +7,14 @@ Two Rust binaries built together (`cargo build --release`):
 - **`koth_ff`** — per-run MS1 feature finder. `raw → [file] read/tolerances →
   [hills] chromatographic traces → [features] isotope chains (charge + averagine
   score) → [scoring] optional → hills + features output`. mzML, Bruker `.d`
-  (needs the default `tdf` feature, backed by the published `dnoise` crate), and optional Thermo
-  `.raw` (`thermo` feature).
+  (needs the default `tdf` feature, backed by the published `dnoise` crate), and Thermo
+  `.raw` (default `thermo` feature, pure-Rust `opentfraw`, no .NET).
 - **`koth_align`** — cross-run alignment + LFQ. `koth_ff run dirs → [alignment]
   RANSAC RT warp + mass/IM drift → [lfq.consensus] group the same peptide across
   runs → [lfq] XIC grid + integrate + target-decoy q-values → intensity matrix`.
 
 Source layout: `koth_ff/src/{config,hills,features,scoring,alignment,lfq,io,output}/`.
+The crate in `koth_ff/` is published as `koth-ms` (library `koth_ms`, `cargo … -p koth-ms`); the binaries keep the names `koth_ff` and `koth_align`.
 The active q-value path is the QDA rescorer in `lfq/rescore.rs` (not the simpler
 ranker in `lfq/tdc.rs`).
 
@@ -30,7 +31,7 @@ answering config questions; do not guess field names or defaults from memory.
   drift. If you add/rename a config field, update the struct, both templates,
   **and** `docs/CONFIGURATION.md` (the doc is not build-checked).
 - The benchmark and the manuscript now live in a separate repository,
-  `pgarrett-scripps/koth-paper`. Its `benchmark/config/*.toml` are the tuned
+  `pgarrett-scripps/koth-paper`. Its `analysis/config/*.toml` are the tuned
   per-platform configs; they are NOT build-checked from here, so a renamed field
   breaks them at benchmark run time rather than at compile time. Update them
   there when you rename a config field.

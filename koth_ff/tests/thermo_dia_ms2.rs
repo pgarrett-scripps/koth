@@ -7,14 +7,14 @@
 //!
 //! ```text
 //! KOTH_DIA_RAW=/path/to/dia.raw \
-//!   cargo test -p koth_ff --test thermo_dia_ms2 -- --ignored --nocapture
+//!   cargo test -p koth-ms --test thermo_dia_ms2 -- --ignored --nocapture
 //! ```
 
 #![cfg(feature = "thermo")]
 
 use std::path::PathBuf;
 
-use koth_ff::{
+use koth_ms::{
     config::KothConfig, group_ms2_hills_by_window, run_pipeline, run_pipeline_with_ms2,
     PipelineOptions,
 };

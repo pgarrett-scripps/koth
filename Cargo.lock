@@ -973,7 +973,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "koth_ff"
+name = "koth-ms"
 version = "0.10.0"
 dependencies = [
  "anyhow",

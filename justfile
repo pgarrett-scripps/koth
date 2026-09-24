@@ -7,7 +7,7 @@ build:
 
 # Build optimized release binary
 release:
-    cargo build --release -p koth_ff
+    cargo build --release -p koth-ms
 
 # Check for compile errors without building
 check:
@@ -19,27 +19,27 @@ test:
 
 # Run on an mzML file (usage: just run-mzml path/to/file.mzML)
 run-mzml FILE OUTPUT="./out":
-    cargo run --release -p koth_ff -- {{FILE}} --output {{OUTPUT}}
+    cargo run --release -p koth-ms -- {{FILE}} --output {{OUTPUT}}
 
 # Run on a Bruker .d folder (usage: just run-bruker path/to/data.d)
 run-bruker FILE OUTPUT="./out":
-    cargo run --release -p koth_ff -- {{FILE}} --output {{OUTPUT}}
+    cargo run --release -p koth-ms -- {{FILE}} --output {{OUTPUT}}
 
 # Run with a custom config TOML
 run-config FILE CONFIG OUTPUT="./out":
-    cargo run --release -p koth_ff -- {{FILE}} --config {{CONFIG}} --output {{OUTPUT}}
+    cargo run --release -p koth-ms -- {{FILE}} --config {{CONFIG}} --output {{OUTPUT}}
 
 # Run with debug logging
 run-debug FILE OUTPUT="./out":
-    cargo run --release -p koth_ff -- {{FILE}} --output {{OUTPUT}} --log-level debug
+    cargo run --release -p koth-ms -- {{FILE}} --output {{OUTPUT}} --log-level debug
 
 # Skip scoring stage (faster, no isotope pattern scoring)
 run-no-score FILE OUTPUT="./out":
-    cargo run --release -p koth_ff -- {{FILE}} --output {{OUTPUT}} --no-scoring
+    cargo run --release -p koth-ms -- {{FILE}} --output {{OUTPUT}} --no-scoring
 
 # Quick test against the zenith_feature_finder mzML sample
 test-sample OUTPUT="/tmp/koth_test":
-    cargo run --release -p koth_ff -- \
+    cargo run --release -p koth-ms -- \
         ../zenith_feature_finder/20250806_ArgC_DDA_HCD-FT_01.mzML \
         --output {{OUTPUT}} \
         --log-level info

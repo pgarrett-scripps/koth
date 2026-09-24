@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
 
-use koth_ff::config::FileConfig;
-use koth_ff::io;
-use koth_ff::models::Spectrum;
+use koth_ms::config::FileConfig;
+use koth_ms::io;
+use koth_ms::models::Spectrum;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();

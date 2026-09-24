@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::Parser;
 
-use koth_ff::{
+use koth_ms::{
     config::{KothConfig, OutputFormat},
     mem::log_mem,
     output::{
@@ -19,7 +19,7 @@ use koth_ff::{
 #[command(
     name = "koth_ff",
     about = "High-performance LC-MS feature finder for timsTOF and mzML data",
-    version = koth_ff::VERSION
+    version = koth_ms::VERSION
 )]
 struct Args {
     /// Input file path (.mzML) or Bruker .d directory
@@ -69,7 +69,8 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let log_filter = format!("koth_ff={}", args.log_level);
+    // The binary logs as `koth_ff`; the library crate logs as `koth_ms`.
+    let log_filter = format!("koth_ff={0},koth_ms={0}", args.log_level);
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter)).init();
 
     let mut config = match &args.config {
@@ -197,7 +198,7 @@ fn main() -> anyhow::Result<()> {
     let scored = if args.no_scoring {
         features
             .iter()
-            .map(|f| koth_ff::models::ScoredFeature {
+            .map(|f| koth_ms::models::ScoredFeature {
                 feature: f.clone(),
                 neutron_offset: 0,
                 isotope_score: 0.0,
@@ -262,11 +263,11 @@ fn main() -> anyhow::Result<()> {
 
 /// Record which 1/K0 scale the run's `im` values are on.
 fn mobility_report(input: &std::path::Path, config: &KothConfig) -> anyhow::Result<MobilityReport> {
-    match koth_ff::io::detect_format(input) {
+    match koth_ms::io::detect_format(input) {
         #[cfg(feature = "tdf")]
-        koth_ff::io::InputFormat::BrukerD => {
+        koth_ms::io::InputFormat::BrukerD => {
             let conv =
-                koth_ff::io::tims_calibration::load(input, config.file.bruker_mobility_scale)
+                koth_ms::io::tims_calibration::load(input, config.file.bruker_mobility_scale)
                     .map_err(anyhow::Error::msg)
                     .context("Failed to read the run's mobility calibration")?;
             Ok(MobilityReport::bruker(&conv))

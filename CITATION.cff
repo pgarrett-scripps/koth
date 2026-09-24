@@ -1,0 +1,21 @@
+# Version and release date are intentionally omitted: the release supplies them.
+# Keep identities and description synchronized with .zenodo.json; omit funding.
+cff-version: 1.2.0
+message: "If you use koth, please cite this software using these metadata."
+title: "koth: fast, memory-efficient MS1 feature detection"
+abstract: "koth is a Rust tool for peptide feature detection in LC-MS data. It reads mzML, Bruker timsTOF, and Thermo RAW files and reports chromatographic traces and isotope envelopes. The included koth_align tool supports multi-run alignment and exploratory label-free quantification."
+type: software
+authors:
+  - given-names: Patrick T.
+    family-names: Garrett
+    affiliation: Scripps Research
+repository-code: "https://github.com/pgarrett-scripps/koth"
+url: "https://github.com/pgarrett-scripps/koth"
+license: MIT
+keywords:
+  - mass spectrometry
+  - proteomics
+  - MS1 feature detection
+  - timsTOF
+  - mzML
+  - Rust

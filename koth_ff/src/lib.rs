@@ -10,12 +10,12 @@
 //!
 //! ```no_run
 //! use std::path::Path;
-//! use koth_ff::{run_hills, run_features, run_scoring, config::KothConfig};
+//! use koth_ms::{run_hills, run_features, run_scoring, config::KothConfig};
 //!
 //! let config = KothConfig::default();
 //! let input = Path::new("data.mzML");
 //!
-//! let spectra = koth_ff::read_spectra(input, &config.file).unwrap();
+//! let spectra = koth_ms::read_spectra(input, &config.file).unwrap();
 //! let hills = run_hills(&spectra, &config.hills, &config.file);
 //! let features = run_features(&hills, &config.features, &config.file).unwrap();
 //! let scored = run_scoring(&features, &config.scoring, &config.features, config.file.polarity);
@@ -45,7 +45,7 @@ pub mod scoring;
 pub mod stats;
 
 // In-process / streaming API surface. Re-exported at the crate root so callers
-// write `koth_ff::run_pipeline` / `koth_ff::PipelineSink` without reaching into
+// write `koth_ms::run_pipeline` / `koth_ms::PipelineSink` without reaching into
 // the module path.
 pub use pipeline::{
     group_ms2_hills_by_window, run_pipeline, run_pipeline_from_spectra, run_pipeline_streaming,
@@ -99,8 +99,8 @@ pub fn run_hills(spectra: &[Spectrum], config: &HillsConfig, file: &FileConfig) 
 /// Stage 1 (streaming): Detect hills from mzML, Bruker `.d`, or Thermo `.raw`
 /// using bounded spectrum buffers. Completed hills are retained for assembly;
 /// native readers also retain scan metadata. Decoy shuffling and optional TIC
-/// normalization still collect spectra. Gzipped mzML currently buffers the
-/// decompressed file, although spectrum decoding is incremental.
+/// normalization still collect spectra. Gzipped mzML is decompressed as it is
+/// parsed, never held whole in memory.
 pub fn run_hills_streaming(
     path: &Path,
     config: &HillsConfig,

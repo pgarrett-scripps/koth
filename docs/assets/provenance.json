@@ -1,0 +1,22 @@
+{
+  "source_repository": "https://github.com/pgarrett-scripps/koth-paper",
+  "source_head": "06262d0f988ef9855d148197d5e35481415eb4b5",
+  "source_state": "Manuscript working tree snapshot; source repository has uncommitted changes. Per-file hashes identify the copied figures.",
+  "detector_commit": "88f9e7c54c9ad3d6ca5a56a906703a3d46982f43",
+  "figures": [
+    {
+      "path": "docs/assets/runtime-memory.png",
+      "source_path": "figures/engineering_runtime_memory.png",
+      "sha256": "9d47b525a2eaddaccaa4d0a33502ef11b43063da8a89f29b6bc192577d0515de",
+      "asset_id": "fig.engineering-runtime-memory",
+      "generator": "analysis/scripts/12_engineering_figure.py"
+    },
+    {
+      "path": "docs/assets/recall-by-intensity.png",
+      "source_path": "figures/recall_by_intensity.png",
+      "sha256": "ce230d2149ee8c52dd345516ff0cc80f33df715ccb0d1fdb1d4b6b7eb9461896",
+      "asset_id": "fig.recall-by-intensity",
+      "generator": "analysis/scripts/recall_by_intensity.py"
+    }
+  ]
+}

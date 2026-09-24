@@ -1,5 +1,5 @@
 [package]
-name             = "koth_ff"
+name             = "koth-ms"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -8,8 +8,8 @@ repository.workspace   = true
 authors          = ["Patrick Garrett <pgarrett@scripps.edu>"]
 description      = "High-performance LC-MS feature finder for timsTOF and mzML data"
 default-run      = "koth_ff"
-readme           = "../README.md"
-homepage         = "https://github.com/pgarrett-scripps/koth_rust"
+readme           = "README.md"
+homepage         = "https://github.com/pgarrett-scripps/koth"
 documentation    = "https://docs.rs/koth_ff"
 keywords         = ["mass-spectrometry", "proteomics", "lc-ms", "timstof", "feature-detection"]
 categories       = ["science", "command-line-utilities"]
@@ -26,7 +26,7 @@ name = "koth_align"
 path = "src/align_main.rs"
 
 [lib]
-name = "koth_ff"
+name = "koth_ms"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 

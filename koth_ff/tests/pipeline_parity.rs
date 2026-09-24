@@ -6,15 +6,15 @@
 //! debug — run it explicitly:
 //!
 //! ```sh
-//! cargo test -p koth_ff --features tdf --test pipeline_parity -- --ignored --nocapture
+//! cargo test -p koth-ms --features tdf --test pipeline_parity -- --ignored --nocapture
 //! ```
 #![cfg(feature = "tdf")]
 
 use std::path::PathBuf;
 
-use koth_ff::config::KothConfig;
-use koth_ff::output::{write_features_tsv, write_hills_tsv};
-use koth_ff::{
+use koth_ms::config::KothConfig;
+use koth_ms::output::{write_features_tsv, write_hills_tsv};
+use koth_ms::{
     run_features, run_hills_streaming, run_pipeline, run_pipeline_with_ms2, run_scoring,
     PipelineOptions, Polarity,
 };
@@ -23,7 +23,7 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/data/example_dda.d")
 }
 
-fn hills_tsv(hills: &[koth_ff::Hill]) -> String {
+fn hills_tsv(hills: &[koth_ms::Hill]) -> String {
     let p = std::env::temp_dir().join(format!(
         "koth_pp_h_{}_{}.tsv",
         std::process::id(),
@@ -35,7 +35,7 @@ fn hills_tsv(hills: &[koth_ff::Hill]) -> String {
     s
 }
 
-fn features_tsv(features: &[koth_ff::ScoredFeature]) -> String {
+fn features_tsv(features: &[koth_ms::ScoredFeature]) -> String {
     let p = std::env::temp_dir().join(format!(
         "koth_pp_f_{}_{}.tsv",
         std::process::id(),
@@ -186,7 +186,7 @@ fn bruker_diapasef_ms2() {
     );
 
     // Windows recovered (this 5-min diaPASEF method has 8 groups x 3 = 24).
-    let windows = koth_ff::group_ms2_hills_by_window(with_ms2.ms2_hills.clone());
+    let windows = koth_ms::group_ms2_hills_by_window(with_ms2.ms2_hills.clone());
     eprintln!(
         "diaPASEF MS2: {} hills across {} isolation windows",
         with_ms2.ms2_hills.len(),

@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::Context;
 use clap::Parser;
-use koth_ff::{config::KothConfig, input::read_hills, output::write_features_parquet};
+use koth_ms::{config::KothConfig, input::read_hills, output::write_features_parquet};
 
 #[derive(Parser)]
 struct Args {
@@ -34,10 +34,10 @@ fn main() -> anyhow::Result<()> {
         anyhow::ensure!(!out.exists(), "refusing to overwrite {}", out.display());
         let config = KothConfig::from_toml(config_path)?;
         let start = Instant::now();
-        let features = koth_ff::run_features(&hills, &config.features, &config.file)?;
+        let features = koth_ms::run_features(&hills, &config.features, &config.file)?;
         let feature_s = start.elapsed().as_secs_f64();
         let start = Instant::now();
-        let scored = koth_ff::run_scoring(
+        let scored = koth_ms::run_scoring(
             &features,
             &config.scoring,
             &config.features,

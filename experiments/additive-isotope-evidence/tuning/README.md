@@ -81,7 +81,7 @@ Timing comes from sequential baseline/selected raw-file runs on each held-out fi
 
 ## Reproduction and artifacts
 
-Run `tune.py prepare`, `tune.py training`, `tune.py select`, then `tune.py heldout` from the experiment worktree using the analysis Python environment. `prepare` snapshots the baseline, candidate and replay executables; build the candidate and example with `cargo build --release --locked -p koth_ff --example replay_features --bin koth_ff`. Preparation and per-file execution refuse to overwrite saved outputs. The selected TOML and its SHA-256 are frozen in `selection.json` before held-out execution.
+Run `tune.py prepare`, `tune.py training`, `tune.py select`, then `tune.py heldout` from the experiment worktree using the analysis Python environment. `prepare` snapshots the baseline, candidate and replay executables; build the candidate and example with `cargo build --release --locked -p koth-ms --example replay_features --bin koth_ff`. Preparation and per-file execution refuse to overwrite saved outputs. The selected TOML and its SHA-256 are frozen in `selection.json` before held-out execution.
 
 The small reviewable records are `protocol.json`, `training_selection_audit.json`, `selection.json`, the training/held-out summary JSONs, per-file CSVs, and `heldout_decision.json`. Executables, full feature data, matched-anchor Parquets, exact commands, timings, and equivalence checks remain in the ignored `../artifacts/tuning/` directory. They stay in the original worktree at `/home/patrick-garrett/Repos/koth_rust/.worktrees/additive-isotope-evidence/experiments/additive-isotope-evidence/artifacts/` after the source change is merged.
 

@@ -1,4 +1,4 @@
-use koth_ff::lfq::IntensityMatrix;
+use koth_ms::lfq::IntensityMatrix;
 use std::path::Path;
 
 pub fn matrices(m: &IntensityMatrix, folder: &Path) -> anyhow::Result<()> {

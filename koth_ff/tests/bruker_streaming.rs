@@ -10,14 +10,14 @@
 //! Marked `#[ignore]` because it reads a 710-frame `.d` twice (slow in debug):
 //!
 //! ```sh
-//! cargo test -p koth_ff --features tdf --test bruker_streaming -- --ignored --nocapture
+//! cargo test -p koth-ms --features tdf --test bruker_streaming -- --ignored --nocapture
 //! ```
 #![cfg(feature = "tdf")]
 
 use std::path::PathBuf;
 
-use koth_ff::config::FileConfig;
-use koth_ff::io::bruker::read_bruker;
+use koth_ms::config::FileConfig;
+use koth_ms::io::bruker::read_bruker;
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/data/example_dda.d")
@@ -79,7 +79,7 @@ fn streaming_no_halo_matches_local() {
 #[test]
 #[ignore = "reads the real .d fixture six times; run in release mode"]
 fn bounded_ms1_matches_frozen_batch_outputs() {
-    use koth_ff::{config::KothConfig, io::stream_spectra, run_hills_streaming};
+    use koth_ms::{config::KothConfig, io::stream_spectra, run_hills_streaming};
     use sha2::{Digest, Sha256};
     for (streaming, halo, spectrum_hash, hill_hash) in [
         (

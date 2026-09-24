@@ -1,6 +1,6 @@
 //! Unit tests for the pure Thermo logic: trailer parsing, profile centroiding,
 //! isolation-window derivation and DIA-vs-DDA schedule classification. These
-//! exercise no `.raw` file, so they run under a plain `cargo test -p koth_ff`.
+//! exercise no `.raw` file, so they run under a plain `cargo test -p koth-ms`.
 //! End-to-end reading of a real `.raw` is covered separately, `#[ignore]`-gated
 //! behind `KOTH_DIA_RAW` in `tests/thermo_dia_ms2.rs`.
 

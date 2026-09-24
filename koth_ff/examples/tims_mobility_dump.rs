@@ -2,7 +2,7 @@
 //! with Bruker's timsdata SDK (`tims_scannum_to_oneoverk0`).
 //!
 //! ```text
-//! cargo run --release -p koth_ff --example tims_mobility_dump -- RUN.d [FRAME_ID ...]
+//! cargo run --release -p koth-ms --example tims_mobility_dump -- RUN.d [FRAME_ID ...]
 //! ```
 //!
 //! Writes TSV `frame_id  scan  calibrated  linear` for every integer scan
@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use koth_ff::io::tims_calibration::{load, MobilityScale};
+use koth_ms::io::tims_calibration::{load, MobilityScale};
 
 fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);

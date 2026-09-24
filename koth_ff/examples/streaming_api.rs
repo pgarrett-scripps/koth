@@ -3,7 +3,7 @@
 //! Run against any mzML (or Bruker `.d` with `--features tdf`):
 //!
 //! ```sh
-//! cargo run --release -p koth_ff --example streaming_api -- path/to/run.mzML
+//! cargo run --release -p koth-ms --example streaming_api -- path/to/run.mzML
 //! ```
 //!
 //! None of the consumers below writes or reads any intermediate parquet/tsv
@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use koth_ff::{
+use koth_ms::{
     config::KothConfig, group_ms2_hills_by_window, run_pipeline, run_pipeline_streaming,
     run_pipeline_with_ms2, Feature, Hill, IsolationWindow, PipelineOptions, PipelineSink,
     ScoredFeature,
@@ -51,7 +51,7 @@ fn uno_style(path: &std::path::Path, config: &KothConfig) {
     }) {
         println!(
             "[uno]   most intense: mass {:?} z{} score {:.3}",
-            top.monoisotopic_neutral_mass(koth_ff::Polarity::Positive),
+            top.monoisotopic_neutral_mass(koth_ms::Polarity::Positive),
             top.feature.charge,
             top.combined_score
         );

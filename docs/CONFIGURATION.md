@@ -35,7 +35,7 @@ envelopes with charge and averagine/Bhattacharyya scores). Bruker `.d` input
 adds a front-end (`dnoise` vertical-IM filter + watershed centroider) before
 hill detection; on mzML those knobs are inert.
 
-### koth_align — cross-run alignment + LFQ + FDR
+### koth_align — cross-run alignment and LFQ confidence
 
 ```
 batch of koth_ff run dirs
@@ -48,7 +48,9 @@ batch of koth_ff run dirs
 
 Reads `koth_ff` output for N runs, corrects systematic RT/mass/IM offsets, and
 emits a feature × run intensity matrix with per-cell target-decoy q-values.
-Filter the matrix at e.g. `q ≤ 0.01` downstream for 1% FDR.
+Group and cell q-values are exploratory confidence measures; a threshold of
+`q ≤ 0.01` does not establish calibrated 1% peptide-identification FDR. See
+[confidence limitations](LFQ.md#confidence-and-interpretation).
 
 ### The two things you actually tune per platform
 
@@ -74,7 +76,7 @@ ppm timsTOF).
 - The canonical worked examples are the tuned configs `koth_ff.toml` /
   `koth_ff_bruker.toml` (feature finding, Orbitrap / timsTOF) and
   `koth_align.toml` / `koth_align_bruker.toml` (alignment+LFQ). They live in
-  `benchmark/config/` of the separate [koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository,
+  `analysis/config/` of the separate [koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository,
   alongside the benchmark that produced them. Prefer them over the templates
   when reproducing published results.
 
@@ -154,9 +156,8 @@ PSMs. Paired per-peptide ΔCV on Bruker is −0.0018 pp (Wilcoxon p = 0.007,
 rank-biserial r = −0.009): significant and negligible at once, because n ≈ 82 k
 paired cells. Keep it on for the precision and the lower spurious-feature count;
 do not cite it as a recall win. Reproducers, all in the
-[koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository: `benchmark/scripts/16_peptide_lfq.py`
-(Orbitrap quant), `benchmark/scripts/bruker_validation.py` (Bruker), paired
-tests in `paper/si/si-body.typ` @tab:si-recal-ablation.
+[koth-paper](https://github.com/pgarrett-scripps/koth-paper) repository: `analysis/scripts/16_peptide_lfq.py`
+(Orbitrap quant) and `analysis/scripts/bruker_validation.py` (Bruker).
 
 #### Bruker vertical-IM filter (Stage 1) — inert on Orbitrap mzML
 The `.d` front-end runs the `dnoise` vertical-IM feature filter over the raw
@@ -265,7 +266,7 @@ min_scans = 2
 | `min_scan_overlap` | usize | `3` | Min mutually-overlapping scans before two hills get a cosine (else 0, no extension). Keep `3` for PXD003881; lower to `2` on fast gradients (3–5-scan hills) to recover dim pairs. |
 | `cosine_anchor` | String | `"seed"` | Which hill each isotope's cosine is measured against. **`"seed"`** (new 2026-07 default; anchor every isotope to the monoisotope — beat `"adjacent"` by +0.31 pp / +1565 PSMs on the 20-run cohort). `"adjacent"` reproduces pre-2026-07 paper output. Validated at load. |
 | `sulfur_offsets` | list[int] | `[-1, 0, 1]` | Sulfur-count offsets, relative to the **ceiling** of the averagine-expected count, to score each chain against — one averagine template per offset, best Bhattacharyya kept. Corrects the systematic penalty on Cys/Met-rich peptides (³⁴S lifts M+2). Default resolves to `{0,1,2}` sulfurs up to 2665 Da, `{1,2,3}` to 5330, `{2,3,4}` to 7995. Negatives saturate at 0 and duplicates collapse. Widen to `[-2,-1,0,1]` to keep the no-sulfur template on large peptides (~32 % of 3 kDa peptides have none). **Empty list disables sulfur awareness.** Scoring is a max over templates, so a longer list can only raise scores incl. decoys — judge changes on recall, not the score distribution. `koth_ff_sulfur_{on,off}.toml` exist for A/B. |
-| `isotope_model` | enum or table | `"peptide"` | Which analyte class's average composition the theoretical isotope pattern comes from. `"peptide"` is Senko's averagine (C₄.₉₃₈₄H₇.₇₅₈₃N₁.₃₅₇₇O₁.₄₇₇₃S₀.₀₄₁₇ / 111.1254 Da) and **the only model the published benchmark exercises**. `"rna"` (C₉.₅H₁₁.₇₅N₃.₇₅O₇ / 321.2916 Da) and `"dna"` (C₉.₇₅H₁₂.₂₅N₃.₇₅O₆ / 308.8006 Da) are unweighted means of the four chain residues; phosphorus is carried in the residue mass only, since ³¹P is monoisotopic and cannot shift a pattern. An explicit table overrides both: `isotope_model = { residue_mass = 321.2916, c = 9.5, h = 11.75, n = 3.75, o = 7.0 }` (`s` defaults to 0). A model without sulfur ignores `sulfur_offsets`. An unknown name is a parse error, never a silent fallback. On a PXD075396 RNase digest the RNA model raised the mean isotope score 0.821 → 0.848 and the share ≥0.90 from 33.8 % to 42.9 % against the peptide model. |
+| `isotope_model` | enum or table | `"peptide"` | Which analyte class's average composition the theoretical isotope pattern comes from. `"peptide"` is Senko's averagine (C₄.₉₃₈₄H₇.₇₅₈₃N₁.₃₅₇₇O₁.₄₇₇₃S₀.₀₄₁₇ / 111.1254 Da) and **the only model the manuscript benchmark exercises**. `"rna"` (C₉.₅H₁₁.₇₅N₃.₇₅O₇ / 321.2916 Da) and `"dna"` (C₉.₇₅H₁₂.₂₅N₃.₇₅O₆ / 308.8006 Da) are unweighted means of the four chain residues; phosphorus is carried in the residue mass only, since ³¹P is monoisotopic and cannot shift a pattern. An explicit table overrides both: `isotope_model = { residue_mass = 321.2916, c = 9.5, h = 11.75, n = 3.75, o = 7.0 }` (`s` defaults to 0). A model without sulfur ignores `sulfur_offsets`. An unknown name is a parse error, never a silent fallback. On a PXD075396 RNase digest the RNA model raised the mean isotope score 0.821 → 0.848 and the share ≥0.90 from 33.8 % to 42.9 % against the peptide model. |
 | `neutron_mass` | f64 | `1.003354835` | C13 mass offset for isotope-spacing targets. Default. |
 | `exhaustive_min_isotope_score` | f64 | `0.0` | Minimum Bhattacharyya score a prefix needs to *claim* its hills. The resolver searches for the highest-evidence prefix that passes. `0.0` disables this claim gate; downstream retention filters still apply. |
 | `isotope_evidence_ratio_sigma` | f64 | `0.75` | Signal standard deviation of seed-relative log2 apex-intensity-ratio errors, against a broad Normal(0, 2²) noise null. Must be finite and strictly between 0 and 2. Used for additive claim ranking and best-prefix selection; does not change the per-step ratio gate. |
@@ -508,7 +509,7 @@ taken from crates.io. Two paths:
 
 *Generated from the config structs and shipped TOMLs. If you add or rename a
 config field, update this file, `example_config*.toml` here, and the tuned
-`benchmark/config/*.toml` in [koth-paper](https://github.com/pgarrett-scripps/koth-paper). The
+`analysis/config/*.toml` in [koth-paper](https://github.com/pgarrett-scripps/koth-paper). The
 `deny_unknown_fields` parse test fails the build if the templates in THIS repo
 disagree with the structs; it can no longer see the tuned configs, and it cannot
 check this doc — keep both current by hand.*

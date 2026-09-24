@@ -1,63 +1,104 @@
-# Release checklist
+# Releases
 
-The tag workflow publishes a GitHub release automatically. Do not create or push
-a `v*` tag until every manual item below is complete.
+Publishing a GitHub Release is the only publication trigger. A branch push or
+tag push does not publish binaries or a crate. Manual runs of the Release
+workflow perform CI and packaging without publishing anything.
 
-## Automated gates
+## One-time setup
 
-Run these from the repository root. CI runs the same checks on Rust 1.88.0.
+1. Add a crates.io API token as the repository Actions secret
+   `CARGO_REGISTRY_TOKEN`. Scope it to publishing `koth-ms`; for the first
+   publication it must also permit creation of that crate. No token belongs in
+   source control. This follows the existing dnoise release setup and supports
+   the first crate publication without requiring an already registered crate.
+2. When ready for public access, make the repository public and connect it in
+   [Zenodo's GitHub settings](https://zenodo.org/account/settings/github/).
+   Enable `pgarrett-scripps/koth` before publishing the release. The repository
+   remains private during preparation; the workflow refuses public package
+   publication from a private repository.
+3. Configure required CI checks on `master` when repository/account settings
+   allow it. Run the Release workflow manually to test all target builds and
+   the crate dry run before publishing a release.
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
-cargo test --workspace --locked
-cargo test --workspace --locked --no-default-features
-cargo package -p koth_ff --locked
-cargo build --release --locked -p koth_ff --bins
-target/release/koth_ff --version
-target/release/koth_align --version
+Zenodo's native GitHub integration archives source from the release and mints
+a DOI. It is an independent listener to the same published-release event:
+**it does not wait for GitHub Actions or crates.io publication**. CI gates the
+binaries and crate; a failed CI run does not undo a Zenodo archive or the GitHub
+release. Run the manual checks before publishing, and check Zenodo's archival
+status afterward. This integration does not promise to include binary assets
+attached by a later Actions job. Do not add a second Zenodo uploader, which
+could create duplicate records.
+
+## Prepare a release
+
+1. Choose the version in the workspace `Cargo.toml`, refresh `Cargo.lock`,
+   move applicable changelog entries into a dated release section, and update
+   changed configuration examples and documentation. Do not edit a published tag.
+2. Confirm the default/no-default CI matrix, lint, rustdoc, and the
+   `--no-default-features --features tdf` check pass. Complete relevant
+   real-data smoke tests, including the ignored Bruker tests and the native
+   Thermo `.raw` tests (`KOTH_MS1_RAW`, `KOTH_DIA_RAW`); ignored tests are not
+   covered by the ordinary CI pass. Check the paper's
+   pinned configurations if changing feature-detection behavior.
+3. Commit and push the reviewed changes. In GitHub, run the Release workflow
+   manually on that commit/branch. Inspect all four binary archives and the
+   crate dry run; this operation publishes nothing.
+4. Create and publish a GitHub Release for exactly that commit, using a tag
+   `v<workspace version>`. Publishing a draft is the trigger. Use the GitHub UI
+   or your own authenticated `gh release create`; releases created by another
+   workflow's `GITHUB_TOKEN` do not trigger this workflow.
+5. Verify the release workflow, crates.io version, and Zenodo DOI. Publication
+   success in one service does not imply success in the others.
+
+## Automated order
+
+```text
+Published GitHub Release
+  ├─ verify tag/version + metadata + public repository + crate credential
+  │    → full reusable CI
+  │    → four binary builds + crate publish dry run
+  │    → verify archive checksums → attach downloads → cargo publish
+  └─ Zenodo GitHub integration → source archive and DOI
 ```
 
-Confirm the GitHub Actions matrix passes on Linux, macOS, and Windows. The
-release workflow will refuse a tag whose name is not exactly `v<version from
-Cargo.toml>`, and it only runs for a tag that has been **pushed** — a local tag
-publishes nothing (0.3.0 sat unpushed for three days).
+The CI workflow is reused on the actual release commit, so a previous green
+branch build cannot substitute for release checks. Release builds include both
+executables, configuration examples, documentation, license, and citation files.
+The crate is built with `--locked` and published only after all target builds
+and package verification succeed. There is no automatic version bump or tag
+creation.
 
-## Manual gates
+## Citation metadata policy
 
-- Decide the release version and set it in the workspace `Cargo.toml`. Pre-1.0,
-  a new config key or a changed default is a minor bump; the released line so far
-  is 0.1.0 (2026-08-18), 0.2.0 (2026-09-03), 0.3.0 (2026-09-08).
-- Update both example TOMLs and `docs/CONFIGURATION.md` for every config change.
-- Move every `## [Unreleased]` entry into the new dated version section. Entries
-  left there describe code that is already tagged and read as unreleased.
-- `git push origin master` **and** `git push origin vX.Y.Z`, then confirm the
-  release workflow ran and the GitHub release exists.
-- Resolve or explicitly accept the changelog warning that absolute QDA q-value
-  calibration has not yet been independently validated.
-- Run the four ignored Bruker real-data integration tests with their fixtures.
-- Smoke-test the default `thermo` feature on a native Thermo `.raw` fixture
-  (`KOTH_MS1_RAW`, `KOTH_DIA_RAW` ignored tests).
-- Confirm the tuned configs in the separate `koth-paper` repository still parse
-  and reproduce the intended benchmark outputs.
-- Confirm the repository is public if the release is intended to be public, and
-  configure branch protection so CI is required on `master`.
-- Decide whether to publish `koth_ff` to crates.io in addition to GitHub binaries.
-  `cargo package` is already gated, but crate publication is deliberately not
-  automated.
-- Review generated release notes and archive metadata/citation text after the
-  paper citation is final.
+Keep `.zenodo.json` and `CITATION.cff` version-independent: no `version`,
+release/publication date, version-specific DOI, funding, funders, or grants.
+The GitHub release supplies the Zenodo version/date. `cff-version` identifies
+the file format and must remain present; it is not the software version.
+The generic CFF intentionally cites the project without a particular version.
+For a version-specific citation, use that release's Zenodo record.
 
-## Release
+Keep title, description, author order, affiliations, ORCIDs, keywords, and
+license synchronized. Zenodo gives `.zenodo.json` precedence over CFF when
+both exist. CI validates CFF and checks this shared metadata policy. Add a
+concept DOI later only after Zenodo has actually minted it; do not invent one.
 
-Only after all gates pass:
+## Failure and retry
 
-```bash
-git tag -s vX.Y.Z -m "koth_ff vX.Y.Z"
-git push origin vX.Y.Z
-```
+If CI or packaging fails, no crate is uploaded and no new binary assets are
+attached. Fix the problem on a new commit and use a new release tag; do not
+move a tag Zenodo may already have archived. The GitHub release itself already
+exists because publishing it triggered the workflow.
 
-The workflow builds both binaries for Linux x86_64, macOS x86_64 and arm64, and
-Windows x86_64; packages README, changelog, and license files; emits SHA-256
-checksums; and creates one GitHub release after every target succeeds.
+If uploading assets fails before crate publication, rerun failed jobs once the
+cause is fixed. If `cargo publish` returns an uncertain result, check crates.io
+before retrying: a version cannot be overwritten. If the crate already exists,
+verify it belongs to the intended release rather than trying to republish it.
+Zenodo failures are shown in its GitHub settings and are recovered there;
+re-running Actions does not re-trigger Zenodo.
+
+## References
+
+[GitHub release events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#release),
+[Cargo publishing](https://doc.rust-lang.org/cargo/reference/publishing.html),
+[Zenodo GitHub integration](https://help.zenodo.org/docs/github/), and
+[Zenodo metadata precedence](https://help.zenodo.org/docs/github/describe-software/zenodo-json/).

@@ -7,9 +7,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string_lossy()
             .starts_with("koth_align")
         {
-            koth_ff::config::AlignConfig::from_toml(p)?;
+            koth_ms::config::AlignConfig::from_toml(p)?;
         } else {
-            koth_ff::config::KothConfig::from_toml(p)?;
+            koth_ms::config::KothConfig::from_toml(p)?;
         }
         println!("parsed {}", path);
     }

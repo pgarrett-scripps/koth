@@ -1,5 +1,5 @@
 //! End-to-end search-guided CLI tests, including legacy-mode output parity.
-use koth_ff::{
+use koth_ms::{
     models::{Feature, Hill, Polarity, ScoredFeature, PROTON_MASS},
     output::{write_features_tsv, write_hills_tsv},
 };

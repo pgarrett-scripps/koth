@@ -5,7 +5,7 @@
 //! algorithms, then scores them against a suite of synthetic noisy profiles with
 //! known ground-truth peak counts (single, dual, shoulder, spike-contaminated…).
 //!
-//! Run:  cargo run -p koth_ff --example hill_split_lab
+//! Run:  cargo run -p koth-ms --example hill_split_lab
 //!
 //! Noise is deterministic (seeded LCG) so results are reproducible run-to-run.
 

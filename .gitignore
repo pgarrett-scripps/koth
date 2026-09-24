@@ -25,3 +25,6 @@ tmp_*.toml
 *.tsv
 *.html
 tmp/
+# Local worktrees and versioned documentation images
+/.worktrees/
+!/docs/assets/*.png

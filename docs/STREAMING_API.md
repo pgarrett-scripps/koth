@@ -7,7 +7,7 @@ functions the `koth_ff` binary uses — the CLI, its file output, and its byte
 format are unchanged.
 
 Everything lives in `koth_ff/src/pipeline.rs` and is re-exported at the crate
-root (`koth_ff::run_pipeline`, `koth_ff::PipelineSink`, …). The in-memory result
+root (`koth_ms::run_pipeline`, `koth_ms::PipelineSink`, …). The in-memory result
 types (`Hill`, `Feature`, `ScoredFeature`, `Spectrum`) are re-exported there too.
 
 ## API surface
@@ -201,7 +201,7 @@ stream internally (MS2 scans route to the MS2 detector and never pollute MS1).
 (`run_hills_streaming` / `detect_hills_from_iter` → `run_features` →
 `run_scoring`), so the output is the same by construction. It is pinned by tests:
 
-* `koth_ff/src/pipeline_tests.rs` (runs under default `cargo test -p koth_ff`):
+* `koth_ff/src/pipeline_tests.rs` (runs under default `cargo test -p koth-ms`):
   a synthetic multi-envelope run is put through both the manual staged path and
   the new API (collect-all *and* streaming sink), and the results are asserted
   byte-identical by serializing each through the **real** `write_hills_tsv` /
@@ -236,7 +236,7 @@ stream internally (MS2 scans route to the MS2 detector and never pollute MS1).
 ### uno (MS1 search) — collect-all
 
 ```rust
-use koth_ff::{config::KothConfig, run_pipeline, PipelineOptions};
+use koth_ms::{config::KothConfig, run_pipeline, PipelineOptions};
 
 let out = run_pipeline(path, &config, &PipelineOptions::default())?;
 // out.features: Vec<ScoredFeature> with charge + averagine score + intensities.
@@ -249,7 +249,7 @@ let searchable: Vec<_> = out.features.iter()
 ### koth_tracer (DIA -> pseudo-DDA) — streaming sink
 
 ```rust
-use koth_ff::{run_pipeline_streaming, Hill, PipelineOptions, PipelineSink, ScoredFeature};
+use koth_ms::{run_pipeline_streaming, Hill, PipelineOptions, PipelineSink, ScoredFeature};
 
 #[derive(Default)]
 struct TracerSink { hills: Vec<Hill> /* + trace index */ }

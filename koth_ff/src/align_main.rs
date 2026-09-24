@@ -5,7 +5,7 @@ use std::time::Instant;
 use anyhow::Context;
 use clap::Parser;
 
-use koth_ff::{
+use koth_ms::{
     alignment::{align_runs, RunInput},
     config::{AlignConfig, OutputFormat},
     input::{check_batch_mobility_scales, discover_runs, read_features, read_hills},
@@ -25,7 +25,7 @@ use koth_ff::{
     long_about = "Discovers all per-run subdirectories inside <batch_dir>, aligns retention \
                   time, m/z ppm, and ion mobility across runs, then performs Sage-style LFQ \
                   by extracting ion chromatogram grids from hill data.",
-    version = koth_ff::VERSION
+    version = koth_ms::VERSION
 )]
 struct Args {
     /// Directory containing one subdirectory per run.
@@ -72,7 +72,8 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let log_filter = format!("koth_ff={}", args.log_level);
+    // The binary logs as `koth_ff`; the library crate logs as `koth_ms`.
+    let log_filter = format!("koth_ff={0},koth_ms={0}", args.log_level);
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&log_filter)).init();
 
     let config = match &args.config {
@@ -316,7 +317,7 @@ fn main() -> anyhow::Result<()> {
 
     if config.output.export_long {
         let feature_paths: Vec<_> = run_paths.iter().map(|p| p.features_path.clone()).collect();
-        koth_ff::output::long_matrix::write_bundle(
+        koth_ms::output::long_matrix::write_bundle(
             &matrix,
             &runs,
             &alignment,

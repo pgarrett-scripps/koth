@@ -2,7 +2,7 @@
 #[path = "support/lfq_matrices.rs"]
 mod lfq_matrices;
 use clap::Parser;
-use koth_ff::{
+use koth_ms::{
     alignment::{align_runs, RunInput},
     config::AlignConfig,
     input::{check_batch_mobility_scales, discover_runs, read_features, read_hills},
