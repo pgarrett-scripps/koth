@@ -64,10 +64,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   point by point, as before (dnoise 0.4.0's own default keeps whole overlapping
   features). The default local path (vertical filter + watershed) runs the same
   dnoise code as 0.1.0: its output is unchanged apart from the 1/K0 scale.
-- **Release blocker:** dnoise 0.4.0 is not on crates.io yet. `koth_ff` builds it
-  from a sibling `../d_noise` checkout (`path` dependency, release/0.4.0
-  9b39866). Publish dnoise 0.4.0, then drop the `path` key before releasing koth
-  0.10.0.
+- dnoise 0.4.0 comes from crates.io; the sibling `../d_noise` `path`
+  dependency used during development is gone.
 - New `[file] bruker_mobility_scale`: `"calibrated"` (default) or `"linear"`
   (the exact 0.9.0 converter). An unsupported calibration is an error, never a
   silent fallback.

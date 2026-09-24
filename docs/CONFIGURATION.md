@@ -466,9 +466,8 @@ settings — is **identical across platforms**.
 ## 7. The dnoise integration (Bruker only)
 
 koth_ff depends on the `dnoise` 0.4 crate (behind the `tdf` feature) for Bruker
-denoising and for the `TimsCalibration` mobility model (`dnoise::mobility`).
-Until dnoise 0.4.0 is on crates.io it is built from a sibling `../d_noise`
-checkout. Two paths:
+denoising and for the `TimsCalibration` mobility model (`dnoise::mobility`),
+taken from crates.io. Two paths:
 
 - **Default (paper-validated):** the `.d` is denoised **externally** by the
   `dnoise` CLI first, then koth_ff reads the denoised `.d` and applies its

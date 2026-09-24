@@ -675,6 +675,8 @@ dependencies = [
 [[package]]
 name = "dnoise"
 version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3696bc020f5aee89a80c281ff6ba833050eac0c8863eb193b7219ed0e3f936cf"
 dependencies = [
  "rayon",
  "rusqlite",
