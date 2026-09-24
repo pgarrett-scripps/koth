@@ -60,6 +60,10 @@ sha2 = "0.10"
 name = "tims_mobility_dump"
 required-features = ["tdf"]
 
+[[example]]
+name = "thermo_parity"
+required-features = ["thermo"]
+
 [features]
 default = ["tdf", "thermo"]
 tdf = ["dep:timsrust", "dep:dnoise", "dep:rusqlite"]
