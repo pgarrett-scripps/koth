@@ -8,6 +8,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### `[lfq].quant_estimator` defaults to `"apex"` (behaviour change)
+- **Behaviour change.** The default per-cell estimator is now `"apex"`;
+  `"sum"` remains available. With koth 0.9.0/0.10.0 (MBR, native gate, same
+  features and config), on IonStar development data apex lowers the E. coli
+  ratio error from 0.164 to 0.135 at a cost of about 0.5 CV points (median CV
+  12.14 -> 12.67 %). On the held-out PXD028735 cohort it improves both (CV
+  18.63 -> 17.22 %, E. coli error 0.488 -> 0.336). Retention and missingness
+  are identical. Source: koth-lfq-paper notes/RERUN-NEW-KOTH.md (b664f6d).
+
 ### Pure-Rust Thermo `.raw` reader, on by default
 - The `thermo` feature now uses the pure-Rust `opentfraw` crate instead of
   `thermorawfilereader` (Thermo's .NET assemblies under a self-hosted .NET 8

@@ -133,12 +133,12 @@ pub struct LfqConfig {
     #[serde(default = "default_normalize")]
     pub normalize: String,
     /// Per-cell intensity estimator for the consensus matrix.
+    /// "apex" = apex intensity (detected: feature `intensityApex`; MBR: total
+    ///          isotopologue intensity at the apex grid column). Default since
+    ///          0.10.0: lower fold-change error than "sum" on IonStar and on a
+    ///          held-out cohort (see docs/CONFIGURATION.md §4.2).
     /// "sum"  = integrated peak area (detected: feature `intensitySum`; MBR:
-    ///          summed XIC grid over `start..=end`). Original behaviour.
-    /// "apex" = peak height (detected: feature `intensityApex`; MBR: total
-    ///          isotopologue intensity at the apex grid column). Removes the
-    ///          integration-window variance that inflates replicate CV on
-    ///          MBR-filled cells, matching the per-run finder's apex estimator.
+    ///          summed XIC grid over `start..=end`). The default before 0.10.0.
     #[serde(default = "default_quant_estimator")]
     pub quant_estimator: String,
     /// Quantify EVERY consensus cell (detected and MBR) by the same grid
@@ -285,7 +285,7 @@ fn default_peak_max_halfwidth_frac() -> f64 {
 }
 
 fn default_quant_estimator() -> String {
-    "sum".to_string()
+    "apex".to_string()
 }
 
 fn default_detected_use_grid() -> bool {

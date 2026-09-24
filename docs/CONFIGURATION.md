@@ -301,10 +301,11 @@ Skippable entirely with `--no-scoring`.
 Sections: `[alignment]`, `[lfq]`, `[lfq.consensus]` (nested), `[output]`.
 
 > **The align config is now IDENTICAL on Orbitrap and Bruker** (since
-> 2026-08-27): `detected_use_grid = true` and `quant_estimator = "sum"` on both
+> 2026-08-27): `detected_use_grid = true` and `quant_estimator = "apex"` on both
 > platforms. The former split (Bruker `apex` + all-grid, Orbitrap `sum` +
 > detected-feature intensities) is gone — all-grid quantification was validated
-> as a win on Orbitrap too, and sum-vs-apex is a wash on Bruker under all-grid.
+> as a win on Orbitrap too. The default estimator changed from `"sum"` to
+> `"apex"` in 0.10.0 (see the `quant_estimator` row in §4.2).
 
 ### 4.1 `[alignment]` — RT/mass/IM alignment to an auto-selected reference
 Anchor matching is coordinate-only (charge + ppm + RT window, no peptide ID), so
@@ -347,7 +348,7 @@ and (if `run_tdc`) repeat with a decoy.
 | `lone_coelution` | f64 | `0.5` | Co-elution value for a cell with <2 isotope rows carrying signal (a lone monoisotope — nothing to co-elute), applied identically to target and decoy. `1.0` (the pre-0.3.0 default) hands noise-grabbing lone-hill decoys a free target-like coordinate on the QDA co-elution feature; **`0.5` neutralises that freebie** — validated q-calibration win (audit A4: q-AUROC 0.934→0.938, +141 PSMs at q≤0.05, no quant cost). |
 | `isotope_model` | enum or table | `"peptide"` | As `[features] isotope_model`, for the LFQ consensus templates. **Must match** the model the per-run features were detected with, or every cell is scored against a pattern the detector never used. |
 | `normalize` | String | `"none"` | Cross-run matrix normalisation. **`"none"` for the paper** (the benchmark normalises every tool identically downstream, so an in-binary median-of-ratios would double-normalise unfairly). `"median_ratios"` = DESeq/edgeR size factors — a **validated option for standalone use** where you consume the matrix directly. |
-| `quant_estimator` | String | `"sum"` (both platforms) | Per-cell estimator over the grid. Under all-grid quantification `"sum"` beats `"apex"` on Orbitrap (CV 12.31 vs 13.19 %, HUMAN IQR 0.194 vs 0.206) and the two are a wash on Bruker (CV 9.06 vs 9.19 %). The old "apex wrecks IQR 0.227→0.413" result was measured in the mixed detected-feature/grid regime and no longer applies. |
+| `quant_estimator` | String | `"apex"` (both platforms) | Per-cell estimator over the grid: `"apex"` (apex intensity) or `"sum"` (integrated area; the default before 0.10.0). koth 0.9.0/0.10.0, MBR, native gate, same features and config: on IonStar (PXD003881, development data) apex lowers the E. coli ratio error from 0.164 to 0.135 at a cost of about 0.5 CV points (median CV 12.14 → 12.67 %); on the held-out cohort (PXD028735) it improves both (CV 18.63 → 17.22 %, E. coli error 0.488 → 0.336). Retention and missingness are identical. Set `"sum"` when replicate CV matters more than fold-change accuracy. |
 | `detected_use_grid` | bool | `true` (both platforms; **code default flipped 2026-08-27**) | Quantify **every** cell (detected + MBR) by the same grid re-integration — one estimator, one scale. Essential on timsTOF (feature integrates IM, 2-D grid doesn't; mixed scales inflated CV 38→13.7%) and a validated win on Orbitrap too (gated CV 14.27→12.31 %, ECOLI bias −0.067→−0.020, HUMAN IQR 0.219→0.194). `false` now warns and uses grid intensities because exclusive native-signal ownership requires grid quantification. |
 | `rt_spread_scoring` | bool | `false` | Replace the raw RT term with a σ-normalised Gaussian likelihood using the per-run post-warp RT-residual spread (region-aware; strict where alignment is confident). Applied to target+decoy so TDC stays calibrated. **Validated but default-off**; omit unless experimenting. |
 | `averagine_projection` | bool | `false` | Report the averagine matched-filter projection per cell instead of the raw box-sum (keeps on-pattern signal, rejects orthogonal contamination). **Tested negative on Orbitrap** (CV +3.1 pp, IQR +0.036, FFCR +1.9 pp, recall flat — see [§5](#5-experimental-knob-status-do-not-re-litigate)); untested on Bruker (its background-floor regime is where it might help). Byte-identical when off. **Keep `false`.** |
@@ -453,7 +454,7 @@ Start from the shipped configs; the deltas are minimal.
 | `[file].mz_tolerance` | `8.0` | `15.0` | timsTOF MS1 mass accuracy is looser |
 | `[file].n_threads` | unset | unset | all cores on both platforms; v0.1.0 ignored the key, current builds honor it |
 | `[file].bruker_*` front-end | inert (mzML) | active (`.d` filter + watershed) | Bruker raw-frame denoising |
-| `[lfq].quant_estimator` | `"sum"` | `"sum"` | identical since 2026-08-27 (sum-vs-apex is a wash under all-grid) |
+| `[lfq].quant_estimator` | `"apex"` | `"apex"` | identical since 2026-08-27; default `"apex"` since 0.10.0 (was `"sum"`; see §4.2) |
 | `[lfq].detected_use_grid` | `true` | `true` | identical since 2026-08-27; all-grid everywhere |
 
 Everything else — splitter params, `min_chain_cosine=0.40`, recalibration,
@@ -492,8 +493,9 @@ checkout. Two paths:
   0.05. This is essentially `koth_ff_relaxed.toml`. Expect worse quant/redundancy.
 - **Tighter quant (lower CV):** keep the shipped precision-optimal splitter
   (`split_valley_ratio=0.60`, `split_sigma_mult=5.0`, `split_height_frac=0.13`),
-  `intensity_coverage=1.0`, `min_isotope_score=0.5`. For koth_align keep
-  `quant_estimator="sum"` (Orbitrap). The default extraction half-window is
+  `intensity_coverage=1.0`, `min_isotope_score=0.5`. For koth_align set
+  `quant_estimator="sum"`, which gave about 0.5 points lower median CV than the
+  default `"apex"` on IonStar (Orbitrap). The default extraction half-window is
   `rt_window_pct=0.005`; evaluate precision and completeness for the intended use.
 - **Fast/short gradients (3–5-scan hills):** lower `[hills].min_scans` to 2 and
   `[features].min_scan_overlap` to 2; re-benchmark quant.

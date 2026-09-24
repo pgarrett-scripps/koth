@@ -107,8 +107,9 @@ averagine_projection = false
 # factors). "none" when a downstream pipeline normalises for you.
 normalize = "none"
 
-# Per-cell intensity estimator over the integrated grid peak: "sum" or "apex".
-quant_estimator = "sum"
+# Per-cell intensity estimator over the integrated grid peak: "apex" (default)
+# or "sum".
+quant_estimator = "apex"
 # Experimental search-guided ablations; retain legacy defaults pending validation.
 search_scoring = "legacy" # legacy | peptide_grouped | charge_stratified | charge_signed | charge_signed_quality
 search_rt_rescue = false
