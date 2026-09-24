@@ -1,5 +1,7 @@
 # koth
 
+[![crates.io](https://img.shields.io/crates/v/koth-ms.svg)](https://crates.io/crates/koth-ms) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22931619.svg)](https://doi.org/10.5281/zenodo.22931619)
+
 **Fast, memory-efficient peptide feature detection for LC–MS data.**
 koth reads mzML (including `.mzML.gz`), Bruker timsTOF `.d`, and Thermo
 `.raw` files and reports isotope envelopes, charge states, retention times,

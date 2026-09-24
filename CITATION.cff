@@ -15,6 +15,10 @@ authors:
     name-suffix: III
     orcid: "https://orcid.org/0000-0001-5267-1672"
     affiliation: The Scripps Research Institute
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22931619
+    description: "Concept DOI: resolves to the latest archived release."
 repository-code: "https://github.com/pgarrett-scripps/koth"
 url: "https://github.com/pgarrett-scripps/koth"
 license: MIT
