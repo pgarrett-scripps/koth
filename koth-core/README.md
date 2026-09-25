@@ -14,7 +14,7 @@ runs exactly these stages.
 
 ```toml
 [dependencies]
-koth-core = "0.10"
+koth-core = "0.11"
 ```
 
 ```rust

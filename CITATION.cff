@@ -6,8 +6,8 @@ message: "If you use koth, please cite this software using these metadata."
 title: "koth: fast, memory-efficient MS1 feature detection"
 abstract: "koth is a Rust tool for peptide feature detection in LC-MS data. It reads mzML, Bruker timsTOF, and Thermo RAW files and reports chromatographic traces and isotope envelopes. The included koth_align tool supports multi-run alignment and exploratory label-free quantification."
 type: software
-version: "0.10.0"
-date-released: "2026-09-23"
+version: "0.11.0"
+date-released: "2026-09-25"
 authors:
   - given-names: Patrick T.
     family-names: Garrett

@@ -3,7 +3,7 @@ members = ["koth-core", "koth_ff"]
 resolver = "2"
 
 [workspace.package]
-version      = "0.10.0"
+version      = "0.11.0"
 edition      = "2021"
 rust-version = "1.88"
 license      = "MIT"
@@ -12,7 +12,7 @@ repository   = "https://github.com/pgarrett-scripps/koth"
 [workspace.dependencies]
 # The pure-algorithm crate. koth-ms depends on it by version, so keep this in
 # lockstep with [workspace.package] version when releasing.
-koth-core = { path = "koth-core", version = "0.10.0" }
+koth-core = { path = "koth-core", version = "0.11.0" }
 mzdata    = { version = "0.63", default-features = false, features = ["mzml", "mgf", "miniz_oxide", "nalgebra"] }
 rayon     = "1.10"
 csv       = "1.3"

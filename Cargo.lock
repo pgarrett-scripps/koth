@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "koth-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "log",
  "rand 0.8.6",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "koth-ms"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "arrow",
