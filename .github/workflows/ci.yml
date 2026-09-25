@@ -89,3 +89,6 @@ jobs:
       - name: Test without default features
         if: matrix.features == 'no-default'
         run: cargo test --workspace --locked --no-default-features --features cli
+      - name: Test library only (no default features, no cli)
+        if: matrix.features == 'no-default'
+        run: cargo test --workspace --locked --no-default-features
