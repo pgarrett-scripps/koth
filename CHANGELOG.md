@@ -8,6 +8,30 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Two crates: `koth-core` and `koth-ms`
+- **New crate `koth-core`**: hill detection, isotope-feature assembly,
+  averagine scoring, the `Hill`/`Feature`/`Spectrum` models, `KothConfig` (same
+  TOML format; existing config files parse unchanged) and the in-memory
+  pipeline (`run_pipeline_from_spectra`, `run_pipeline_streaming_from_spectra`,
+  new `run_pipeline_from_hills`, `PipelineSink`). Its normal dependencies are
+  pure Rust (rayon, serde, toml, log, thiserror, rand, rustc-hash): no SQLite,
+  timsrust, mzdata, Arrow/Parquet, clap or dnoise, so it links next to crates
+  that use a different `libsqlite3-sys`. CI checks this (`just core-deps`).
+- `koth-ms` depends on `koth-core` at the same version and re-exports it at the
+  old paths (`koth_ms::models`, `koth_ms::config::KothConfig`,
+  `koth_ms::run_pipeline`, …). Output is byte-identical to 0.10.0.
+- New default feature `cli` (clap, env_logger) gates the `koth_ff` and
+  `koth_align` executables. Builds with `--no-default-features` need
+  `--features cli` to get the executables.
+- **API changes.** `run_features`, `KothConfig::from_toml`, `FeaturesConfig::validate` and the
+  in-memory pipeline functions return `koth_core::Error`, which converts into
+  `KothError` with `?` (`Io` → `Io`, `Config` → `ConfigError`). The
+  `From<MobilityScale> for dnoise::MobilityScale` impl is replaced by
+  `koth_ms::io::tims_calibration::dnoise_scale`. `FeatureFindingOutput`
+  implements `PipelineSink`.
+- The release workflow publishes `koth-core` before `koth-ms` and checks that
+  both crates share the tag's version.
+
 ## [0.10.0] — 2026-09-23
 
 ### Crate renamed to `koth-ms`

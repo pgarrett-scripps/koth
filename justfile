@@ -77,6 +77,10 @@ clean:
 fmt:
     cargo fmt --all
 
+# Fail if koth-core gained a file-I/O, CLI or native dependency
+core-deps:
+    .github/scripts/check-core-deps.sh
+
 # Run clippy linter
 lint:
     cargo clippy --workspace -- -D warnings

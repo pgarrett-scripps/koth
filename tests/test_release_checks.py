@@ -24,7 +24,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for name in ('.zenodo.json', 'CITATION.cff', 'Cargo.toml', 'LICENSE', 'koth_ff/LICENSE'):
+        for name in ('.zenodo.json', 'CITATION.cff', 'Cargo.toml', 'LICENSE', 'koth_ff/LICENSE',
+                     'koth_ff/Cargo.toml', 'koth-core/Cargo.toml'):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             (self.root / name).write_bytes((ROOT / name).read_bytes())
         version = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['package']['version']
@@ -34,6 +35,14 @@ class ReleasePolicyTests(unittest.TestCase):
     def test_valid_metadata_and_release(self):
         checks.check_metadata(self.root)
         checks.check_event(self.root, self.event)
+
+    def test_rejects_core_version_out_of_lockstep(self):
+        cargo = self.root / 'Cargo.toml'
+        text = cargo.read_text()
+        cargo.write_text(text.replace('koth-core = { path = "koth-core", version = "',
+                                      'koth-core = { path = "koth-core", version = "9', 1))
+        with self.assertRaises(ValueError):
+            checks.check_metadata(self.root)
 
     def test_rejects_wrong_tag_private_repo_draft_and_nonrelease(self):
         for section, key, value in [('release', 'tag_name', 'v999.0.0'),
@@ -115,6 +124,7 @@ class ReleasePolicyTests(unittest.TestCase):
             (self.root / (name + '.sha256')).write_text(hashlib.sha256(b'test archive').hexdigest() + '  ' + name + '\n')
         import shutil
         shutil.rmtree(self.root / 'koth_ff')
+        shutil.rmtree(self.root / 'koth-core')
         for name in ('.zenodo.json', 'CITATION.cff', 'Cargo.toml', 'LICENSE'):
             (self.root / name).unlink()
         packages.verify_dist(self.root)

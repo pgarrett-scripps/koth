@@ -20,23 +20,27 @@ cargo build --release
 # binaries are at target/release/koth_ff and target/release/koth_align
 ```
 
-Both binaries are built together with the command above. Two input readers are
-Cargo features, and both are on by default:
+Both binaries are built together with the command above. The executables
+(`cli`) and the two input readers are Cargo features, all on by default:
 
 | Feature | Input | Dependencies |
 |---|---|---|
+| `cli` | the `koth_ff` and `koth_align` executables | `clap`, `env_logger` |
 | `tdf` | Bruker timsTOF `.d` | `timsrust`, `dnoise`, bundled SQLite |
 | `thermo` | Thermo Fisher `.raw` | `opentfraw` (pure Rust) |
 
 mzML and gzip-compressed `.mzML.gz` are always supported; `.mzML.gz` is
 decompressed as it is parsed, not into memory first.
 
-To build without one or both readers:
+To build without one or both readers, keep `cli` for the executables:
 
 ```bash
-cargo build --release -p koth-ms --no-default-features --features tdf   # no Thermo reader
-cargo build --release -p koth-ms --no-default-features                  # mzML only
+cargo build --release -p koth-ms --no-default-features --features cli,tdf   # no Thermo reader
+cargo build --release -p koth-ms --no-default-features --features cli       # mzML only
 ```
+
+To embed the algorithm in another program without any reader, depend on the
+`koth-core` crate instead (see [development](DEVELOPMENT.md#library-api)).
 
 ### Native Thermo `.raw` input
 

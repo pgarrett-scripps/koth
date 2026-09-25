@@ -53,6 +53,25 @@ peptide identifications. Its group and cell q-values are exploratory confidence 
 not validated peptide-identification FDR; see the
 [LFQ guide](docs/LFQ.md).
 
+## Use as a library
+
+Two crates, one version. `koth-core` is the feature-detection algorithm over
+spectra you supply: no file readers, no SQLite, no native code. `koth-ms` adds
+the mzML, Bruker and Thermo readers, output writers, alignment and LFQ, and
+re-exports `koth-core`.
+
+```toml
+koth-core = "0.10"                                   # bring your own spectra
+koth-ms = { version = "0.10", default-features = false, features = ["tdf", "thermo"] }  # readers, no CLI
+```
+
+```rust
+let out = koth_core::run_pipeline_from_spectra(spectra, &config, &Default::default())?;
+```
+
+See [development](docs/DEVELOPMENT.md#library-api) and the
+[streaming API](docs/STREAMING_API.md).
+
 ## Documentation
 
 [Usage](docs/USAGE.md) ·

@@ -15,7 +15,9 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 cargo test --workspace --locked
-cargo test --workspace --locked --no-default-features
+cargo test --workspace --locked --no-default-features --features cli
+cargo check -p koth-ms --locked --no-default-features --lib
+.github/scripts/check-core-deps.sh   # or: just core-deps
 ```
 
 Install `scripts/release-requirements.txt` in a Python environment and run
