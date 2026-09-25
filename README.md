@@ -61,8 +61,8 @@ the mzML, Bruker and Thermo readers, output writers, alignment and LFQ, and
 re-exports `koth-core`.
 
 ```toml
-koth-core = "0.10"                                   # bring your own spectra
-koth-ms = { version = "0.10", default-features = false, features = ["tdf", "thermo"] }  # readers, no CLI
+koth-core = "0.11"                                   # bring your own spectra
+koth-ms = { version = "0.11", default-features = false, features = ["tdf", "thermo"] }  # readers, no CLI
 ```
 
 ```rust
