@@ -1,9 +1,10 @@
 //! Bruker timsTOF scan-to-1/K0 conversion using the acquisition calibration
 //! stored in each run's `analysis.tdf`.
 //!
-//! timsrust 0.4 converts a TIMS scan index to inverse reduced mobility with a
-//! straight line between `OneOverK0AcqRangeUpper` (scan 0) and
-//! `OneOverK0AcqRangeLower` (the largest `NumScans`). Bruker's own software (the
+//! timsrust 0.4 (and dnoise's `tsr` adapter, which keeps 0.4.2's formula)
+//! converts a TIMS scan index to inverse reduced mobility with a straight line
+//! between `OneOverK0AcqRangeUpper` (scan 0) and `OneOverK0AcqRangeLower` (the
+//! largest `NumScans`). Bruker's own software (the
 //! timsdata SDK, and every tool built on it or on its mzML export) instead uses
 //! the per-run `TimsCalibration` table, which differs from the line by up to
 //! ~0.03 1/K0 on a 0.64–1.45 acquisition range.
@@ -47,7 +48,7 @@ mod tdf {
     use std::collections::HashMap;
 
     use dnoise::mobility::ScanToMobility as RowConverter;
-    use timsrust::converters::Scan2ImConverter;
+    use dnoise::tsr::Scan2ImConverter;
 
     use super::{MobilityScale, TimsCalibrationModel};
 
@@ -93,8 +94,8 @@ mod tdf {
     impl ScanToMobility {
         /// Build from already-read metadata. `rows` are `(Id, ModelType, C0..C9)`
         /// of `TimsCalibration`; they and `frame_calibration` may be empty only
-        /// when `scale` is [`MobilityScale::Linear`]. `linear` is timsrust's
-        /// converter for the run.
+        /// when `scale` is [`MobilityScale::Linear`]. `linear` is the
+        /// readers' linear converter for the run (`dnoise::tsr`, timsrust 0.4.2's line).
         pub fn new(
             scale: MobilityScale,
             linear: Scan2ImConverter,
@@ -161,7 +162,7 @@ mod tdf {
         let tdf = path.join("analysis.tdf");
         let at = |e: String| format!("{}: {e}", tdf.display());
         // The readers' own linear converter, so `linear` matches them exactly.
-        let linear = timsrust::readers::MetadataReader::new(&tdf)
+        let linear = dnoise::tsr::MetadataReader::new(&tdf)
             .map_err(|e| at(e.to_string()))?
             .im_converter;
         let con = Connection::open_with_flags(&tdf, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -215,8 +216,8 @@ mod tdf {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use dnoise::tsr::ConvertableDomain;
         use serde::Deserialize;
-        use timsrust::converters::ConvertableDomain;
 
         #[derive(Deserialize)]
         struct Fixture {

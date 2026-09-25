@@ -32,6 +32,29 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - The release workflow publishes `koth-core` before `koth-ms` and checks that
   both crates share the tag's version.
 
+### dnoise 0.5, no direct timsrust
+- `koth-ms` (feature `tdf`) now depends on `dnoise` 0.5.0 with
+  `default-features = false` (which brings in `dnoise-core` for the per-frame
+  denoising). Bruker frames are read through `dnoise::tsr`, which wraps
+  `timsrust-tdf` 0.6.6 but keeps timsrust 0.4.2's converters and frame order.
+  The direct `timsrust` 0.4 dependency is gone. A small internal table reader
+  gets frame RT, MS level and diaPASEF isolation windows from `analysis.tdf`,
+  with timsrust 0.4.2's semantics.
+- `rusqlite` 0.35 (was 0.32), which links the same `libsqlite3-sys` as
+  dnoise 0.5, timsrust 0.6 and sage-plus.
+- `arrow`/`parquet` 57 (was 53), because timsrust-tdf 0.6.6 needs a chrono
+  that parquet 53 excludes.
+- For each parameter whose default changed in dnoise 0.5, koth keeps
+  dnoise 0.4's value:
+  - halo `peak_fraction` stays koth's `bruker_halo_peak_fraction` (0.15).
+  - the MS1 polygon pads stay koth's `bruker_ms1_polygon_mz_pad` and
+    `bruker_ms1_polygon_im_pad` (0/0), with overlap off.
+- `bruker_ms1_polygon_overlap_reach` is deprecated and ignored, because
+  dnoise 0.5 removed whole-extent keep. koth logs a warning when it is set.
+  With `bruker_ms1_polygon = true`, dnoise 0.5 runs its stages in the order
+  streak → gate → halo. Neither change affects the default configs, which
+  leave the polygon off.
+
 ## [0.10.0] — 2026-09-23
 
 ### Crate renamed to `koth-ms`

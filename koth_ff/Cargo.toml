@@ -43,9 +43,13 @@ crate-type = ["rlib"]
 koth-core  = { workspace = true }
 mzdata     = { workspace = true }
 flate2     = "1"
-timsrust   = { workspace = true, optional = true }
-dnoise     = { version = "0.4.0", default-features = false, optional = true }
-rusqlite   = { version = "0.32", features = ["bundled"], optional = true }
+# Bruker .d input. dnoise does the frame reading (its `tsr` adapter over
+# timsrust-tdf 0.6.6 keeps timsrust 0.4.2's converters and frame order), the
+# per-frame denoising (through dnoise-core) and the in-process streaming run.
+# koth-ms has no direct timsrust dependency. rusqlite must match dnoise's (and
+# timsrust 0.6's) 0.35: only one `libsqlite3-sys` can be linked.
+dnoise     = { version = "0.5.0", default-features = false, optional = true }
+rusqlite   = { version = "0.35", features = ["bundled"], optional = true }
 # Native Thermo .raw reading: a pure-Rust parser of the .raw binary format (no
 # .NET runtime, no vendor assemblies, no system libraries), so a `.raw` file can
 # be fed to koth_ff directly with no prior mzML conversion.
@@ -94,7 +98,7 @@ default = ["cli", "tdf", "thermo"]
 # The koth_ff and koth_align executables (clap, env_logger). Library users can
 # turn it off with `default-features = false`.
 cli = ["dep:clap", "dep:env_logger"]
-tdf = ["dep:timsrust", "dep:dnoise", "dep:rusqlite"]
+tdf = ["dep:dnoise", "dep:rusqlite"]
 # Native Thermo Fisher .raw input (no mzML conversion). Pure Rust, on by default;
 # `--no-default-features --features cli,tdf` builds without it.
 thermo = ["dep:opentfraw"]
