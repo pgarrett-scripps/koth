@@ -15,7 +15,7 @@
 /// denoising / centroiding logic lives in the `dnoise` crate. Frames are decoded
 /// with `dnoise::tsr::FrameReader` (timsrust-tdf 0.6 behind timsrust 0.4.2's
 /// frame order); frame RT, MS level and diaPASEF windows come from
-/// `analysis.tdf` directly ([`frame_table`]), read the way timsrust 0.4.2 did.
+/// `analysis.tdf` directly (`inner::frame_table`), read the way timsrust 0.4.2 did.
 #[cfg(feature = "tdf")]
 pub mod inner {
     use std::cmp::Ordering;
