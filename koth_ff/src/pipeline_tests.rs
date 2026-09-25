@@ -12,7 +12,7 @@
 //! have written.
 
 use super::*;
-use crate::models::Polarity;
+use crate::models::{Hill, Polarity, ScoredFeature};
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -394,8 +394,10 @@ fn no_scoring_option_matches_binary_no_scoring_wrap() {
     let hills =
         crate::hills::detect_hills_from_iter(spectra.iter().cloned(), &config.hills, &config.file);
     let features = crate::run_features(&hills, &config.features, &config.file).expect("features");
-    let manual_wrapped: Vec<ScoredFeature> =
-        features.into_iter().map(super::wrap_unscored).collect();
+    let manual_wrapped: Vec<ScoredFeature> = features
+        .into_iter()
+        .map(koth_core::pipeline::wrap_unscored)
+        .collect();
 
     let out = run_pipeline_from_spectra(
         spectra.iter().cloned(),

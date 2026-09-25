@@ -973,6 +973,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "koth-core"
+version = "0.10.0"
+dependencies = [
+ "log",
+ "rand",
+ "rayon",
+ "rustc-hash",
+ "serde",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
 name = "koth-ms"
 version = "0.10.0"
 dependencies = [
@@ -983,6 +996,7 @@ dependencies = [
  "dnoise",
  "env_logger",
  "flate2",
+ "koth-core",
  "log",
  "mzdata",
  "opentfraw",
@@ -990,7 +1004,6 @@ dependencies = [
  "rand",
  "rayon",
  "rusqlite",
- "rustc-hash",
  "serde",
  "serde_json",
  "sha2",
