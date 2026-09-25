@@ -192,12 +192,15 @@ pub struct FileConfig {
     #[serde(default)]
     pub bruker_ms1_polygon: bool,
     /// Polygon gate: m/z leniency added to each side of the polygon interior, in
-    /// Daltons. Isotopes run to higher m/z, so a pad keeps an edge precursor's
-    /// envelope intact. Default 0.0 (the literal polygon).
+    /// Th (m/z units). Isotopes run to higher m/z, so a pad keeps an edge
+    /// precursor's envelope intact. Default 0.0 (the literal polygon). koth
+    /// always passes this value to dnoise, so dnoise 0.5's own default pad
+    /// (3.0 Th) does not apply.
     #[serde(default)]
     pub bruker_ms1_polygon_mz_pad: f64,
     /// Polygon gate: ion-mobility leniency added to each side, in 1/K0.
-    /// Default 0.0 (the literal polygon).
+    /// Default 0.0 (the literal polygon); dnoise 0.5's own default (0.015)
+    /// does not apply.
     #[serde(default)]
     pub bruker_ms1_polygon_im_pad: f64,
     /// Polygon gate: keep a whole MS1 feature when any of its points lies
@@ -209,10 +212,11 @@ pub struct FileConfig {
     /// shape is not known. Opt in only after checking the run's polygon.
     #[serde(default)]
     pub bruker_ms1_polygon_overlap: bool,
-    /// Polygon gate, overlap mode only: how far, in 1/K0, a kept feature may
-    /// extend beyond the mobility range of its inside points (dnoise's
-    /// `Ms1PolygonParams::overlap_reach`; `0.0` = unlimited). Ignored unless
-    /// `bruker_ms1_polygon_overlap` is set. Default 0.1.
+    /// Deprecated, ignored. dnoise 0.4 cut a feature kept in overlap mode at
+    /// this distance (1/K0) beyond the mobility range of its inside points;
+    /// dnoise 0.5 removed the parameter and keeps the whole feature (the old
+    /// `0.0`, unlimited). Still parsed so existing configs load; koth-ms logs a
+    /// warning when overlap mode is on and this is not `0.0`.
     #[serde(default = "default_bruker_ms1_polygon_overlap_reach")]
     pub bruker_ms1_polygon_overlap_reach: f64,
     /// Per-scan iterative sigma-clipping noise filter. When set, peaks whose
