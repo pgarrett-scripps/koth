@@ -6,9 +6,15 @@ written and re-read. This is an *additional* library seam over the same staged
 functions the `koth_ff` binary uses — the CLI, its file output, and its byte
 format are unchanged.
 
-Everything lives in `koth_ff/src/pipeline.rs` and is re-exported at the crate
-root (`koth_ms::run_pipeline`, `koth_ms::PipelineSink`, …). The in-memory result
-types (`Hill`, `Feature`, `ScoredFeature`, `Spectrum`) are re-exported there too.
+The in-memory half (`PipelineSink`, `PipelineOptions`, `FeatureFindingOutput`,
+`run_pipeline_from_spectra`, `run_pipeline_streaming_from_spectra`,
+`run_pipeline_from_hills`, `group_ms2_hills_by_window`) lives in
+`koth-core/src/pipeline.rs`, so a program with its own spectra can depend on
+`koth-core` alone. The file-path entry points (`run_pipeline`,
+`run_pipeline_streaming`, `run_pipeline_with_ms2`) live in
+`koth_ff/src/pipeline.rs`. `koth-ms` re-exports all of it at the crate root
+(`koth_ms::run_pipeline`, `koth_ms::PipelineSink`, …), with the in-memory result
+types (`Hill`, `Feature`, `ScoredFeature`, `Spectrum`).
 
 ## API surface
 
@@ -41,19 +47,24 @@ pub fn run_pipeline_streaming<S: PipelineSink>(
     path: &Path, config: &KothConfig, opts: &PipelineOptions, sink: &mut S,
 ) -> Result<(), KothError>;
 
-pub fn run_pipeline_streaming_from_spectra<I, S>(
+pub fn run_pipeline_streaming_from_spectra<I, S>(          // koth-core
     spectra: I, config: &KothConfig, opts: &PipelineOptions, sink: &mut S,
-) -> Result<(), KothError>
+) -> Result<(), koth_core::Error>
 where I: Iterator<Item = Spectrum>, S: PipelineSink;
+
+// Shared tail: features + scoring from a finalized hill set (koth-core).
+pub fn run_pipeline_from_hills<S: PipelineSink>(
+    hills: Vec<Hill>, config: &KothConfig, opts: &PipelineOptions, sink: &mut S,
+) -> Result<(), koth_core::Error>;
 
 // --- collect-all convenience (no files written) ---
 pub fn run_pipeline(
     path: &Path, config: &KothConfig, opts: &PipelineOptions,
 ) -> Result<FeatureFindingOutput, KothError>;
 
-pub fn run_pipeline_from_spectra<I: Iterator<Item = Spectrum>>(
+pub fn run_pipeline_from_spectra<I: Iterator<Item = Spectrum>>(   // koth-core
     spectra: I, config: &KothConfig, opts: &PipelineOptions,
-) -> Result<FeatureFindingOutput, KothError>;
+) -> Result<FeatureFindingOutput, koth_core::Error>;
 
 // Combined MS1 + MS2 collect-all convenience (forces emit_ms2 = true).
 pub fn run_pipeline_with_ms2(

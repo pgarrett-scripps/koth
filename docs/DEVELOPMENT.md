@@ -17,9 +17,42 @@ just lint                        # clippy -D warnings
 
 ## Library API
 
+### Which crate
+
+| Crate | Holds | Depend on it when |
+|---|---|---|
+| `koth-core` | hill detection, isotope features, averagine scoring, `KothConfig` (the same TOML as `koth_ff -c`), the in-memory pipeline | you have your own spectra and want no file readers, no SQLite and no native code (for example next to another `libsqlite3-sys`) |
+| `koth-ms` | everything in `koth-core`, re-exported at the same `koth_ms::` paths, plus mzML/Bruker/Thermo readers, writers, alignment/LFQ and the executables | you want koth to read files or run LFQ |
+
+`koth-core` from your own spectra:
+
+```toml
+[dependencies]
+koth-core = "0.10"
+```
+
+```rust
+use koth_core::{run_pipeline_from_spectra, KothConfig, PipelineOptions};
+
+let config: KothConfig = KothConfig::from_toml(Path::new("koth_ff.toml"))?;
+let out = run_pipeline_from_spectra(my_spectra.into_iter(), &config, &PipelineOptions::default())?;
+```
+
+`koth-ms` as a library without the executables:
+
+```toml
+[dependencies]
+koth-ms = { version = "0.10", default-features = false, features = ["tdf", "thermo"] }
+```
+
+The `cli` feature (default on) builds `koth_ff` and `koth_align` and pulls in
+`clap` and `env_logger`; library users can leave it off. `koth-core` functions
+return `koth_core::Error`, which converts into `koth_ms::error::KothError` with
+`?`.
+
 ### Single-run pipeline
 
-`koth_ff` is also a library crate. The top-level functions mirror the CLI stages:
+`koth-ms` is also a library crate. The top-level functions mirror the CLI stages:
 
 ```rust
 use std::path::Path;

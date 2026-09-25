@@ -13,8 +13,16 @@ Two Rust binaries built together (`cargo build --release`):
   RANSAC RT warp + mass/IM drift → [lfq.consensus] group the same peptide across
   runs → [lfq] XIC grid + integrate + target-decoy q-values → intensity matrix`.
 
-Source layout: `koth_ff/src/{config,hills,features,scoring,alignment,lfq,io,output}/`.
-The crate in `koth_ff/` is published as `koth-ms` (library `koth_ms`, `cargo … -p koth-ms`); the binaries keep the names `koth_ff` and `koth_align`.
+Source layout: two crates. `koth-core/src/{config,hills,features,scoring}/` plus
+`models.rs`, `pipeline.rs` (in-memory pipeline, `PipelineSink`) is the pure
+algorithm: no file I/O, no native dependencies (`just core-deps` checks it; sage-plus
+embeds it). `koth_ff/src/{config,alignment,lfq,io,output}/` plus `pipeline.rs`
+(file-path entry points) is published as `koth-ms` (library `koth_ms`,
+`cargo … -p koth-ms`); it re-exports koth-core at the old `koth_ms::` paths, and
+the binaries keep the names `koth_ff` and `koth_align` (behind the default `cli`
+feature). `KothConfig` and its TOML sections live in `koth-core/src/config/`;
+`AlignConfig` and `[align_output]` stay in `koth_ff/src/config/`. Both crates share
+the workspace version; koth-core is published first.
 The active q-value path is the QDA rescorer in `lfq/rescore.rs` (not the simpler
 ranker in `lfq/tdc.rs`).
 

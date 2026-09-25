@@ -47,6 +47,20 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - run: cargo check -p koth-ms --locked --no-default-features --features tdf
+      # Library only: no readers, no CLI (clap and env_logger are behind `cli`).
+      - run: cargo check -p koth-ms --locked --no-default-features --lib
+
+  # sage-plus embeds koth-core next to its own SQLite, timsrust and mzdata; the
+  # core must stay free of file I/O and native code.
+  core-deps:
+    name: koth-core has no I/O or native dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+      - run: .github/scripts/check-core-deps.sh
 
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.features }})
@@ -71,6 +85,7 @@ jobs:
       - name: Test default features
         if: matrix.features == 'default'
         run: cargo test --workspace --locked
+      # No readers, but keep `cli` so the CLI integration test still runs.
       - name: Test without default features
         if: matrix.features == 'no-default'
-        run: cargo test --workspace --locked --no-default-features
+        run: cargo test --workspace --locked --no-default-features --features cli

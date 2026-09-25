@@ -45,6 +45,15 @@ def check_metadata(root):
     version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     require(str(cff.get("version")) == version,
             "CITATION.cff version differs from Cargo.toml; run `just cite-sync`")
+    # koth-ms depends on koth-core by exact version, and both are published
+    # together at the workspace version.
+    workspace = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]
+    require(workspace["dependencies"]["koth-core"]["version"] == version,
+            "The koth-core dependency version in Cargo.toml differs from the workspace version")
+    for member in ("koth-core", "koth_ff"):
+        package = tomllib.loads((root / member / "Cargo.toml").read_text())["package"]
+        require(package.get("version") == {"workspace": True},
+                f"{member}/Cargo.toml must take version.workspace = true")
     require(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(cff.get("date-released", ""))),
             "CITATION.cff date-released is missing; run `just cite-sync`")
     require(cff["cff-version"] == "1.2.0", "Unsupported CFF format")

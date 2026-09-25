@@ -7,8 +7,9 @@ workflow perform CI and packaging without publishing anything.
 ## One-time setup
 
 1. Add a crates.io API token as the repository Actions secret
-   `CARGO_REGISTRY_TOKEN`. Scope it to publishing `koth-ms`; for the first
-   publication it must also permit creation of that crate. No token belongs in
+   `CARGO_REGISTRY_TOKEN`. Scope it to publishing `koth-core` and `koth-ms`;
+   for the first publication of each it must also permit creation of that
+   crate. No token belongs in
    source control. This follows the existing dnoise release setup and supports
    the first crate publication without requiring an already registered crate.
 2. When ready for public access, make the repository public and connect it in
@@ -29,6 +30,19 @@ status afterward. This integration does not promise to include binary assets
 attached by a later Actions job. Do not add a second Zenodo uploader, which
 could create duplicate records.
 
+## Two crates, one version
+
+The workspace publishes two crates at the workspace version: `koth-core` (the
+in-memory algorithm, no file I/O or native dependencies) and `koth-ms` (readers,
+writers, LFQ and the executables), which depends on that exact `koth-core`
+version. When bumping the workspace version, also bump the `version` of the
+`koth-core` entry in the root `Cargo.toml`'s `[workspace.dependencies]`;
+`scripts/check_release.py` fails if they differ. The release workflow publishes
+`koth-core` first, then `koth-ms`; a re-run skips a `koth-core` version that is
+already on crates.io. Before the first publication of a version, the `koth-ms`
+dry run needs cargo 1.90 or newer (`cargo +stable publish --dry-run --locked
+-p koth-core -p koth-ms`), which packages the two against each other.
+
 ## Prepare a release
 
 1. Choose the version in the workspace `Cargo.toml`, refresh `Cargo.lock`,
@@ -37,7 +51,7 @@ could create duplicate records.
    entries into a dated release section, and update changed configuration
    examples and documentation. Do not edit a published tag.
 2. Confirm the default/no-default CI matrix, lint, rustdoc, and the
-   `--no-default-features --features tdf` check pass. Complete relevant
+   `--no-default-features --features tdf` check, and `just core-deps` pass. Complete relevant
    real-data smoke tests, including the ignored Bruker tests and the native
    Thermo `.raw` tests (`KOTH_MS1_RAW`, `KOTH_DIA_RAW`); ignored tests are not
    covered by the ordinary CI pass. Check the paper's
@@ -58,8 +72,9 @@ could create duplicate records.
 Published GitHub Release
   ├─ verify tag/version + metadata + public repository + crate credential
   │    → full reusable CI
-  │    → four binary builds + crate publish dry run
-  │    → verify archive checksums → attach downloads → cargo publish
+  │    → four binary builds + two-crate publish dry run
+  │    → verify archive checksums → attach downloads
+  │    → cargo publish koth-core → cargo publish koth-ms
   └─ Zenodo GitHub integration → source archive and DOI
 ```
 

@@ -95,10 +95,23 @@ jobs:
         with:
           toolchain: 1.88.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo publish --dry-run --locked -p koth-ms
+      # koth-ms depends on koth-core by version, and that version is not on
+      # crates.io until the publish job runs. Cargo >= 1.90 packages workspace
+      # members against each other, so the dry run uses stable cargo; the
+      # published crates are still built by 1.88.0 below.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Both crates share one version
+        run: |
+          versions=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(" ".join(sorted({p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] in ("koth-core", "koth-ms")})))')
+          if [ "$(echo "$versions" | wc -w)" != 1 ]; then
+            echo "koth-core and koth-ms versions differ: $versions" >&2
+            exit 1
+          fi
+      - run: cargo +stable publish --dry-run --locked -p koth-core -p koth-ms
 
   publish:
-    name: Attach binaries and publish crate
+    name: Attach binaries and publish crates
     needs: [build, package]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
@@ -125,7 +138,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/koth-dist"/* --clobber
-      - name: Publish crate
+      # Irreversible steps last. koth-core first: koth-ms depends on it by
+      # version. cargo publish waits until the new version is in the index
+      # before returning. A re-run after a failed koth-ms publish skips a
+      # koth-core version that is already on crates.io.
+      - name: Publish koth-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          if curl -fsS https://index.crates.io/ko/th/koth-core \
+               | python3 -c 'import json,sys; sys.exit(0 if any(json.loads(l)["vers"] == sys.argv[1] for l in sys.stdin if l.strip()) else 1)' "$version"; then
+            echo "koth-core $version is already on crates.io; skipping"
+          else
+            cargo publish --locked -p koth-core
+          fi
+      - name: Publish koth-ms
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked -p koth-ms
