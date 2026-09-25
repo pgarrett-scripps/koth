@@ -74,6 +74,14 @@ name = "lfq_permutation_audit"
 required-features = ["cli"]
 
 [[example]]
+name = "lfq_group_audit"
+required-features = ["cli"]
+
+[[example]]
+name = "lfq_refinement"
+required-features = ["cli"]
+
+[[example]]
 name = "tims_mobility_dump"
 required-features = ["tdf"]
 
