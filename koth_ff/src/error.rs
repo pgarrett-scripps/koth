@@ -35,3 +35,15 @@ pub enum KothError {
     #[error("Parquet error: {0}")]
     ParquetError(String),
 }
+
+/// `koth-core` errors convert one-to-one: its `Io` becomes [`KothError::Io`] and
+/// its `Config` becomes [`KothError::ConfigError`], with the same message.
+impl From<koth_core::Error> for KothError {
+    fn from(e: koth_core::Error) -> Self {
+        match e {
+            koth_core::Error::Io(e) => KothError::Io(e),
+            koth_core::Error::Config(msg) => KothError::ConfigError(msg),
+            other => KothError::ConfigError(other.to_string()),
+        }
+    }
+}

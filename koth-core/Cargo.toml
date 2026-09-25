@@ -1,0 +1,30 @@
+[package]
+name             = "koth-core"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors          = ["Patrick Garrett <pgarrett@scripps.edu>"]
+description      = "Pure-Rust, in-memory LC-MS feature detection of koth: hills, isotope features and averagine scoring (no file I/O, no native dependencies)"
+readme           = "README.md"
+homepage         = "https://github.com/pgarrett-scripps/koth"
+documentation    = "https://docs.rs/koth-core"
+keywords         = ["mass-spectrometry", "proteomics", "lc-ms", "feature-detection"]
+categories       = ["science", "algorithms"]
+
+[lints]
+workspace = true
+
+# Keep this crate free of file-format readers, writers and native code: no
+# mzdata, timsrust, SQLite, arrow/parquet, csv, flate2, opentfraw, dnoise, clap
+# or env_logger. sage-plus and other embedders link it next to their own
+# versions of those. CI checks the dependency tree (.github/scripts/check-core-deps.sh).
+[dependencies]
+rayon      = { workspace = true }
+serde      = { workspace = true }
+toml       = { workspace = true }
+log        = { workspace = true }
+thiserror  = { workspace = true }
+rand       = { workspace = true }
+rustc-hash = { workspace = true }

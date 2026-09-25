@@ -10,7 +10,7 @@ description      = "High-performance LC-MS feature finder for timsTOF and mzML d
 default-run      = "koth_ff"
 readme           = "README.md"
 homepage         = "https://github.com/pgarrett-scripps/koth"
-documentation    = "https://docs.rs/koth_ff"
+documentation    = "https://docs.rs/koth-ms"
 keywords         = ["mass-spectrometry", "proteomics", "lc-ms", "timstof", "feature-detection"]
 categories       = ["science", "command-line-utilities"]
 
@@ -20,10 +20,17 @@ workspace = true
 [[bin]]
 name = "koth_ff"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "koth_align"
 path = "src/align_main.rs"
+required-features = ["cli"]
+
+# Runs the koth_align binary.
+[[test]]
+name = "search_guided_cli"
+required-features = ["cli"]
 
 [lib]
 name = "koth_ms"
@@ -31,6 +38,9 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
+# The in-memory detection stages (hills, features, scoring, the detection
+# config and the in-memory pipeline). Re-exported at their original paths.
+koth-core  = { workspace = true }
 mzdata     = { workspace = true }
 flate2     = "1"
 timsrust   = { workspace = true, optional = true }
@@ -46,15 +56,22 @@ serde      = { workspace = true }
 serde_json = { workspace = true }
 toml       = { workspace = true }
 log        = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, optional = true }
 thiserror  = { workspace = true }
 anyhow     = { workspace = true }
-clap       = { workspace = true }
+clap       = { workspace = true, optional = true }
 arrow      = { workspace = true }
 parquet    = { workspace = true }
 rand       = { workspace = true }
-rustc-hash = "1"
 sha2 = "0.10"
+
+[[example]]
+name = "replay_features"
+required-features = ["cli"]
+
+[[example]]
+name = "lfq_permutation_audit"
+required-features = ["cli"]
 
 [[example]]
 name = "tims_mobility_dump"
@@ -65,12 +82,15 @@ name = "thermo_parity"
 required-features = ["thermo"]
 
 [features]
-default = ["tdf", "thermo"]
+default = ["cli", "tdf", "thermo"]
+# The koth_ff and koth_align executables (clap, env_logger). Library users can
+# turn it off with `default-features = false`.
+cli = ["dep:clap", "dep:env_logger"]
 tdf = ["dep:timsrust", "dep:dnoise", "dep:rusqlite"]
 # Native Thermo Fisher .raw input (no mzML conversion). Pure Rust, on by default;
-# `--no-default-features --features tdf` builds without it.
+# `--no-default-features --features cli,tdf` builds without it.
 thermo = ["dep:opentfraw"]
 
 [package.metadata.docs.rs]
-features = ["tdf", "thermo"]
+features = ["cli", "tdf", "thermo"]
 rustdoc-args = ["--cfg", "docsrs"]

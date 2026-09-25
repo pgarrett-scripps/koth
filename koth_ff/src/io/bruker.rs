@@ -318,7 +318,7 @@ pub mod inner {
             ms1_polygon: file.bruker_ms1_polygon.then_some(&polygon_params),
             watershed: Some(&watershed_params),
             // The polygon gate converts scans on the same 1/K0 scale as koth.
-            mobility_scale: file.bruker_mobility_scale.into(),
+            mobility_scale: crate::io::tims_calibration::dnoise_scale(file.bruker_mobility_scale),
             ..Stages::default()
         };
 

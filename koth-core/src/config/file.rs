@@ -2,6 +2,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::Polarity;
 
+/// `report.json` label for Bruker acquisition-calibrated 1/K0 (koth >= 0.10.0 default).
+pub const SCALE_CALIBRATED: &str = "bruker-acquisition-calibrated-1/K0";
+/// `report.json` label for timsrust's linear 1/K0 (`bruker_mobility_scale = "linear"`).
+pub const SCALE_LINEAR: &str = "timsrust-linear-1/K0";
+
+/// Which 1/K0 scale a Bruker reader reports (`[file] bruker_mobility_scale`).
+///
+/// The conversion itself happens in the `koth-ms` Bruker reader; this crate only
+/// carries the setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobilityScale {
+    /// Bruker acquisition calibration (`TimsCalibration`), identical to the
+    /// timsdata SDK opened in its default (non-recalibrated) state.
+    #[default]
+    Calibrated,
+    /// timsrust's straight line between the acquisition-range bounds. This was
+    /// koth's only behaviour up to 0.9.0.
+    Linear,
+}
+
+impl MobilityScale {
+    /// Stable label written into `report.json` so a downstream join can refuse
+    /// to mix scales.
+    pub fn label(self) -> &'static str {
+        match self {
+            MobilityScale::Calibrated => SCALE_CALIBRATED,
+            MobilityScale::Linear => SCALE_LINEAR,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToleranceType {
@@ -119,7 +151,7 @@ pub struct FileConfig {
     /// before hills are built. No effect on mzML or Thermo input. The streaming
     /// path's dnoise MS1 polygon gate (`bruker_ms1_polygon`) uses the same scale.
     #[serde(default)]
-    pub bruker_mobility_scale: crate::io::tims_calibration::MobilityScale,
+    pub bruker_mobility_scale: MobilityScale,
     /// Use the in-process `dnoise` streaming API instead of the local two-stage
     /// reader. When `true`, each raw frame is run through dnoise's configured
     /// stages (vertical-IM filter -> optional horizontal halo -> optional MS1

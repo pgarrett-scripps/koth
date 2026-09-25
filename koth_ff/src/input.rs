@@ -550,10 +550,7 @@ fn find_file(dir: &Path, stem: &str) -> Result<Option<std::path::PathBuf>, KothE
 // Ion-mobility scale guard for cross-run consumers
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// `report.json` label for Bruker acquisition-calibrated 1/K0 (koth ≥ 0.10.0 default).
-pub const SCALE_CALIBRATED: &str = "bruker-acquisition-calibrated-1/K0";
-/// `report.json` label for timsrust's linear 1/K0 (`bruker_mobility_scale = "linear"`).
-pub const SCALE_LINEAR: &str = "timsrust-linear-1/K0";
+pub use koth_core::config::{SCALE_CALIBRATED, SCALE_LINEAR};
 /// `report.json` label for input koth did not convert (mzML, Thermo).
 pub const SCALE_AS_READ: &str = "as-read-from-input";
 

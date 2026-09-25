@@ -23,40 +23,16 @@
 //! than one calibration row, per-scan lookup tables, and the coefficients that
 //! `report.json` records.
 
-use serde::{Deserialize, Serialize};
-
-/// Which 1/K0 scale a Bruker reader reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MobilityScale {
-    /// Bruker acquisition calibration (`TimsCalibration`), identical to the
-    /// timsdata SDK opened in its default (non-recalibrated) state.
-    #[default]
-    Calibrated,
-    /// timsrust's straight line between the acquisition-range bounds. This was
-    /// koth's only behaviour up to 0.9.0.
-    Linear,
-}
-
-impl MobilityScale {
-    /// Stable label written into `report.json` so a downstream join can refuse
-    /// to mix scales.
-    pub fn label(self) -> &'static str {
-        match self {
-            MobilityScale::Calibrated => crate::input::SCALE_CALIBRATED,
-            MobilityScale::Linear => crate::input::SCALE_LINEAR,
-        }
-    }
-}
+/// The config-facing scale enum lives in `koth-core` (it is a `[file]` setting);
+/// re-exported here at its original path.
+pub use koth_core::config::MobilityScale;
 
 /// The one place koth's config enum maps onto dnoise's.
 #[cfg(feature = "tdf")]
-impl From<MobilityScale> for dnoise::MobilityScale {
-    fn from(s: MobilityScale) -> Self {
-        match s {
-            MobilityScale::Calibrated => dnoise::MobilityScale::Calibrated,
-            MobilityScale::Linear => dnoise::MobilityScale::Linear,
-        }
+pub fn dnoise_scale(s: MobilityScale) -> dnoise::MobilityScale {
+    match s {
+        MobilityScale::Calibrated => dnoise::MobilityScale::Calibrated,
+        MobilityScale::Linear => dnoise::MobilityScale::Linear,
     }
 }
 
@@ -407,15 +383,15 @@ mod tdf {
         #[test]
         fn config_scale_maps_onto_dnoise() {
             assert_eq!(
-                dnoise::MobilityScale::from(MobilityScale::Calibrated),
+                crate::io::tims_calibration::dnoise_scale(MobilityScale::Calibrated),
                 dnoise::MobilityScale::Calibrated
             );
             assert_eq!(
-                dnoise::MobilityScale::from(MobilityScale::Linear),
+                crate::io::tims_calibration::dnoise_scale(MobilityScale::Linear),
                 dnoise::MobilityScale::Linear
             );
             assert_eq!(
-                dnoise::MobilityScale::from(MobilityScale::default()),
+                crate::io::tims_calibration::dnoise_scale(MobilityScale::default()),
                 dnoise::MobilityScale::default()
             );
         }

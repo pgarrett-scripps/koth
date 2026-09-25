@@ -15,11 +15,11 @@ pub enum CosineAnchor {
 impl CosineAnchor {
     /// Parse a `cosine_anchor` string strictly: an unrecognised value is a
     /// config error rather than a silent fallback.
-    pub fn parse(s: &str) -> Result<Self, crate::error::KothError> {
+    pub fn parse(s: &str) -> Result<Self, crate::error::Error> {
         match s.to_ascii_lowercase().as_str() {
             "adjacent" => Ok(CosineAnchor::Adjacent),
             "seed" => Ok(CosineAnchor::Seed),
-            other => Err(crate::error::KothError::ConfigError(format!(
+            other => Err(crate::error::Error::Config(format!(
                 "invalid features.cosine_anchor `{other}`: expected \"adjacent\" or \"seed\""
             ))),
         }
@@ -254,20 +254,20 @@ impl FeaturesConfig {
     /// Validate distribution parameters and strings that serde alone cannot
     /// check. Called after TOML deserialization so invalid values fail at load time
     /// rather than silently falling back at runtime.
-    pub fn validate(&self) -> Result<(), crate::error::KothError> {
+    pub fn validate(&self) -> Result<(), crate::error::Error> {
         CosineAnchor::parse(&self.cosine_anchor)?;
         if !self.isotope_evidence_ratio_sigma.is_finite()
             || self.isotope_evidence_ratio_sigma <= 0.0
             || self.isotope_evidence_ratio_sigma >= 2.0
         {
-            return Err(crate::error::KothError::ConfigError(
+            return Err(crate::error::Error::Config(
                 "features.isotope_evidence_ratio_sigma must be finite and between 0 and 2 (exclusive)".into(),
             ));
         }
         if !self.isotope_evidence_cosine_shape.is_finite()
             || self.isotope_evidence_cosine_shape <= 1.0
         {
-            return Err(crate::error::KothError::ConfigError(
+            return Err(crate::error::Error::Config(
                 "features.isotope_evidence_cosine_shape must be finite and greater than 1".into(),
             ));
         }
