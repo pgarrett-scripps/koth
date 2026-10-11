@@ -49,9 +49,7 @@ flate2     = "1"
 # the in-process streaming run. koth-ms has no direct timsrust or sage-plus-tdf
 # dependency. rusqlite must match dnoise's 0.35: only one `libsqlite3-sys` can be
 # linked.
-# TODO: switch to `version = "0.6.0"` once dnoise 0.6.0 is on crates.io (a git
-# dependency blocks `cargo publish`).
-dnoise     = { git = "https://github.com/pgarrett-scripps/dnoise", branch = "tdf/sage-plus-tdf", default-features = false, optional = true }
+dnoise     = { version = "0.6.0", default-features = false, optional = true }
 rusqlite   = { version = "0.35", features = ["bundled"], optional = true }
 # Native Thermo .raw reading: sage-plus-raw, a pure-Rust parser of the .raw
 # binary format (no .NET runtime, no vendor assemblies, no system libraries), so

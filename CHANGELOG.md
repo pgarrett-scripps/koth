@@ -16,9 +16,8 @@ and this project uses [Semantic Versioning](https://semver.org/).
   stack) in place of `timsrust-tdf` 0.6.6. Frames still come through
   `dnoise::tsr`, which keeps timsrust 0.4.2's frame order and its m/z and
   1/K0 formulas, so koth's conversions are unchanged. koth-ms has no direct
-  timsrust or sage-plus-tdf dependency. `dnoise` is taken from its
-  `tdf/sage-plus-tdf` git branch until dnoise 0.6.0 is on crates.io; a git
-  dependency blocks `cargo publish`, so 0.12.0 is not published before then.
+  timsrust or sage-plus-tdf dependency. koth-ms now depends on dnoise 0.6.0
+  (crates.io).
 - **Thermo `.raw`** (feature `thermo`): `sage-plus-raw` 0.1.0 replaces
   `opentfraw` 1.4. It is a fork of opentfraw 1.4.1 with the same API; scan
   events are decoded from their self-describing layout, falling back to the
