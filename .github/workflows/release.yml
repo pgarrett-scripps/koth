@@ -66,7 +66,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.97.1
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
@@ -93,12 +93,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.97.1
       - uses: Swatinem/rust-cache@v2
       # koth-ms depends on koth-core by version, and that version is not on
       # crates.io until the publish job runs. Cargo >= 1.90 packages workspace
       # members against each other, so the dry run uses stable cargo; the
-      # published crates are still built by 1.88.0 below.
+      # published crates are still built by 1.97.1 below.
       - uses: dtolnay/rust-toolchain@stable
       - name: Both crates share one version
         run: |
@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.97.1
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:

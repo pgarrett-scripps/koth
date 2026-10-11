@@ -8,7 +8,7 @@ Two Rust binaries built together (`cargo build --release`):
   [hills] chromatographic traces → [features] isotope chains (charge + averagine
   score) → [scoring] optional → hills + features output`. mzML, Bruker `.d`
   (needs the default `tdf` feature, backed by the published `dnoise` crate), and Thermo
-  `.raw` (default `thermo` feature, pure-Rust `opentfraw`, no .NET).
+  `.raw` (default `thermo` feature, pure-Rust `sage-plus-raw`, no .NET).
 - **`koth_align`** — cross-run alignment + LFQ. `koth_ff run dirs → [alignment]
   RANSAC RT warp + mass/IM drift → [lfq.consensus] group the same peptide across
   runs → [lfq] XIC grid + integrate + target-decoy q-values → intensity matrix`.

@@ -92,7 +92,7 @@ pub fn detect_format(path: &Path) -> InputFormat {
 /// Supported formats:
 /// - `.mzML` / `.mzml` / `.mzML.gz` → mzML via mzdata
 /// - directory ending in `.d` → Bruker timsTOF TDF (requires "tdf" feature)
-/// - `.raw` → native Thermo Fisher reader (pure-Rust `opentfraw`, default "thermo" feature)
+/// - `.raw` → native Thermo Fisher reader (pure-Rust `sage-plus-raw`, default "thermo" feature)
 pub fn read_spectra(path: &Path, file: &FileConfig) -> Result<Vec<Spectrum>, KothError> {
     match detect_format(path) {
         InputFormat::Mzml | InputFormat::MzmlGz => mzml::read_mzml(path),

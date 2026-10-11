@@ -8,6 +8,24 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] — unreleased
+
+### Readers move to the sage-plus crates
+- **Bruker `.d`**: `dnoise` now reads frames with `sage-plus-tdf` 0.2.0 (a
+  pure-Rust fork of timsrust 0.6.6 without the `object_store`/`tokio`/`arrow`
+  stack) in place of `timsrust-tdf` 0.6.6. Frames still come through
+  `dnoise::tsr`, which keeps timsrust 0.4.2's frame order and its m/z and
+  1/K0 formulas, so koth's conversions are unchanged. koth-ms has no direct
+  timsrust or sage-plus-tdf dependency. koth-ms now depends on dnoise 0.6.0
+  (crates.io).
+- **Thermo `.raw`** (feature `thermo`): `sage-plus-raw` 0.1.0 replaces
+  `opentfraw` 1.4. It is a fork of opentfraw 1.4.1 with the same API; scan
+  events are decoded from their self-describing layout, falling back to the
+  1.4.1 fixed-size layouts.
+- **MSRV 1.97** for `koth-ms` (was 1.88), because `sage-plus-tdf` requires it.
+  `koth-core` stays at 1.88 and CI checks it with that compiler.
+  `rust-toolchain.toml` and CI use 1.97.1.
+
 ## [0.11.0] — 2026-09-25
 
 ### Two crates: `koth-core` and `koth-ms`

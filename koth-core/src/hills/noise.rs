@@ -42,7 +42,7 @@ fn noise_threshold(sorted: &[f32], sigma: f64) -> f32 {
         return 0.0;
     }
 
-    let median = if n % 2 == 0 {
+    let median = if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     } else {
         sorted[n / 2]
@@ -50,7 +50,7 @@ fn noise_threshold(sorted: &[f32], sigma: f64) -> f32 {
 
     let mut deviations: Vec<f32> = sorted.iter().map(|&x| (x - median).abs()).collect();
     deviations.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mad = if n % 2 == 0 {
+    let mad = if n.is_multiple_of(2) {
         (deviations[n / 2 - 1] + deviations[n / 2]) / 2.0
     } else {
         deviations[n / 2]

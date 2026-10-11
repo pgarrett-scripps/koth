@@ -171,11 +171,11 @@ MS2 detection supports **mzML** (`.mzML`, `.mzML.gz`), **Bruker diaPASEF `.d`**
   with that window. No conversion to mzML is needed. This runs only when the
   caller opts into MS2; the MS1 Bruker output is byte-for-byte unchanged.
 * **Thermo DIA `.raw`** — each MS2 scan's precursor isolation window is read with
-  `opentfraw`: the center is the scan event's reaction precursor m/z (the value in
+  `sage-plus-raw`: the center is the scan event's reaction precursor m/z (the value in
   the scan filter), falling back to the trailer's monoisotopic m/z, and the bounds
   are center ± half the trailer's MS2 isolation width (collapsing to the center
   when no width is recorded). On some Exploris 480 / Fusion Lumos DIA files the
-  center is not recorded in a form opentfraw can decode (its issue #44); those
+  center is not recorded in a form the reader can decode (upstream opentfraw issue #44); those
   scans carry no window and the file emits no MS2. One
   centroided MS2 spectrum is emitted per scan, reusing the **same** scan→peaks
   conversion as the MS1 `.raw` reader. Orbitrap scans are 1-D centroids (no ion
