@@ -13,7 +13,7 @@
 /// Both paths then optionally apply the `bruker_noise_sigma` MAD filter, emit in
 /// retention-time order, and assign sequential scan indices. All
 /// denoising / centroiding logic lives in the `dnoise` crate. Frames are decoded
-/// with `dnoise::tsr::FrameReader` (timsrust-tdf 0.6 behind timsrust 0.4.2's
+/// with `dnoise::tsr::FrameReader` (sage-plus-tdf 0.2 behind timsrust 0.4.2's
 /// frame order); frame RT, MS level and diaPASEF windows come from
 /// `analysis.tdf` directly (`inner::frame_table`), read the way timsrust 0.4.2 did.
 #[cfg(feature = "tdf")]
@@ -452,7 +452,7 @@ pub mod inner {
                 let n_after_noise = spectrum.peaks.len();
 
                 let n = processed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
-                if n % PROGRESS_INTERVAL == 0 {
+                if n.is_multiple_of(PROGRESS_INTERVAL) {
                     if noise_sigma.is_some() {
                         log::info!(
                             "Bruker frame {}: {} raw -> {} filtered -> {} centroids -> {} post-MAD",

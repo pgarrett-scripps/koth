@@ -26,8 +26,8 @@ Both binaries are built together with the command above. The executables
 | Feature | Input | Dependencies |
 |---|---|---|
 | `cli` | the `koth_ff` and `koth_align` executables | `clap`, `env_logger` |
-| `tdf` | Bruker timsTOF `.d` | `timsrust`, `dnoise`, bundled SQLite |
-| `thermo` | Thermo Fisher `.raw` | `opentfraw` (pure Rust) |
+| `tdf` | Bruker timsTOF `.d` | `dnoise` (over `sage-plus-tdf`), bundled SQLite |
+| `thermo` | Thermo Fisher `.raw` | `sage-plus-raw` (pure Rust) |
 
 mzML and gzip-compressed `.mzML.gz` are always supported; `.mzML.gz` is
 decompressed as it is parsed, not into memory first.
@@ -45,15 +45,15 @@ To embed the algorithm in another program without any reader, depend on the
 ### Native Thermo `.raw` input
 
 Thermo `.raw` files are read directly, with no prior mzML conversion, by the
-`thermo` feature. It uses [`opentfraw`](https://crates.io/crates/opentfraw), a
-pure-Rust parser of the `.raw` format: no .NET runtime, vendor assemblies, or
+`thermo` feature. It uses [`sage-plus-raw`](https://crates.io/crates/sage-plus-raw)
+(a fork of `opentfraw`), a pure-Rust parser of the `.raw` format: no .NET runtime, vendor assemblies, or
 system libraries are needed at build or run time. MS1 peaks are the
 instrument's stored centroids; profile-only scans are centroided with mzdata's
 peak picker, as for profile mzML.
 
 Known limitation: on some Exploris 480 and Fusion Lumos DIA files the
-isolation-window center cannot be recovered from the `.raw` (opentfraw issue
-#44), so DIA MS2 detection on such a file emits no MS2 hills. MS1 is
+isolation-window center cannot be recovered from the `.raw` (upstream opentfraw
+issue #44), so DIA MS2 detection on such a file emits no MS2 hills. MS1 is
 unaffected. Convert to mzML for MS2 on those files.
 
 ## Install from crates.io

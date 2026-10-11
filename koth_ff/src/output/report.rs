@@ -14,7 +14,7 @@ fn median(v: &mut [f64]) -> f64 {
     }
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = v.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (v[n / 2 - 1] + v[n / 2]) / 2.0
     } else {
         v[n / 2]

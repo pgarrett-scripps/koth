@@ -123,7 +123,7 @@ impl HillDetector {
         // Buffers are moved out via take() so the loop can borrow active_hills
         // immutably while pushing to the (now-local) scratch vectors.
         let cutoff = scan_idx.saturating_sub(self.max_gap + 1);
-        let do_clean = scan_idx % self.check_freq == 0;
+        let do_clean = scan_idx.is_multiple_of(self.check_freq);
         let mut sorted = std::mem::take(&mut self.intensity_sorted);
         let mut stale = std::mem::take(&mut self.stale_buf);
         sorted.clear();

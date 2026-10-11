@@ -224,7 +224,7 @@ fn drifting_far_isotope_kept_by_adjacent_dropped_by_seed() {
     // below the gate).
     let shape = [1.0f32, 3.0, 6.0, 9.0, 10.0, 9.0, 6.0, 3.0, 1.0];
     let scaled = |k: f32| -> Vec<f32> { shape.iter().map(|&v| v * k).collect() };
-    let hills = vec![
+    let hills = [
         hill(base, 20, scaled(1.0)),               // M0:  scans 20..=28, apex 24
         hill(base + step, 22, scaled(0.6)),        // M+1: scans 22..=30, apex 26
         hill(base + 2.0 * step, 24, scaled(0.36)), // M+2: scans 24..=32, apex 28

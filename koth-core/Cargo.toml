@@ -2,7 +2,9 @@
 name             = "koth-core"
 version.workspace      = true
 edition.workspace      = true
-rust-version.workspace = true
+# Stays below the workspace MSRV (1.97, set by sage-plus-tdf through dnoise):
+# the core has no such dependencies. CI checks it with 1.88.
+rust-version     = "1.88"
 license.workspace      = true
 repository.workspace   = true
 authors          = ["Patrick Garrett <pgarrett@scripps.edu>"]

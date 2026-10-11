@@ -44,16 +44,19 @@ koth-core  = { workspace = true }
 mzdata     = { workspace = true }
 flate2     = "1"
 # Bruker .d input. dnoise does the frame reading (its `tsr` adapter over
-# timsrust-tdf 0.6.6 keeps timsrust 0.4.2's converters and frame order), the
-# per-frame denoising (through dnoise-core) and the in-process streaming run.
-# koth-ms has no direct timsrust dependency. rusqlite must match dnoise's (and
-# timsrust 0.6's) 0.35: only one `libsqlite3-sys` can be linked.
-dnoise     = { version = "0.5.0", default-features = false, optional = true }
+# sage-plus-tdf 0.2, a pure-Rust fork of timsrust 0.6.6, keeps timsrust 0.4.2's
+# converters and frame order), the per-frame denoising (through dnoise-core) and
+# the in-process streaming run. koth-ms has no direct timsrust or sage-plus-tdf
+# dependency. rusqlite must match dnoise's 0.35: only one `libsqlite3-sys` can be
+# linked.
+# TODO: switch to `version = "0.6.0"` once dnoise 0.6.0 is on crates.io (a git
+# dependency blocks `cargo publish`).
+dnoise     = { git = "https://github.com/pgarrett-scripps/dnoise", branch = "tdf/sage-plus-tdf", default-features = false, optional = true }
 rusqlite   = { version = "0.35", features = ["bundled"], optional = true }
-# Native Thermo .raw reading: a pure-Rust parser of the .raw binary format (no
-# .NET runtime, no vendor assemblies, no system libraries), so a `.raw` file can
-# be fed to koth_ff directly with no prior mzML conversion.
-opentfraw  = { version = "1.4", optional = true }
+# Native Thermo .raw reading: sage-plus-raw, a pure-Rust parser of the .raw
+# binary format (no .NET runtime, no vendor assemblies, no system libraries), so
+# a `.raw` file can be fed to koth_ff directly with no prior mzML conversion.
+sage-plus-raw = { version = "0.1.0", optional = true }
 rayon      = { workspace = true }
 csv        = { workspace = true }
 serde      = { workspace = true }
@@ -101,7 +104,7 @@ cli = ["dep:clap", "dep:env_logger"]
 tdf = ["dep:dnoise", "dep:rusqlite"]
 # Native Thermo Fisher .raw input (no mzML conversion). Pure Rust, on by default;
 # `--no-default-features --features cli,tdf` builds without it.
-thermo = ["dep:opentfraw"]
+thermo = ["dep:sage-plus-raw"]
 
 [package.metadata.docs.rs]
 features = ["cli", "tdf", "thermo"]

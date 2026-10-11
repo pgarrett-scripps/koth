@@ -1,6 +1,6 @@
 //! Native Thermo Fisher `.raw` reader (`thermo` cargo feature, on by default).
 //!
-//! Built on [`opentfraw`], a pure-Rust parser of the Thermo `.raw` binary
+//! Built on [`sage_plus_raw`] (a fork of `opentfraw`), a pure-Rust parser of the Thermo `.raw` binary
 //! format (file versions 8–66). There is no .NET runtime, no vendor assembly
 //! and no system library: a `.raw` file is read like any other local file.
 //!
@@ -31,8 +31,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use opentfraw::generic_data::GenericValue;
-use opentfraw::{MsPower, RawFileReader};
+use sage_plus_raw::generic_data::GenericValue;
+use sage_plus_raw::{MsPower, RawFileReader};
 
 use crate::error::KothError;
 use crate::models::{IsolationWindow, Peak, Spectrum};
@@ -80,7 +80,7 @@ impl RawSource {
 
     /// Check the decoded scan events against the per-scan trailer. A scan the
     /// trailer marks as dependent (`Master Scan Number` > 0) must carry an MSn
-    /// event. opentfraw 1.4 can decode the variable-length scan events of an
+    /// event. opentfraw 1.4 (the reader before `sage_plus_raw`) could decode the variable-length scan events of an
     /// Orbitrap Fusion file out of step with the scans (PXD003881: 33 127 of
     /// 66 254 dependent scans read as MS1 or undefined), while the trailer
     /// table, read record by record, stays correct. More than 0.1 % such
@@ -170,7 +170,7 @@ impl RawSource {
     /// Decode scan `idx` to centroided koth peaks.
     pub(crate) fn peaks(&mut self, idx: u32) -> Result<Vec<Peak>, KothError> {
         let scan_number = self.scan_number(idx);
-        let read_err = |e: opentfraw::Error| {
+        let read_err = |e: sage_plus_raw::Error| {
             KothError::ThermoError(format!("could not read scan {scan_number}: {e}"))
         };
         let raw_peaks = self

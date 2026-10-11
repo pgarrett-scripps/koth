@@ -1,6 +1,6 @@
 //! End-to-end test of the native Thermo DIA `.raw` MS2 reader.
 //!
-//! Needs the default `thermo` feature (pure-Rust `opentfraw` `.raw` reader) and
+//! Needs the default `thermo` feature (pure-Rust `sage-plus-raw` `.raw` reader) and
 //! a real DIA `.raw` fixture, which CI does not have, so it is `#[ignore]`-gated (mirroring `bruker_diapasef_ms2`). Point it at
 //! a DIA `.raw` with `KOTH_DIA_RAW`; it skips (does not fail) when the file is
 //! absent. Run explicitly with:
